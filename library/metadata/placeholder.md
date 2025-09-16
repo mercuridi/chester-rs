@@ -1,0 +1,1 @@
+This is a placeholder file so that the `library/metadata` directory exists in the git repo
