@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 dotenv = "0.15.0"
 serenity = "0.12.4"
+tokio = { version = "1.47.1", features = ["full", "rt-multi-thread"] }
