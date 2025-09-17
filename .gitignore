@@ -2,6 +2,7 @@
 
 .env
 *.m4a
+*.mp3
 *.json
 
 # --- Github Rust template below

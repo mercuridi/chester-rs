@@ -4,9 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.99"
 dotenv = "0.15.0"
 poise = "0.6.1"
-serenity = "0.12.4"
-songbird = "0.5.0"
+reqwest = "0.12.23"
+serenity = { version = "0.12.4", features = ["cache", "framework", "standard_framework", "voice"] }
+songbird = { version = "0.5.0", features = ["serenity"] }
+symphonia = { version = "0.5.4", features = ["mp3"] }
 tokio = { version = "1.47.1", features = ["full", "rt-multi-thread"] }
-tracing-subscriber = "0.3.20"
