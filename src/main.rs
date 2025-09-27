@@ -20,6 +20,7 @@ use serenity::{
 
 use yt_dlp::Youtube;
 use yt_dlp::fetcher::deps::Libraries;
+use yt_dlp::fetcher::deps::LibraryInstaller;
 
 // Read the bot token from a .env
 use dotenv::dotenv;
@@ -33,7 +34,7 @@ struct TrackInfo {
         track_artist: String
 }
 
-struct Library {
+struct MediaLibrary {
     track_ids: Vec<String>,
     track_infos: HashMap<String, TrackInfo>
 }
@@ -127,21 +128,39 @@ async fn download(
     ctx: Context<'_>,
     #[description = "YouTube link to download from"] yt_link: String
 ) -> Result<(), Error> {
+
+    ctx.defer().await;
+
     let libraries_dir = PathBuf::from("libs");
-    let output_dir = PathBuf::from("output");
-    
+    let output_dir = PathBuf::from("media");
+
     let youtube = libraries_dir.join("yt-dlp");
     let ffmpeg = libraries_dir.join("ffmpeg");
-    
+
     let libraries = Libraries::new(youtube, ffmpeg);
-    let fetcher = Youtube::new(libraries, output_dir)?;
+    let mut fetcher = Youtube::new(libraries, &output_dir)?;
+
+    // 1) Create the media folder if it doesn't exist
+    tokio::fs::create_dir_all(&output_dir).await
+    .expect("failed to create media dir");
+
+    // 2) Print out where we're actually running
+    println!("→ CWD: {:?}", std::env::current_dir().unwrap());
+    println!("→ Resolving media/ → {:?}", output_dir.canonicalize().unwrap());
     
     let video = fetcher.fetch_video_infos(yt_link).await?;
-    let video_id = &video.id;
     println!("Video title: {}", video.title);
 
+    let video_format = video.best_video_format().unwrap();
+    let format_path = fetcher.download_format(&video_format, "my-video-stream.mp4").await?;
+    println!("Video downloaded {}", format_path.display());
+    
     let audio_format = video.best_audio_format().unwrap();
-    let audio_path = fetcher.download_format(&audio_format, format!("library/audio/{video_id}.mp3")).await?;
+    let audio_path = fetcher.download_format(&audio_format, "my-audio-stream.mp3").await?;
+    println!("Audio downloaded {}", audio_path.display());
+
+    ctx.say("File downloaded").await?;
+    println!("Download finished");
     Ok(())
 }
 
@@ -170,7 +189,7 @@ async fn play(
         .clone();
 
     let song_src = Compressed::new(
-        File::new(format!("library/audio/{track_id}.mp3")).into(),
+        File::new(format!("media/audio/{track_id}.mp3")).into(),
         Bitrate::BitsPerSecond(128_000),
     )
         .await
@@ -185,8 +204,22 @@ async fn play(
     Ok(())
 }
 
+#[poise::command(slash_command)]
+pub async fn register(ctx: Context<'_>) -> Result<(), Error> {
+    poise::builtins::register_application_commands_buttons(ctx).await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
+    std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
+
+    let destination = PathBuf::from("libs");
+    let installer = LibraryInstaller::new(destination);
+
+    let youtube = installer.install_youtube(None).await.unwrap();
+    let ffmpeg = installer.install_ffmpeg(None).await.unwrap();
+
     dotenv().ok();
     let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN in .env");
     let intents = 
@@ -198,6 +231,7 @@ async fn main() {
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![
+                register(),
                 play(),
                 download(),
             ],

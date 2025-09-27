@@ -325,6 +325,7 @@ dependencies = [
  "songbird",
  "symphonia",
  "tokio",
+ "tracing",
  "yt-dlp",
 ]
 
