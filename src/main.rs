@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    path::PathBuf
+};
 
 use ::serenity::prelude::TypeMapKey;
 use tokio::sync::Mutex;
@@ -13,6 +17,9 @@ use serenity::{
     ChannelId,
     GuildId
 };
+
+use yt_dlp::Youtube;
+use yt_dlp::fetcher::deps::Libraries;
 
 // Read the bot token from a .env
 use dotenv::dotenv;
@@ -116,6 +123,29 @@ async fn join_vc(ctx: Context<'_>) -> Result<Arc<Mutex<Call>>, anyhow::Error> {
 }
 
 #[poise::command(slash_command)]
+async fn download(
+    ctx: Context<'_>,
+    #[description = "YouTube link to download from"] yt_link: String
+) -> Result<(), Error> {
+    let libraries_dir = PathBuf::from("libs");
+    let output_dir = PathBuf::from("output");
+    
+    let youtube = libraries_dir.join("yt-dlp");
+    let ffmpeg = libraries_dir.join("ffmpeg");
+    
+    let libraries = Libraries::new(youtube, ffmpeg);
+    let fetcher = Youtube::new(libraries, output_dir)?;
+    
+    let video = fetcher.fetch_video_infos(yt_link).await?;
+    let video_id = &video.id;
+    println!("Video title: {}", video.title);
+
+    let audio_format = video.best_audio_format().unwrap();
+    let audio_path = fetcher.download_format(&audio_format, format!("library/audio/{video_id}.mp3")).await?;
+    Ok(())
+}
+
+#[poise::command(slash_command)]
 async fn play(
     ctx: Context<'_>,
     #[description = "Selected track ID"] track_id: String
@@ -168,7 +198,8 @@ async fn main() {
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![
-                play()
+                play(),
+                download(),
             ],
             ..Default::default()
         })

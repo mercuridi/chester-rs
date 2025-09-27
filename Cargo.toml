@@ -12,3 +12,4 @@ serenity = { version = "0.12.4", features = ["cache", "framework", "standard_fra
 songbird = { version = "0.5.0", features = ["serenity"] }
 symphonia = { version = "0.5.4", features = ["mp3"] }
 tokio = { version = "1.47.1", features = ["full", "rt-multi-thread"] }
+yt-dlp = "1.3.4"
