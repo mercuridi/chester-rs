@@ -17,6 +17,21 @@ use serenity::{
 // Read the bot token from a .env
 use dotenv::dotenv;
 
+struct TrackInfo {
+        upload_date: String,
+        duration_string: String,
+        yt_title: String,
+        yt_channel: String,
+        track_title: String,
+        track_artist: String
+}
+
+struct Library {
+    track_ids: Vec<String>,
+    track_infos: HashMap<String, TrackInfo>
+}
+
+
 struct Data {} // User data, which is stored and accessible in all command invocations
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
@@ -51,18 +66,6 @@ impl serenity::all::EventHandler for Handler {
     async fn ready(&self, _: serenity::Context, ready: serenity::all::Ready) {
         println!("{} is connected!", ready.user.name);
     }
-}
-
-// Displays your or another user's account creation date
-#[poise::command(slash_command)]
-async fn age(
-    ctx: Context<'_>,
-    #[description = "Selected user"] user: Option<serenity::User>,
-) -> Result<(), Error> {
-    let u = user.as_ref().unwrap_or_else(|| ctx.author());
-    let response = format!("{}'s account was created at {}", u.name, u.created_at());
-    ctx.say(response).await?;
-    Ok(())
 }
 
 async fn get_call_info(ctx: Context<'_>) -> Result<(GuildId, ChannelId), Error> {
@@ -114,7 +117,8 @@ async fn join_vc(ctx: Context<'_>) -> Result<Arc<Mutex<Call>>, anyhow::Error> {
 
 #[poise::command(slash_command)]
 async fn play(
-    ctx: Context<'_>
+    ctx: Context<'_>,
+    #[description = "Selected track ID"] track_id: String
 ) -> Result<(), Error> {
 
     join_vc(ctx).await?;
@@ -136,11 +140,11 @@ async fn play(
         .clone();
 
     let song_src = Compressed::new(
-        File::new("resources/ow.mp3").into(),
+        File::new(format!("library/audio/{track_id}.mp3")).into(),
         Bitrate::BitsPerSecond(128_000),
     )
         .await
-        .expect("These parameters are well-defined.");
+        .expect("An error occurred constructing the track source");
     let _ = song_src.raw.spawn_loader();
 
     if let Some(handler_lock) = manager.get(guild_id) {
@@ -164,7 +168,6 @@ async fn main() {
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![
-                age(),
                 play()
             ],
             ..Default::default()
