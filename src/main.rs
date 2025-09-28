@@ -1,12 +1,16 @@
 mod commands;
 mod definitions;
 
+////////////////////////////////////////////////////////////////////////////////
+/// Imports
+
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents, ChannelId};
 use songbird::SerenityInit; // ← brings in `.register_songbird()`
 
 use crate::definitions::{Context, Data, Error};
 
-// custom user data passed to all functions via Serenity context
+////////////////////////////////////////////////////////////////////////////////
+/// Functions
 
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     // This is our custom error handler

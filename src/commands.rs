@@ -1,6 +1,11 @@
-use poise::serenity_prelude::{ClientBuilder, GatewayIntents, ChannelId};
+////////////////////////////////////////////////////////////////////////////////
+/// Imports
 
+use poise::serenity_prelude::{ClientBuilder, GatewayIntents, ChannelId};
 use crate::definitions::{Context, Data, Error};
+
+////////////////////////////////////////////////////////////////////////////////
+/// Helper functions
 
 async fn get_vc_id(ctx: Context<'_>) -> Result<ChannelId, Error> {
 
@@ -20,6 +25,9 @@ async fn get_vc_id(ctx: Context<'_>) -> Result<ChannelId, Error> {
 
     Ok(voice_channel_id)
 }
+
+////////////////////////////////////////////////////////////////////////////////
+/// Command definitions
 
 #[poise::command(prefix_command)]
 pub async fn register(ctx: Context<'_>) -> Result<(), Error> {
