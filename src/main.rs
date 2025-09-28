@@ -4,38 +4,85 @@ mod definitions;
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
 
-use poise::serenity_prelude::{ClientBuilder, GatewayIntents, ChannelId};
-use songbird::SerenityInit; // ← brings in `.register_songbird()`
+use std::fs;
+use std::path::PathBuf;
+use std::path::Path;
+use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
+use songbird::SerenityInit; // brings in `.register_songbird()`
+use yt_dlp::fetcher::deps::LibraryInstaller;
+use dotenv::dotenv;
 
-use crate::definitions::{Context, Data, Error};
+use crate::definitions::{Data, Error};
 
 ////////////////////////////////////////////////////////////////////////////////
-/// Functions
+// Functions
+
+async fn handle_libraries() -> Result<(), Error> {
+    // make path if it doesn't exist
+    if !Path::new("libs/").exists() {
+        println!("libs directory missing, creating");
+        fs::create_dir("libs")?;
+    }
+
+    let destination = PathBuf::from("libs");
+    let installer = LibraryInstaller::new(destination);
+
+    // install ffmpeg if it isn't there
+    if fs::metadata("libs/ffmpeg").is_err() {
+        println!("Installing ffmpeg");
+        let _ffmpeg = installer.install_ffmpeg(None).await.unwrap();
+    }
+
+    // install ytdlp if it isn't there
+    if fs::metadata("libs/yt-dlp").is_err() {
+        println!("Installing ytdlp");
+        let _youtube = installer.install_youtube(None).await.unwrap();
+    }
+
+    Ok(())
+}
 
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
-    // This is our custom error handler
-    // They are many errors that can occur, so we only handle the ones we want to customize
-    // and forward the rest to the default handler
-    match error {
-        poise::FrameworkError::Setup { error, .. } => panic!("Failed to start bot: {:?}", error),
-        poise::FrameworkError::Command { error, ctx, .. } => {
-            println!("Error in command `{}`: {:?}", ctx.command().name, error,);
+    // 1) Inspect & log any command errors without moving out of `error`
+    match &error {
+        // Panic on setup failures
+        poise::FrameworkError::Setup { error: setup_err, .. } => {
+            panic!("Failed to start bot: {:?}", setup_err);
         }
-        error => {
-            if let Err(e) = poise::builtins::on_error(error).await {
-                println!("Error while handling error: {}", e)
-            }
+        // Log command errors
+        poise::FrameworkError::Command { ctx, error: cmd_err, .. } => {
+            println!("Error in command `{}`: {:?}", ctx.command().name, cmd_err);
         }
+        // You can match other variants here if you like...
+        _ => {}
+    }
+
+    // 2) Forward the _owned_ `error` to Poise's default handler so it replies in Discord
+    if let Err(e) = poise::builtins::on_error(error).await {
+        eprintln!("Error while handling error: {}", e);
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let token = std::env::var("DISCORD_TOKEN")?;
+    std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
+
+    handle_libraries().await.unwrap();
+
+    dotenv().ok();
+    let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN in .env");
+
+    let poise_commands = vec![
+        commands::help(),
+        commands::register(),
+        commands::join(),
+        commands::play(),
+        commands::leave()
+    ];
     let poise_options = poise::FrameworkOptions {
-        commands: vec![commands::join(), commands::register()],
+        commands: poise_commands,
         prefix_options: poise::PrefixFrameworkOptions {
-            prefix: Some("~".into()),
+            prefix: Some(">".into()),
             // edit_tracker: Some(Arc::new(poise::EditTracker::for_timespan(
             //     Duration::from_secs(3600),
             // ))),
