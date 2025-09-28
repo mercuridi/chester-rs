@@ -328,6 +328,7 @@ dependencies = [
  "symphonia",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "yt-dlp",
 ]
 

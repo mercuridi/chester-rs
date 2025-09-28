@@ -1,6 +1,7 @@
 .DS_Store
 
 .env
+*.dca
 *.m4a
 *.mp3
 *.mp4
