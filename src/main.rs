@@ -77,7 +77,8 @@ async fn main() -> Result<(), Error> {
         commands::register(),
         commands::join(),
         commands::play(),
-        commands::leave()
+        commands::leave(),
+        commands::download()
     ];
     let poise_options = poise::FrameworkOptions {
         commands: poise_commands,

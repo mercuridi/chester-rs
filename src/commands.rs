@@ -1,14 +1,18 @@
 ////////////////////////////////////////////////////////////////////////////////
 // Imports
 use std::sync::Arc;
+use std::fs::write;
+use std::path::PathBuf;
 
 use poise::serenity_prelude::{ChannelId, Guild};
 use songbird::input::File as SongbirdFile;
 use songbird::input::cached::Compressed;
 use songbird::driver::Bitrate;
 use songbird::Call;
+use yt_dlp::Youtube;
+use yt_dlp::fetcher::deps::Libraries;
 use tokio::sync::Mutex;
-use crate::definitions::{Context, Error};
+use crate::definitions::{Context, Error, TrackInfo};
 
 ////////////////////////////////////////////////////////////////////////////////
 // Helper functions
@@ -141,5 +145,61 @@ pub async fn leave(
 
     ctx.say("Left the voice channel").await?;
 
+    Ok(())
+}
+
+/// Download a track from a YouTube link
+/// Leaving options blank will copy them from the YouTube video
+#[poise::command(slash_command)]
+pub async fn download(
+    ctx: Context<'_>,
+    #[description = "YouTube link to download from"] yt_link: String,
+    #[description = "The actual title of the track"] track_title: Option<String>,
+    #[description = "The actual artist of the track"] track_artist: Option<String>
+) -> Result<(), Error> {
+
+    ctx.defer().await?;
+
+    let libraries_dir = PathBuf::from("libs");
+    let output_dir = PathBuf::from("media");
+
+    let youtube = libraries_dir.join("yt-dlp");
+    let ffmpeg = libraries_dir.join("ffmpeg");
+
+    let libraries = Libraries::new(youtube, ffmpeg);
+    let fetcher = Youtube::new(libraries, &output_dir)?;
+    
+    let video = fetcher.fetch_video_infos(yt_link).await?;
+    let video_id = &video.id;
+    let video_title = video.title.clone();
+    println!("Video title: {}", video.title);
+    
+    let audio_format = video.best_audio_format().unwrap();
+    let audio_path = fetcher.download_format(&audio_format, format!("audio/{video_id}.mp3")).await?;
+    println!("Audio downloaded {}", audio_path.display());
+
+    let track_title = match track_title {
+        Some(title) => title,
+        None => video.title.clone()
+    };
+
+    let track_artist = match track_artist {
+        Some(artist) => artist,
+        None => video.channel.clone()
+    };
+
+    let new_track = TrackInfo {
+        upload_date: video.upload_date,
+        yt_title: video.title,
+        yt_channel: video.channel,
+        track_title,
+        track_artist,
+    };
+
+    let j = serde_json::to_string_pretty(&new_track)?;
+    write(format!("media/metadata/{video_id}.json"), j).expect("Failed to write metadata file");
+
+    ctx.say(format!("File downloaded: {video_title}")).await?;
+    println!("Download finished");
     Ok(())
 }
