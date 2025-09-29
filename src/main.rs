@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::path::Path;
 use std::collections::HashMap;
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
+use songbird::tracks::Track;
 use songbird::SerenityInit; // brings in `.register_songbird()`
 use yt_dlp::fetcher::deps::LibraryInstaller;
 use tokio::sync::RwLock;
@@ -20,15 +21,18 @@ use crate::definitions::{Data, Error, TrackInfo};
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
 
-async fn load_media() -> Result<RwLock<Vec<TrackInfo>>, Error> {
-    let mut library = Vec::new();
+async fn load_media() -> Result<RwLock<HashMap<String, TrackInfo>>, Error> {
+    let mut library = HashMap::new();
     let paths = fs::read_dir("media/metadata").unwrap();
 
     for path in paths {
         let path = path.unwrap().path();
         if path.extension().unwrap() == "json" {
             let read_track_info = load_track(path).await;
-            library.push(read_track_info);
+            library.insert(
+                read_track_info.id.clone(),
+                read_track_info
+            );
         }
     }
 
@@ -103,8 +107,12 @@ async fn main() -> Result<(), Error> {
         commands::play(),
         commands::leave(),
         commands::download(),
-        autocomplete_example::greet()
+        commands::reset_tags(),
+        commands::add_tag(),
+        commands::set_metadata(),
+        commands::loop_track()
     ];
+
     let poise_options = poise::FrameworkOptions {
         commands: poise_commands,
         prefix_options: poise::PrefixFrameworkOptions {
@@ -164,7 +172,12 @@ async fn main() -> Result<(), Error> {
         .setup(|ctx, _ready, framework| {
             Box::pin(async move {
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data { library })
+                Ok(
+                    Data { 
+                        library,
+                        track_handles: RwLock::new(HashMap::new())
+                    }
+                )
             })
         })
         .build();

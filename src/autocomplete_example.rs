@@ -25,14 +25,14 @@ use crate::definitions::{Context, Error};
 // - `-> impl Iterator<&str>`
 // - `-> impl Iterator<serenity::AutocompleteChoice>
 
-// async fn autocomplete_name<'a>(
-//     _ctx: Context<'_>,
-//     partial: &'a str,
-// ) -> impl Stream<Item = String> + 'a {
-//     futures::stream::iter(&["Amanda", "Bob", "Christian", "Danny", "Ester", "Falk"])
-//         .filter(move |name| futures::future::ready(name.starts_with(partial)))
-//         .map(|name| name.to_string())
-// }
+async fn autocomplete_name<'a>(
+    _ctx: Context<'_>,
+    partial: &'a str,
+) -> impl Stream<Item = String> + 'a {
+    futures::stream::iter(&["Amanda", "Bob", "Christian", "Danny", "Ester", "Falk"])
+        .filter(move |name| futures::future::ready(name.starts_with(partial)))
+        .map(|name| name.to_string())
+}
 
 async fn autocomplete_number(
     _ctx: Context<'_>,
