@@ -1,6 +1,5 @@
 mod commands;
 mod definitions;
-mod autocomplete_example;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -10,7 +9,6 @@ use std::path::PathBuf;
 use std::path::Path;
 use std::collections::HashMap;
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
-use songbird::tracks::Track;
 use songbird::SerenityInit; // brings in `.register_songbird()`
 use yt_dlp::fetcher::deps::LibraryInstaller;
 use tokio::sync::RwLock;

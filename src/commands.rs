@@ -5,17 +5,14 @@ use std::fs::write;
 use std::path::PathBuf;
 
 use poise::serenity_prelude::{ChannelId, Guild, AutocompleteChoice};
-use poise::builtins::autocomplete_command;
-use serenity::model::guild;
 use songbird::input::File as SongbirdFile;
 use songbird::input::cached::Compressed;
 use songbird::driver::Bitrate;
-use songbird::tracks::{LoopState, Track};
+use songbird::tracks::LoopState;
 use songbird::Call;
 use yt_dlp::Youtube;
 use yt_dlp::fetcher::deps::Libraries;
 use tokio::sync::Mutex;
-use tokio::sync::RwLockReadGuard;
 use crate::definitions::{Context, Error, TrackInfo, Data};
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -240,7 +237,6 @@ pub async fn download(
     
     let video = fetcher.fetch_video_infos(yt_link).await?;
     let video_id = &video.id;
-    let video_title = video.title.clone();
     println!("Video title: {}", video.title);
     
     let audio_format = video.best_audio_format().unwrap();
@@ -355,37 +351,27 @@ pub async fn loop_track(
         return Err(format!("Looping only works in a server").into())
     };
 
-    // Grab the Songbird voice client
-    let manager = songbird::get(ctx.discord()).await
-        .expect("Songbird not initialized on client");
-    // See if we're in a call
-    if let Some(call) = manager.get(guild_id.clone()) {
-        let mut handler = call.lock().await;
-        // See if there's a current track
-        let data: &Data = ctx.data();
-        let handles = data.track_handles.read().await; // tokio::sync::RwLock
-        if let Some(track_handle) = handles.get(&guild_id) {
-            let handle_info = track_handle.clone().get_info().await?;
-            let loops = handle_info.loops;
-            let new_state: bool;
-            match loops {
-                LoopState::Infinite => {
-                    track_handle.disable_loop();
-                    new_state = false;
-                },
-                LoopState::Finite(_) => {
-                    track_handle.enable_loop();
-                    new_state = true;
-                }
+    // See if there's a current track
+    let data: &Data = ctx.data();
+    let handles = data.track_handles.read().await; // tokio::sync::RwLock
+    if let Some(track_handle) = handles.get(&guild_id) {
+        let handle_info = track_handle.clone().get_info().await?;
+        let loops = handle_info.loops;
+        let new_state: bool;
+        match loops {
+            LoopState::Infinite => {
+                let _ = track_handle.disable_loop()?;
+                new_state = false;
+            },
+            LoopState::Finite(_) => {
+                let _ = track_handle.enable_loop()?;
+                new_state = true;
             }
-            ctx.say(format!("Looping {}", if new_state { "enabled" } else { "disabled" })).await?;
-        } else {
-            ctx.say("No track is currently playing.").await?;
-        };
+        }
+        ctx.say(format!("Looping {}", if new_state { "enabled" } else { "disabled" })).await?;
     } else {
-        ctx.say("Currently not connected to a voice channel in this guild.").await?;
-    }
-
+        ctx.say("No track is currently playing.").await?;
+    };
     Ok(())
 }
 

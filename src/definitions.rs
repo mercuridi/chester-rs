@@ -1,8 +1,7 @@
 use serde::{Serialize, Deserialize};
 use tokio::sync::RwLock;
-use poise::serenity_prelude::{Member, GuildId};
+use poise::serenity_prelude::GuildId;
 use songbird::tracks::TrackHandle;
-use std::sync::Arc;
 use std::collections::HashMap;
 
 // Defines user data; this is always available in the Serenity context of an invocation
