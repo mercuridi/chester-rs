@@ -12,6 +12,8 @@ use songbird::tracks::LoopState;
 use songbird::Call;
 use yt_dlp::Youtube;
 use yt_dlp::fetcher::deps::Libraries;
+use yt_dlp::model::AudioCodecPreference;
+use yt_dlp::model::AudioQuality;
 use tokio::sync::Mutex;
 use crate::definitions::{Context, Error, TrackInfo, Data};
 
@@ -235,12 +237,17 @@ pub async fn download(
     let libraries = Libraries::new(youtube, ffmpeg);
     let fetcher = Youtube::new(libraries, &output_dir)?;
     
-    let video = fetcher.fetch_video_infos(yt_link).await?;
+    let video = fetcher.fetch_video_infos(yt_link.clone()).await?;
     let video_id = &video.id;
     println!("Video title: {}", video.title);
+
+    let audio_path = fetcher.download_audio_stream_with_quality(
+        yt_link,
+        format!("audio/{video_id}.mp3"),
+        AudioQuality::High,
+        AudioCodecPreference::Opus
+    ).await?;
     
-    let audio_format = video.best_audio_format().unwrap();
-    let audio_path = fetcher.download_format(&audio_format, format!("audio/{video_id}.mp3")).await?;
     println!("Audio downloaded @ {}", audio_path.display());
 
     let track_title = match track_title {
@@ -268,6 +275,15 @@ pub async fn download(
         track_origin,
         tags: Vec::new(),
     };
+
+    let data: &Data = ctx.data();
+    {
+        let mut library = data.library.write().await; // tokio::sync::RwLock
+        library.insert(
+            new_track.id.clone(),
+            new_track.clone()
+        );
+    }
 
     write_track_metadata(new_track).await?;
 
@@ -314,9 +330,14 @@ pub async fn play(
         .clone();
 
     join_vc(ctx, guild.clone(), vc_id).await?;
+    let track_path = format!("media/audio/{track_id}.mp3");
+    println!("{}", track_path.clone());
+
+    let path = std::env::current_dir()?;
+    println!("The current directory is {}", path.display());
 
     let song_src = Compressed::new(
-        SongbirdFile::new(format!("media/audio/{track_id}.mp3")).into(),
+        SongbirdFile::new(track_path).into(),
         Bitrate::BitsPerSecond(128_000),
     )
         .await
