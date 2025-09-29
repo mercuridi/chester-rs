@@ -1,5 +1,6 @@
 mod commands;
 mod definitions;
+mod autocomplete_example;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -7,15 +8,38 @@ mod definitions;
 use std::fs;
 use std::path::PathBuf;
 use std::path::Path;
+use std::collections::HashMap;
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
 use songbird::SerenityInit; // brings in `.register_songbird()`
 use yt_dlp::fetcher::deps::LibraryInstaller;
+use tokio::sync::RwLock;
 use dotenv::dotenv;
 
-use crate::definitions::{Data, Error};
+use crate::definitions::{Data, Error, TrackInfo};
 
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
+
+async fn load_media() -> Result<RwLock<Vec<TrackInfo>>, Error> {
+    let mut library = Vec::new();
+    let paths = fs::read_dir("media/metadata").unwrap();
+
+    for path in paths {
+        let path = path.unwrap().path();
+        if path.extension().unwrap() == "json" {
+            let read_track_info = load_track(path).await;
+            library.push(read_track_info);
+        }
+    }
+
+    Ok(RwLock::new(library))
+}
+
+async fn load_track(metadata_path: PathBuf) -> TrackInfo {
+    let data = fs::read_to_string(metadata_path).expect("Metadata file should exist and doesn't");
+    let track: TrackInfo = serde_json::from_str(&data).expect("Failed to deserialise JSON");
+    track
+}   
 
 async fn handle_libraries() -> Result<(), Error> {
     // make path if it doesn't exist
@@ -78,7 +102,8 @@ async fn main() -> Result<(), Error> {
         commands::join(),
         commands::play(),
         commands::leave(),
-        commands::download()
+        commands::download(),
+        autocomplete_example::greet()
     ];
     let poise_options = poise::FrameworkOptions {
         commands: poise_commands,
@@ -131,13 +156,15 @@ async fn main() -> Result<(), Error> {
         ..Default::default()
     };
 
+    let library = load_media().await?;
+
     // 1) Build your Poise framework
     let framework = poise::Framework::builder()
         .options(poise_options)
         .setup(|ctx, _ready, framework| {
             Box::pin(async move {
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data {})
+                Ok(Data { library })
             })
         })
         .build();

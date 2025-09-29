@@ -319,6 +319,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dotenv",
+ "futures",
  "poise",
  "reqwest 0.12.23",
  "serde",

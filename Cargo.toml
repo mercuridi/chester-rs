@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.99"
 dotenv = "0.15.0"
+futures = "0.3.31"
 poise = "0.6.1"
 reqwest = "0.12.23"
 serde = "1.0.228"

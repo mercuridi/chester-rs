@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::fs::write;
 use std::path::PathBuf;
 
-use poise::serenity_prelude::{ChannelId, Guild};
+use poise::serenity_prelude::{ChannelId, Guild, AutocompleteChoice};
+use poise::builtins::autocomplete_command;
 use songbird::input::File as SongbirdFile;
 use songbird::input::cached::Compressed;
 use songbird::driver::Bitrate;
@@ -12,7 +13,8 @@ use songbird::Call;
 use yt_dlp::Youtube;
 use yt_dlp::fetcher::deps::Libraries;
 use tokio::sync::Mutex;
-use crate::definitions::{Context, Error, TrackInfo};
+use tokio::sync::RwLockReadGuard;
+use crate::definitions::{Context, Error, TrackInfo, Data};
 
 ////////////////////////////////////////////////////////////////////////////////
 // Helper functions
@@ -42,6 +44,36 @@ async fn join_vc(ctx: Context<'_>, guild: Guild, vc_id: ChannelId) -> Result<Arc
 
     let join_result = manager.join(guild.id, vc_id).await;
     Ok(join_result?)
+}
+
+
+async fn autocomplete_play(
+    ctx: Context<'_>,
+    partial: &str,
+) -> impl Iterator<Item = AutocompleteChoice> {
+    let data: &Data = ctx.data();
+    let library = data.library.read().await; // tokio::sync::RwLock
+
+    let needle = partial.to_lowercase();
+    let mut choices: Vec<AutocompleteChoice> = Vec::with_capacity(25);
+
+    for info in library.iter() {
+        // Build a display name
+        let display = format!("{} - {}", info.track_title, info.track_artist);
+        if partial.is_empty() || display.to_lowercase().contains(&needle) {
+            choices.push(
+                AutocompleteChoice::new(
+                    display,
+                    info.id.clone(), // use the unique id as the value
+                )
+            );
+            if choices.len() >= 25 {
+                break;
+            }
+        }
+    }
+
+    choices.into_iter()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -92,7 +124,9 @@ pub async fn join(
 #[poise::command(slash_command)]
 pub async fn play(
     ctx: Context<'_>,
-    #[description = "Selected track ID"] track_id: String
+    #[description = "Selected track ID"]
+    #[autocomplete = "autocomplete_play"]
+    track_id: String
 ) -> Result<(), Error> {
 
     let guild = ctx.guild().expect("Must be in a guild to use voice").clone();
@@ -117,7 +151,7 @@ pub async fn play(
 
     if let Some(handler_lock) = manager.get(guild.id) {
         let mut handler = handler_lock.lock().await;
-        let _sound = handler.play_input(song_src.into());
+        let _sound = handler.play_only_input(song_src.into());
     }
 
     ctx.say("Playing track now").await?;
@@ -189,6 +223,7 @@ pub async fn download(
     };
 
     let new_track = TrackInfo {
+        id: video_id.clone(),
         upload_date: video.upload_date,
         yt_title: video.title,
         yt_channel: video.channel,
