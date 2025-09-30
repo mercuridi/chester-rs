@@ -1,16 +1,15 @@
 mod commands;
 mod definitions;
+mod json_handling;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
 
 use std::fs;
 use std::path::PathBuf;
-use std::path::Path;
 use std::collections::HashMap;
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
 use songbird::SerenityInit; // brings in `.register_songbird()`
-use yt_dlp::fetcher::deps::LibraryInstaller;
 use tokio::sync::RwLock;
 use dotenv::dotenv;
 
@@ -43,31 +42,6 @@ async fn load_track(metadata_path: PathBuf) -> TrackInfo {
     track
 }   
 
-async fn handle_libraries() -> Result<(), Error> {
-    // make path if it doesn't exist
-    if !Path::new("libs/").exists() {
-        println!("libs directory missing, creating");
-        fs::create_dir("libs")?;
-    }
-
-    let destination = PathBuf::from("libs");
-    let installer = LibraryInstaller::new(destination);
-
-    // install ffmpeg if it isn't there
-    if fs::metadata("libs/ffmpeg").is_err() {
-        println!("Installing ffmpeg");
-        let _ffmpeg = installer.install_ffmpeg(None).await.unwrap();
-    }
-
-    // install ytdlp if it isn't there
-    if fs::metadata("libs/yt-dlp").is_err() {
-        println!("Installing ytdlp");
-        let _youtube = installer.install_youtube(None).await.unwrap();
-    }
-
-    Ok(())
-}
-
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     // 1) Inspect & log any command errors without moving out of `error`
     match &error {
@@ -92,8 +66,6 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
-
-    handle_libraries().await.unwrap();
 
     dotenv().ok();
     let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN in .env");
@@ -169,7 +141,7 @@ async fn main() -> Result<(), Error> {
         .options(poise_options)
         .setup(|ctx, _ready, framework| {
             Box::pin(async move {
-                poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 Ok(
                     Data { 
                         library,

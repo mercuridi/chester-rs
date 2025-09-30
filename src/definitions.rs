@@ -16,7 +16,7 @@ pub type Context<'a> = poise::Context<'a, Data, Error>;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct TrackInfo {
         pub id: String,
-        pub upload_date: i64,
+        pub upload_date: String,
         pub yt_title: String,
         pub yt_channel: String,
         pub track_title: String,

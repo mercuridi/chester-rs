@@ -2,23 +2,54 @@
 // Imports
 use std::sync::Arc;
 use std::fs::write;
-use std::path::PathBuf;
+use std::process::Command;
 
+use serde_json::Value;
+use url::Url;
 use poise::serenity_prelude::{ChannelId, Guild, AutocompleteChoice};
 use songbird::input::File as SongbirdFile;
 use songbird::input::cached::Compressed;
 use songbird::driver::Bitrate;
 use songbird::tracks::LoopState;
 use songbird::Call;
-use yt_dlp::Youtube;
-use yt_dlp::fetcher::deps::Libraries;
-use yt_dlp::model::AudioCodecPreference;
-use yt_dlp::model::AudioQuality;
 use tokio::sync::Mutex;
 use crate::definitions::{Context, Error, TrackInfo, Data};
+use crate::json_handling::process_ytdlp_json;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Helper functions
+
+fn get_youtube_id(link: &str) -> Option<String> {
+    // Try to parse the URL; bail out if it's invalid
+    let url = Url::parse(link).ok()?;
+    let host = url.host_str()?;
+
+    match host {
+        // Short links: https://youtu.be/VIDEO_ID
+        "youtu.be" => {
+            // path_segments() -> segments between the slashes
+            url.path_segments()
+               .and_then(|mut segs| segs.next())
+               .map(|id| id.to_string())
+        }
+
+        // Standard watch URLs, mobile, or www embeds
+        "www.youtube.com" | "youtube.com" | "m.youtube.com" => {
+            // 1) /watch?v=VIDEO_ID
+            if let Some((_, v)) = url.query_pairs().find(|(k, _)| k == "v") {
+                return Some(v.into_owned());
+            }
+            // 2) /embed/VIDEO_ID
+            url.path_segments()
+               .and_then(|mut segs| {
+                   segs.find(|part| *part == "embed").and_then(|_| segs.next())
+               })
+               .map(|id| id.to_string())
+        }
+
+        _ => None,
+    }
+}
 
 async fn write_track_metadata (
     track_info_to_write: TrackInfo
@@ -68,21 +99,17 @@ async fn autocomplete_tracks(
 
     for info in library.values() {
         // Build a display name
-        let display = format!("{} | {} | {} | {:?}",
-            info.track_title.clone(),
-            info.track_artist.clone(),
-            info.track_origin.clone(),
-            info.tags.clone().join(", "),
-        );
-
-        // Build the search string
-        let search = format!("{} {} {} {:?}",
+        let tags_to_print = {
+            if info.tags.len() > 0 { info.tags.join(", ") } else { "No tags".to_string() } 
+        };
+        let display = format!("{} | {} | {} | {}",
             info.track_title,
             info.track_artist,
             info.track_origin,
-            info.tags.join(", "),
+            tags_to_print,
         );
-        if partial.is_empty() || search.to_lowercase().contains(&needle) {
+
+        if partial.is_empty() || display.to_lowercase().contains(&needle) {
             choices.push(
                 AutocompleteChoice::new(
                     display,
@@ -96,13 +123,6 @@ async fn autocomplete_tracks(
     }
 
     choices.into_iter()
-}
-
-async fn autocomplete_attributes(
-    _ctx: Context<'_>,
-    _partial: &str,
-) -> impl Iterator<Item = String> {
-    ["title", "artist", "origin"].iter().map(|s| s.to_string())
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -144,16 +164,16 @@ pub async fn reset_tags(
     ctx: Context<'_>,
     #[description = "The track to reset the tags of"]
     #[autocomplete = "autocomplete_tracks"]
-    track_id: String
+    track: String
 ) -> Result<(), Error> {
     let data: &Data = ctx.data();
     let mut library = data.library.write().await; // tokio::sync::RwLock
     // Look up the TrackInfo by key and clear its tags
-    if let Some(track_info) = library.get_mut(&track_id) {
+    if let Some(track_info) = library.get_mut(&track) {
         track_info.tags.clear();
         ctx.say(format!("Reset tags for track `{}`", track_info.track_title)).await?;
     } else {
-        ctx.say(format!("No track found with id `{}`", track_id)).await?;
+        ctx.say(format!("No track found with id `{}`", track)).await?;
     }
 
     Ok(())
@@ -165,53 +185,99 @@ pub async fn add_tag(
     ctx: Context<'_>,
     #[description = "The track to add a tag to"]
     #[autocomplete = "autocomplete_tracks"]
-    track_id: String,
+    track: String,
     #[description = "The tag to add"] tag: String
 ) -> Result<(), Error> {
     let data: &Data = ctx.data();
     let mut library = data.library.write().await; // tokio::sync::RwLock
     // Look up the TrackInfo by key and clear its tags
-    if let Some(track_info) = library.get_mut(&track_id) {
+    if let Some(track_info) = library.get_mut(&track) {
         track_info.tags.push(tag.clone());
         write_track_metadata(track_info.clone()).await?;
         ctx.say(format!("Tag `{}` added to track `{}`", tag, track_info.track_title)).await?;
     } else {
-        ctx.say(format!("No track found with id `{}`", track_id)).await?;
+        ctx.say(format!("No track found with id `{}`", track)).await?;
     }
 
     Ok(())
 }
 
 /// Set a track's title, artist, or origin
-#[poise::command(slash_command)]
+#[poise::command(slash_command, subcommands("title", "artist", "origin"), subcommand_required)]
 pub async fn set_metadata(
+    _ctx: Context<'_>,
+) -> Result<(), Error> {
+    Ok(())
+}
+
+/// Set a track's title
+#[poise::command(slash_command)]
+pub async fn title(
     ctx: Context<'_>,
     #[description = "The track to adjust"]
     #[autocomplete = "autocomplete_tracks"]
-    track_id: String,
-    #[description = "The attribute to adjust"] 
-    #[autocomplete = "autocomplete_attributes"]
-    attribute: String,
-    #[description = "The new value to give the attribute"] 
-    new_value: String
+    track: String,
+    #[description = "The new title to give the track"]
+    new_title: String
 ) -> Result<(), Error> {
     let data: &Data = ctx.data();
     let mut library = data.library.write().await; // tokio::sync::RwLock
-    // Look up the TrackInfo by key and clear its tags
-    if let Some(track_info) = library.get_mut(&track_id) {
-        let pocket = new_value.clone();
-        match attribute.as_str() {
-            "title" => track_info.track_title = new_value,
-            "artist" => track_info.track_artist = new_value,
-            "origin" => track_info.track_origin = new_value,
-            other => return Err(format!("Unknown attribute `{}`. Please pick an autocomplete option.", other).into())
-        }
+    if let Some(track_info) = library.get_mut(&track) {
+        let old_title = track_info.track_title.clone();
+        track_info.track_title = new_title.clone();
         write_track_metadata(track_info.clone()).await?;
-        ctx.say(format!("Set attribute `{}` as `{}` for track `{}`", attribute, pocket, track_info.track_title)).await?;
+        ctx.say(format!("Set new title `{}` for track formerly known as `{}`", new_title, old_title)).await?;
     } else {
-        ctx.say(format!("No track found with id `{}`", track_id)).await?;
-    }
+        ctx.say(format!("No track found with id `{}`", track)).await?;
+    }    
+    Ok(())
+}
 
+/// Set a track's artist
+#[poise::command(slash_command)]
+pub async fn artist(
+    ctx: Context<'_>,
+    #[description = "The track to adjust"]
+    #[autocomplete = "autocomplete_tracks"]
+    track: String,
+    #[description = "The new artist for the track"]
+    new_artist: String
+) -> Result<(), Error> {
+    let data: &Data = ctx.data();
+    let mut library = data.library.write().await; // tokio::sync::RwLock
+    if let Some(track_info) = library.get_mut(&track) {
+        let track_title = &track_info.track_title;
+        let old_artist = track_info.track_artist.clone();
+        track_info.track_artist = new_artist.clone();
+        write_track_metadata(track_info.clone()).await?;
+        ctx.say(format!("Set new artist `{}` for track `{}` (old artist: `{}`)", new_artist, track_title, old_artist)).await?;
+    } else {
+        ctx.say(format!("No track found with id `{}`", track)).await?;
+    }    
+    Ok(())
+}
+
+/// Set a track's origin (eg. game/movie title)
+#[poise::command(slash_command)]
+pub async fn origin(
+    ctx: Context<'_>,
+    #[description = "The track to adjust"]
+    #[autocomplete = "autocomplete_tracks"]
+    track: String,
+    #[description = "The new origin for the track"]
+    new_origin: String
+) -> Result<(), Error> {
+    let data: &Data = ctx.data();
+    let mut library = data.library.write().await; // tokio::sync::RwLock
+    if let Some(track_info) = library.get_mut(&track) {
+        let track_title = &track_info.track_title;
+        let old_origin = track_info.track_origin.clone();
+        track_info.track_origin = new_origin.clone();
+        write_track_metadata(track_info.clone()).await?;
+        ctx.say(format!("Set new origin `{}` for track `{}` (old origin: `{}`)", new_origin, track_title, old_origin)).await?;
+    } else {
+        ctx.say(format!("No track found with id `{}`", track)).await?;
+    }    
     Ok(())
 }
 
@@ -228,36 +294,36 @@ pub async fn download(
 
     ctx.defer().await?;
 
-    let libraries_dir = PathBuf::from("libs");
-    let output_dir = PathBuf::from("media");
+    let video_id = get_youtube_id(&yt_link).unwrap();
 
-    let youtube = libraries_dir.join("yt-dlp");
-    let ffmpeg = libraries_dir.join("ffmpeg");
+    // outputs the mp3 to:          media/audio/id.extension <- extension should be mp3
+    // outputs the info json to:    media/audio/id.info.json
+    let output = Command::new("yt-dlp")
+        .arg("-t")
+        .arg("mp3")
+        .arg("-o")
+        .arg("media/audio/%(id)s.%(ext)s")
+        .arg("--no-playlist")
+        .arg("--write-info-json")
+        .arg("--no-progress")
+        .arg(yt_link)
+        .output()
+        .expect("Failed to execute yt-dlp");
 
-    let libraries = Libraries::new(youtube, ffmpeg);
-    let fetcher = Youtube::new(libraries, &output_dir)?;
-    
-    let video = fetcher.fetch_video_infos(yt_link.clone()).await?;
-    let video_id = &video.id;
-    println!("Video title: {}", video.title);
+    println!("{:?}", output);
 
-    let audio_path = fetcher.download_audio_stream_with_quality(
-        yt_link,
-        format!("audio/{video_id}.mp3"),
-        AudioQuality::High,
-        AudioCodecPreference::Opus
-    ).await?;
-    
-    println!("Audio downloaded @ {}", audio_path.display());
+    // reproceses the file at media/audio/id.info.json
+    // and deletes it on the return once the file has been read
+    let slim = process_ytdlp_json(video_id).unwrap();
 
     let track_title = match track_title {
         Some(title) => title,
-        None => video.title.clone()
+        None => slim.get("title").and_then(Value::as_str).unwrap().to_string()
     };
 
     let track_artist = match track_artist {
         Some(artist) => artist,
-        None => video.channel.clone()
+        None => slim.get("channel").and_then(Value::as_str).unwrap().to_string()
     };
 
     let track_origin = match track_origin {
@@ -266,10 +332,10 @@ pub async fn download(
     };
 
     let new_track = TrackInfo {
-        id: video_id.clone(),
-        upload_date: video.upload_date,
-        yt_title: video.title.clone(),
-        yt_channel: video.channel,
+        id: slim.get("id").and_then(Value::as_str).unwrap().to_string(),
+        upload_date: slim.get("upload_date").and_then(Value::as_str).unwrap().to_string(),
+        yt_title: slim.get("title").and_then(Value::as_str).unwrap().to_string(),
+        yt_channel: slim.get("channel").and_then(Value::as_str).unwrap().to_string(),
         track_title,
         track_artist,
         track_origin,
@@ -287,10 +353,8 @@ pub async fn download(
 
     write_track_metadata(new_track).await?;
 
-    let video_title = video.title;
-
-    ctx.say(format!("File downloaded: {video_title}")).await?;
-    println!("Download finished");
+    let title = slim.get("title").and_then(Value::as_str).unwrap().to_string();
+    ctx.say(format!("File downloaded: {title}")).await?;
     Ok(())
 }
 
@@ -316,7 +380,7 @@ pub async fn play(
     ctx: Context<'_>,
     #[description = "Track to play now"]
     #[autocomplete = "autocomplete_tracks"]
-    track_id: String
+    track: String
 ) -> Result<(), Error> {
 
     let guild = ctx.guild().expect("Must be in a guild to use voice").clone();
@@ -330,7 +394,7 @@ pub async fn play(
         .clone();
 
     join_vc(ctx, guild.clone(), vc_id).await?;
-    let track_path = format!("media/audio/{track_id}.mp3");
+    let track_path = format!("media/audio/{track}.mp3");
     println!("{}", track_path.clone());
 
     let path = std::env::current_dir()?;
