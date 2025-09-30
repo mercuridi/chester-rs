@@ -80,7 +80,8 @@ async fn main() -> Result<(), Error> {
         commands::reset_tags(),
         commands::add_tag(),
         commands::set_metadata(),
-        commands::loop_track()
+        commands::loop_track(),
+        commands::paginate()
     ];
 
     let poise_options = poise::FrameworkOptions {
@@ -139,7 +140,7 @@ async fn main() -> Result<(), Error> {
     // 1) Build your Poise framework
     let framework = poise::Framework::builder()
         .options(poise_options)
-        .setup(|ctx, _ready, framework| {
+        .setup(|_ctx, _ready, _framework| {
             Box::pin(async move {
                 // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 Ok(

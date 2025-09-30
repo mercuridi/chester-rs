@@ -3,6 +3,7 @@
 use std::sync::Arc;
 use std::fs::write;
 use std::process::Command;
+use std::collections::HashSet;
 
 use serde_json::Value;
 use url::Url;
@@ -19,8 +20,82 @@ use crate::json_handling::process_ytdlp_json;
 ////////////////////////////////////////////////////////////////////////////////
 // Helper functions
 
+// MAX here is 25 (Discord limitation)
+const AUTOCOMPLETE_MAX_CHOICES: usize = 25;
+
+// MAX here is 100 (Discord limitation)
+const AUTOCOMPLETE_MAX_LENGTH: usize = 100;
+const ELLIPSIS: &str = "…";
+const SEPARATOR: &str = " | ";
+const ELLIPSIS_LEN: usize = ELLIPSIS.len();
+const SEPARATOR_LEN: usize = SEPARATOR.len();
+
+fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
+    // Build a display name
+    let content_max_length = AUTOCOMPLETE_MAX_LENGTH - (SEPARATOR_LEN * to_display.len()) + 1;
+
+    let mut lens: Vec<usize> = to_display
+        .iter()
+        .map(|n| n.len())
+        .collect();
+    let total_len: usize = lens.iter().sum();
+    let mut excess = total_len.saturating_sub(content_max_length);
+
+    // truncate each as needed
+    while excess > 0 {
+        // pick the index of the longest field
+        let (max_idx, &max_len) = lens
+            .iter()
+            .enumerate()
+            .max_by_key(|&(_, &l)| l)
+            .unwrap();
+
+        // decide how many bytes to chop
+        let chop = excess.min(max_len);
+        let mut new_len = max_len.saturating_sub(chop);
+
+        // reserve room for ellipsis if we're actually cutting
+        let needs_ellipsis = new_len < max_len;
+        if needs_ellipsis && new_len > ELLIPSIS_LEN {
+            new_len = new_len.saturating_sub(ELLIPSIS_LEN);
+        }
+
+        // get the mutable String reference
+        let s: &mut String = &mut to_display[max_idx];
+
+        // back up to a valid UTF-8 boundary
+        let mut adjust = new_len;
+        while adjust > 0 && !s.is_char_boundary(adjust) {
+            adjust -= 1;
+        }
+        s.truncate(adjust);
+
+        // append ellipsis if we cut something
+        if needs_ellipsis {
+            s.push_str(ELLIPSIS);
+            lens[max_idx] = adjust + ELLIPSIS_LEN;
+        } else {
+            lens[max_idx] = adjust;
+        }
+
+        excess = excess.saturating_sub(chop);
+    }
+
+    to_display.join(SEPARATOR)
+
+}
+
+fn lightweight_trim(mut choice: String) -> String {
+    if choice.len() > 99 {
+        choice.truncate(99);
+        choice.push_str(ELLIPSIS);
+    }
+    choice
+}
+
 fn get_youtube_id(link: &str) -> Option<String> {
     // Try to parse the URL; bail out if it's invalid
+    println!("Parsing YouTube link {}", link);
     let url = Url::parse(link).ok()?;
     let host = url.host_str()?;
 
@@ -54,12 +129,14 @@ fn get_youtube_id(link: &str) -> Option<String> {
 async fn write_track_metadata (
     track_info_to_write: TrackInfo
 ) -> Result<(), Error> {
+    println!("Writing out track metadata");
     let video_id = track_info_to_write.id.clone();
     write(format!("media/metadata/{video_id}.json"), serde_json::to_string_pretty(&track_info_to_write)?).expect("Failed to write metadata file");
     Ok(())
 }
 
 async fn get_vc_id(ctx: Context<'_>) -> Result<ChannelId, Error> {
+    println!("Getting VC id");
 
     let guild_id = ctx.guild_id().unwrap();
 
@@ -77,6 +154,8 @@ async fn get_vc_id(ctx: Context<'_>) -> Result<ChannelId, Error> {
 }
 
 async fn join_vc(ctx: Context<'_>, guild: Guild, vc_id: ChannelId) -> Result<Arc<Mutex<Call>>, Error>{
+    println!("Joining user's voice chat");
+
     let manager = songbird::get(ctx.serenity_context())
         .await
         .expect("Error getting the Songbird client from the manager")
@@ -86,43 +165,92 @@ async fn join_vc(ctx: Context<'_>, guild: Guild, vc_id: ChannelId) -> Result<Arc
     Ok(join_result?)
 }
 
-
-async fn autocomplete_tracks(
+async fn autocomplete_metadata(
     ctx: Context<'_>,
     partial: &str,
-) -> impl Iterator<Item = AutocompleteChoice> {
+) -> impl Iterator<Item = String> {
+    println!("Autocomplete requested: metadata");
+
     let data: &Data = ctx.data();
     let library = data.library.read().await; // tokio::sync::RwLock
 
     let needle = partial.to_lowercase();
-    let mut choices: Vec<AutocompleteChoice> = Vec::with_capacity(25);
+    let mut choices: HashSet<String> = HashSet::with_capacity(AUTOCOMPLETE_MAX_CHOICES);
 
-    for info in library.values() {
-        // Build a display name
-        let tags_to_print = {
-            if info.tags.len() > 0 { info.tags.join(", ") } else { "No tags".to_string() } 
+    let cmd = ctx.command().name.as_str();
+
+    'outer: for info in library.values() {
+        // build a list of candidates for this info
+        let candidates: Vec<String> = match cmd {
+            "add_tag" => info.tags.clone(),
+            "artist" => vec![info.track_artist.clone()],
+            "origin" => vec![info.track_origin.clone()],
+            _ => Vec::new(),
         };
-        let display = format!("{} | {} | {} | {}",
-            info.track_title,
-            info.track_artist,
-            info.track_origin,
-            tags_to_print,
-        );
 
-        if partial.is_empty() || display.to_lowercase().contains(&needle) {
-            choices.push(
-                AutocompleteChoice::new(
-                    display,
-                    info.id.clone(), // use the unique id as the value
-                )
-            );
-            if choices.len() >= 25 {
-                break;
+        // run each candidate through lightweight_trim + filter
+        for raw in candidates {
+            let display = lightweight_trim(raw);
+
+            if needle.is_empty() || display.to_lowercase().contains(&needle) {
+                choices.insert(display);
+                if choices.len() >= AUTOCOMPLETE_MAX_CHOICES {
+                    break 'outer;
+                }
             }
         }
     }
 
+    println!("Choices: {:#?}", choices.clone());
+    println!("Command invoking autocomplete: {}", cmd);
+    println!("Number of choices: {}", choices.len());
+    println!("Search term: {}", partial);
+
+    let mut choices: Vec<String> = choices.into_iter().collect();
+    choices.sort_unstable();
     choices.into_iter()
+}
+
+async fn autocomplete_track(
+    ctx: Context<'_>,
+    partial: &str,
+) -> impl Iterator<Item = AutocompleteChoice> {
+    println!("Autocomplete requested: tracks");
+
+    let data: &Data = ctx.data();
+    let library = data.library.read().await; // tokio::sync::RwLock
+
+    let needle = partial.to_lowercase();
+    let mut choices: Vec<(String, String)> = Vec::with_capacity(AUTOCOMPLETE_MAX_CHOICES);
+
+    let cmd = ctx.command().name.as_str();
+
+    for info in library.values() {
+        let display = build_autocomplete_display(vec![
+                info.track_title.clone(),
+                info.track_artist.clone(),
+                info.track_origin.clone(),
+                { if info.tags.len() > 0 { info.tags.join(", ") } else { "No tags".to_string() } }
+            ]
+        );
+
+        if needle.is_empty() || display.to_lowercase().contains(&needle) {
+            choices.push((display, info.id.clone()));
+            if choices.len() >= AUTOCOMPLETE_MAX_CHOICES {
+                break;
+            }
+        }
+    }
+    println!("Choices: {:#?}", choices.clone());
+    println!("Command invoking autocomplete: {}", cmd);
+    println!("Number of choices: {}", choices.len());
+    println!("Search term: {}", partial);
+
+    choices.sort_unstable_by(|(d1, _), (d2, _)| d1.cmp(d2));
+    choices
+        .into_iter()
+        .map(|(display, video_id)| {AutocompleteChoice::new(display, video_id)}
+    )
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -163,7 +291,7 @@ pub async fn help(
 pub async fn reset_tags(
     ctx: Context<'_>,
     #[description = "The track to reset the tags of"]
-    #[autocomplete = "autocomplete_tracks"]
+    #[autocomplete = "autocomplete_track"]
     track: String
 ) -> Result<(), Error> {
     let data: &Data = ctx.data();
@@ -171,6 +299,7 @@ pub async fn reset_tags(
     // Look up the TrackInfo by key and clear its tags
     if let Some(track_info) = library.get_mut(&track) {
         track_info.tags.clear();
+        write_track_metadata(track_info.clone()).await?;
         ctx.say(format!("Reset tags for track `{}`", track_info.track_title)).await?;
     } else {
         ctx.say(format!("No track found with id `{}`", track)).await?;
@@ -184,9 +313,11 @@ pub async fn reset_tags(
 pub async fn add_tag(
     ctx: Context<'_>,
     #[description = "The track to add a tag to"]
-    #[autocomplete = "autocomplete_tracks"]
+    #[autocomplete = "autocomplete_track"]
     track: String,
-    #[description = "The tag to add"] tag: String
+    #[description = "The tag to add"]
+    #[autocomplete = "autocomplete_metadata"]
+    tag: String
 ) -> Result<(), Error> {
     let data: &Data = ctx.data();
     let mut library = data.library.write().await; // tokio::sync::RwLock
@@ -215,7 +346,7 @@ pub async fn set_metadata(
 pub async fn title(
     ctx: Context<'_>,
     #[description = "The track to adjust"]
-    #[autocomplete = "autocomplete_tracks"]
+    #[autocomplete = "autocomplete_track"]
     track: String,
     #[description = "The new title to give the track"]
     new_title: String
@@ -238,9 +369,10 @@ pub async fn title(
 pub async fn artist(
     ctx: Context<'_>,
     #[description = "The track to adjust"]
-    #[autocomplete = "autocomplete_tracks"]
+    #[autocomplete = "autocomplete_track"]
     track: String,
     #[description = "The new artist for the track"]
+    #[autocomplete = "autocomplete_metadata"]
     new_artist: String
 ) -> Result<(), Error> {
     let data: &Data = ctx.data();
@@ -262,9 +394,10 @@ pub async fn artist(
 pub async fn origin(
     ctx: Context<'_>,
     #[description = "The track to adjust"]
-    #[autocomplete = "autocomplete_tracks"]
+    #[autocomplete = "autocomplete_track"]
     track: String,
     #[description = "The new origin for the track"]
+    #[autocomplete = "autocomplete_metadata"]
     new_origin: String
 ) -> Result<(), Error> {
     let data: &Data = ctx.data();
@@ -354,7 +487,7 @@ pub async fn download(
     write_track_metadata(new_track).await?;
 
     let title = slim.get("title").and_then(Value::as_str).unwrap().to_string();
-    ctx.say(format!("File downloaded: {title}")).await?;
+    ctx.say(format!("File downloaded: `{title}`")).await?;
     Ok(())
 }
 
@@ -379,7 +512,7 @@ pub async fn join(
 pub async fn play(
     ctx: Context<'_>,
     #[description = "Track to play now"]
-    #[autocomplete = "autocomplete_tracks"]
+    #[autocomplete = "autocomplete_track"]
     track: String
 ) -> Result<(), Error> {
 
@@ -408,10 +541,13 @@ pub async fn play(
         .expect("An error occurred constructing the track source");
     let _ = song_src.raw.spawn_loader();
 
+    let data: &Data = ctx.data();
+    let library = data.library.read().await;
+
     if let Some(handler_lock) = manager.get(guild.id.clone()) {
         let mut handler = handler_lock.lock().await;
         let track_handle = handler.play_only_input(song_src.into());
-        let data: &Data = ctx.data();
+        let _ = track_handle.enable_loop()?;
         let mut handles = data.track_handles.write().await; // tokio::sync::RwLock
         handles.insert(
             guild.id,
@@ -419,7 +555,7 @@ pub async fn play(
         );
     }
 
-    ctx.say("Playing track now").await?;
+    ctx.say(format!("Playing selected track: `{}`", library.get(&track).unwrap().track_title)).await?;
 
     Ok(())
 }
@@ -479,6 +615,20 @@ pub async fn leave(
     manager.remove(guild.id).await?;
 
     ctx.say("Left the voice channel").await?;
+
+    Ok(())
+}
+
+#[poise::command(slash_command, prefix_command)]
+pub async fn paginate(ctx: Context<'_>) -> Result<(), Error> {
+    let pages = &[
+        "`Content of first page`",
+        "`Content of second page`",
+        "`Content of third page`",
+        "`Content of fourth page`",
+    ];
+
+    poise::samples::paginate(ctx, pages).await?;
 
     Ok(())
 }
