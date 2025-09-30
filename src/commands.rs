@@ -415,7 +415,6 @@ pub async fn origin(
 }
 
 /// Download a track from a YouTube link
-/// Leaving options blank will copy them from the YouTube video
 #[poise::command(slash_command)]
 pub async fn download(
     ctx: Context<'_>,
