@@ -5,7 +5,7 @@ use std::fs;
 pub fn process_ytdlp_json(
     file_id: String
 ) -> Result<serde_json::Value> {
-    let path = format!("media/audio/{file_id}.info.json");
+    let path = format!("audio/{file_id}.info.json");
     let content = fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {:?}", path))?;
 
