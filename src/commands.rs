@@ -30,37 +30,42 @@ const SEPARATOR: &str = " | ";
 const ELLIPSIS_LEN: usize = ELLIPSIS.len();
 const SEPARATOR_LEN: usize = SEPARATOR.len();
 
-async fn get_id_or_insert (
+async fn get_id_or_insert(
     db_pool: &Pool<Sqlite>,
-    field_name: &str, // assumes the table is named after the field but plural
-    pls_find: &str
+    field_name: &str, // singular, e.g. "tag"
+    pls_find: &str,
 ) -> i64 {
-    // Ensure the tag exists in the `tags` table, or insert it if it doesn't
-    match sqlx::query_scalar("SELECT id FROM ?1s WHERE ?2 = ?3")
-        .bind(field_name)
-        .bind(field_name)
-        .bind(pls_find.to_lowercase()) // Normalize the tag to lowercase
+    let table_name = format!("{}s", field_name);
+
+    // Build SELECT statement with identifiers in the string
+    let select_sql = format!("SELECT id FROM {} WHERE {} = ?1", table_name, field_name);
+
+    match sqlx::query_scalar::<_, i64>(&select_sql)
+        .bind(&pls_find)
         .fetch_optional(db_pool)
-        .await.unwrap()
+        .await
+        .unwrap()
     {
         Some(id) => id,
         None => {
-            // Insert the tag and retrieve its ID
-            sqlx::query("INSERT INTO ?1s (?2) VALUES (?3)")
-                .bind(field_name)
-                .bind(field_name)
-                .bind(pls_find.to_lowercase())
+            // Insert new value
+            let insert_sql = format!("INSERT INTO {} ({}) VALUES (?1)", table_name, field_name);
+            sqlx::query(&insert_sql)
+                .bind(&pls_find)
                 .execute(db_pool)
-                .await.unwrap();
-            sqlx::query_scalar("SELECT id FROM ?1s WHERE ?2 = ?3")
-                .bind(field_name)
-                .bind(field_name)
-                .bind(pls_find.to_lowercase())
+                .await
+                .unwrap();
+
+            // Fetch its id
+            sqlx::query_scalar::<_, i64>(&select_sql)
+                .bind(&pls_find)
                 .fetch_one(db_pool)
-                .await.unwrap()
+                .await
+                .unwrap()
         }
     }
 }
+
 
 fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
     // Build a display name
@@ -272,16 +277,18 @@ async fn autocomplete_track(
 
     // Query the database for tracks matching the partial input or associated tags
     let query = "
-        SELECT DISTINCT tracks.id, tracks.track_title, tracks.track_artist, tracks.track_origin,
+        SELECT DISTINCT tracks.id, tracks.track_title, artists.artist, origins.origin,
                         GROUP_CONCAT(tags.tag, ', ') AS tags
         FROM tracks
         LEFT JOIN track_tags ON tracks.id = track_tags.track_id
         LEFT JOIN tags ON track_tags.tag_id = tags.id
+        LEFT JOIN artists ON tracks.artist_id = artists.id
+        LEFT JOIN origins ON tracks.origin_id = origins.id
         WHERE LOWER(tracks.track_title) LIKE ?1
-           OR LOWER(tracks.track_artist) LIKE ?1
-           OR LOWER(tracks.track_origin) LIKE ?1
+           OR LOWER(artists.artist) LIKE ?1
+           OR LOWER(origins.origin) LIKE ?1
            OR LOWER(tags.tag) LIKE ?1
-        GROUP BY tracks.id, tracks.track_title, tracks.track_artist, tracks.track_origin
+        GROUP BY tracks.id, tracks.track_title, artists.artist, origins.origin
         LIMIT ?2
     ";
 
@@ -481,8 +488,8 @@ pub async fn artist(
 
     if let Some(track_id) = track_exists {
         // Update the track's artist in the database
-        sqlx::query("UPDATE tracks SET track_artist = ?1 WHERE id = ?2")
-            .bind(&new_artist)
+        sqlx::query("UPDATE tracks SET artist_id = ?1 WHERE id = ?2")
+            .bind(get_id_or_insert(db_pool, "artist", &new_artist).await)
             .bind(&track_id)
             .execute(db_pool)
             .await?;
@@ -520,8 +527,8 @@ pub async fn origin(
 
     if let Some(track_id) = track_exists {
         // Update the track's origin in the database
-        sqlx::query("UPDATE tracks SET track_origin = ?1 WHERE id = ?2")
-            .bind(&new_origin)
+        sqlx::query("UPDATE tracks SET origin_id = ?1 WHERE id = ?2")
+            .bind(get_id_or_insert(db_pool, "origin", &new_origin).await)
             .bind(&track_id)
             .execute(db_pool)
             .await?;
@@ -600,8 +607,8 @@ pub async fn download(
     // Insert the track metadata into the database
     let db_pool = &ctx.data().db_pool;
     sqlx::query(
-        "INSERT INTO tracks (id, upload_date, yt_title, yt_channel, track_title, artist_id, origin_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO tracks (id, upload_date, yt_title, track_title, artist_id, origin_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )
     .bind(&video_id)
     .bind(
@@ -613,11 +620,6 @@ pub async fn download(
         slim.get("title")
             .and_then(Value::as_str)
             .unwrap_or("Unknown Title"),
-    )
-    .bind(
-        slim.get("channel")
-            .and_then(Value::as_str)
-            .unwrap_or("Unknown Channel"),
     )
     .bind(&track_title)
     .bind(get_id_or_insert(db_pool, "artist", &track_artist).await)
