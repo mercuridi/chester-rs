@@ -323,7 +323,7 @@ pub async fn add_tag(
     let mut library = data.library.write().await; // tokio::sync::RwLock
     // Look up the TrackInfo by key and clear its tags
     if let Some(track_info) = library.get_mut(&track) {
-        track_info.tags.push(tag.clone());
+        track_info.tags.push(tag.clone().to_lowercase());
         write_track_metadata(track_info.clone()).await?;
         ctx.say(format!("Tag `{}` added to track `{}`", tag, track_info.track_title)).await?;
     } else {
