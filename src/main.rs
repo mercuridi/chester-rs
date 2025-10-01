@@ -1,6 +1,7 @@
 mod commands;
 mod definitions;
 mod json_handling;
+mod database;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -12,6 +13,8 @@ use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
 use songbird::SerenityInit; // brings in `.register_songbird()`
 use tokio::sync::RwLock;
 use dotenv::dotenv;
+
+use database::initialise_database;
 
 use crate::definitions::{Data, Error, TrackInfo};
 
@@ -69,6 +72,8 @@ async fn main() -> Result<(), Error> {
 
     dotenv().ok();
     let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN in .env");
+
+    let db_connection = initialise_database()?;
 
     let poise_commands = vec![
         commands::help(),
@@ -136,8 +141,6 @@ async fn main() -> Result<(), Error> {
         ..Default::default()
     };
 
-    let library = load_media().await?;
-
     // 1) Build your Poise framework
     let framework = poise::Framework::builder()
         .options(poise_options)
@@ -146,8 +149,8 @@ async fn main() -> Result<(), Error> {
                 // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 Ok(
                     Data { 
-                        library,
-                        track_handles: RwLock::new(HashMap::new())
+                        db_connection,
+                        track_handles: tokio::sync::RwLock::new(HashMap::new())
                     }
                 )
             })

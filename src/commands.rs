@@ -5,6 +5,7 @@ use std::fs::write;
 use std::process::Command;
 use std::collections::HashSet;
 
+use rusqlite::OptionalExtension;
 use serde_json::Value;
 use url::Url;
 use poise::serenity_prelude::{ChannelId, Guild, AutocompleteChoice};
@@ -14,6 +15,7 @@ use songbird::driver::Bitrate;
 use songbird::tracks::LoopState;
 use songbird::Call;
 use tokio::sync::Mutex;
+use crate::database::{self, get_all_tracks};
 use crate::definitions::{Context, Error, TrackInfo, Data};
 use crate::json_handling::process_ytdlp_json;
 
@@ -171,20 +173,21 @@ async fn autocomplete_metadata(
 ) -> impl Iterator<Item = String> {
     println!("Autocomplete requested: metadata");
 
-    let data: &Data = ctx.data();
-    let library = data.library.read().await; // tokio::sync::RwLock
+    let db_connection = ctx.data().db_connection.clone(); // Clone the Arc<Mutex<Connection>>
+    let conn = db_connection.lock().await; // Lock the database connection
+    let library = get_all_tracks(&conn).unwrap();
 
     let needle = partial.to_lowercase();
     let mut choices: HashSet<String> = HashSet::with_capacity(AUTOCOMPLETE_MAX_CHOICES);
 
     let cmd = ctx.command().name.as_str();
 
-    'outer: for info in library.values() {
+    'outer: for info in library {
         // build a list of candidates for this info
         let candidates: Vec<String> = match cmd {
-            "add_tag" => info.tags.clone(),
-            "artist" => vec![info.track_artist.clone()],
-            "origin" => vec![info.track_origin.clone()],
+            "add_tag" => info.tags,
+            "artist" => vec![info.track_artist],
+            "origin" => vec![info.track_origin],
             _ => Vec::new(),
         };
 
@@ -217,15 +220,16 @@ async fn autocomplete_track(
 ) -> impl Iterator<Item = AutocompleteChoice> {
     println!("Autocomplete requested: tracks");
 
-    let data: &Data = ctx.data();
-    let library = data.library.read().await; // tokio::sync::RwLock
+    let db_connection = ctx.data().db_connection.clone(); // Clone the Arc<Mutex<Connection>>
+    let conn = db_connection.lock().await; // Lock the database connection
+    let library = get_all_tracks(&conn).unwrap();
 
     let needle = partial.to_lowercase();
     let mut choices: Vec<(String, String)> = Vec::with_capacity(AUTOCOMPLETE_MAX_CHOICES);
 
     let cmd = ctx.command().name.as_str();
 
-    for info in library.values() {
+    for info in library {
         let display = build_autocomplete_display(vec![
                 info.track_title.clone(),
                 info.track_artist.clone(),
@@ -290,19 +294,30 @@ pub async fn help(
 #[poise::command(slash_command)]
 pub async fn reset_tags(
     ctx: Context<'_>,
-    #[description = "The track to reset the tags of"]
-    #[autocomplete = "autocomplete_track"]
-    track: String
+    #[description = "The ID of the track to reset tags for"] track_id: String,
 ) -> Result<(), Error> {
-    let data: &Data = ctx.data();
-    let mut library = data.library.write().await; // tokio::sync::RwLock
-    // Look up the TrackInfo by key and clear its tags
-    if let Some(track_info) = library.get_mut(&track) {
-        track_info.tags.clear();
-        write_track_metadata(track_info.clone()).await?;
-        ctx.say(format!("Reset tags for track `{}`", track_info.track_title)).await?;
-    } else {
-        ctx.say(format!("No track found with id `{}`", track)).await?;
+    let db_connection = ctx.data().db_connection.clone(); // Clone the Arc<Mutex<Connection>>
+    let conn = db_connection.lock().await; // Lock the database connection
+
+    // Update the tags for the specified track in the database
+    let result = conn.execute(
+        "UPDATE tracks SET tags = ?1 WHERE id = ?2",
+        rusqlite::params![serde_json::to_string(&Vec::<String>::new())?, track_id],
+    );
+
+    match result {
+        Ok(0) => {
+            // No rows were updated, meaning the track ID doesn't exist
+            ctx.say("Track not found.").await?;
+        }
+        Ok(_) => {
+            // Tags were successfully reset
+            ctx.say("Tags have been reset for the specified track.").await?;
+        }
+        Err(e) => {
+            // Handle any database errors
+            ctx.say(format!("Failed to reset tags: {}", e)).await?;
+        }
     }
 
     Ok(())
@@ -317,15 +332,33 @@ pub async fn add_tag(
     track: String,
     #[description = "The tag to add"]
     #[autocomplete = "autocomplete_metadata"]
-    tag: String
+    tag: String,
 ) -> Result<(), Error> {
-    let data: &Data = ctx.data();
-    let mut library = data.library.write().await; // tokio::sync::RwLock
-    // Look up the TrackInfo by key and clear its tags
-    if let Some(track_info) = library.get_mut(&track) {
-        track_info.tags.push(tag.clone().to_lowercase());
-        write_track_metadata(track_info.clone()).await?;
-        ctx.say(format!("Tag `{}` added to track `{}`", tag, track_info.track_title)).await?;
+    let db_connection = ctx.data().db_connection.clone(); // Clone the Arc<Mutex<Connection>>
+    let conn = db_connection.lock().await; // Lock the database connection
+
+    // Fetch the current tags for the specified track
+    let mut stmt = conn.prepare("SELECT tags FROM tracks WHERE id = ?1")?;
+    let tags_json: Option<String> = stmt.query_row([track.clone()], |row| row.get(0)).optional()?;
+
+    if let Some(tags_json) = tags_json {
+        // Deserialize the current tags
+        let mut tags: Vec<String> = serde_json::from_str(&tags_json)?;
+
+        // Add the new tag if it doesn't already exist
+        if !tags.contains(&tag.to_lowercase()) {
+            tags.push(tag.clone().to_lowercase());
+
+            // Update the tags in the database
+            conn.execute(
+                "UPDATE tracks SET tags = ?1 WHERE id = ?2",
+                rusqlite::params![serde_json::to_string(&tags)?, track],
+            )?;
+
+            ctx.say(format!("Tag `{}` added to track `{}`", tag, track)).await?;
+        } else {
+            ctx.say(format!("Tag `{}` already exists for track `{}`", tag, track)).await?;
+        }
     } else {
         ctx.say(format!("No track found with id `{}`", track)).await?;
     }
