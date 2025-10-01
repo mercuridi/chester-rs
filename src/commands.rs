@@ -1,7 +1,6 @@
 ////////////////////////////////////////////////////////////////////////////////
 // Imports
 use std::sync::Arc;
-use std::fs::write;
 use std::process::Command;
 use std::collections::HashSet;
 
@@ -14,7 +13,7 @@ use songbird::driver::Bitrate;
 use songbird::tracks::LoopState;
 use songbird::Call;
 use tokio::sync::Mutex;
-use crate::definitions::{Context, Error, TrackInfo, Data};
+use crate::definitions::{Context, Error, Data};
 use crate::json_handling::process_ytdlp_json;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -126,15 +125,6 @@ fn get_youtube_id(link: &str) -> Option<String> {
     }
 }
 
-async fn write_track_metadata (
-    track_info_to_write: TrackInfo
-) -> Result<(), Error> {
-    println!("Writing out track metadata");
-    let video_id = track_info_to_write.id.clone();
-    write(format!("media/metadata/{video_id}.json"), serde_json::to_string_pretty(&track_info_to_write)?).expect("Failed to write metadata file");
-    Ok(())
-}
-
 async fn get_vc_id(ctx: Context<'_>) -> Result<ChannelId, Error> {
     println!("Getting VC id");
 
@@ -171,32 +161,38 @@ async fn autocomplete_metadata(
 ) -> impl Iterator<Item = String> {
     println!("Autocomplete requested: metadata");
 
-    let data: &Data = ctx.data();
-    let library = data.library.read().await; // tokio::sync::RwLock
-
     let needle = partial.to_lowercase();
     let mut choices: HashSet<String> = HashSet::with_capacity(AUTOCOMPLETE_MAX_CHOICES);
 
     let cmd = ctx.command().name.as_str();
 
-    'outer: for info in library.values() {
-        // build a list of candidates for this info
-        let candidates: Vec<String> = match cmd {
-            "add_tag" => info.tags.clone(),
-            "artist" => vec![info.track_artist.clone()],
-            "origin" => vec![info.track_origin.clone()],
-            _ => Vec::new(),
-        };
+    // Query the database for candidates based on the command
+    let db_pool = &ctx.data().db_pool;
+    let query = match cmd {
+        "add_tag" => "SELECT DISTINCT tag FROM track_tags WHERE LOWER(tag) LIKE ?1 LIMIT ?2",
+        "artist" => "SELECT DISTINCT track_artist FROM tracks WHERE LOWER(track_artist) LIKE ?1 LIMIT ?2",
+        "origin" => "SELECT DISTINCT track_origin FROM tracks WHERE LOWER(track_origin) LIKE ?1 LIMIT ?2",
+        _ => return vec![].into_iter(), // Return an empty iterator for unsupported commands
+    };
 
-        // run each candidate through lightweight_trim + filter
-        for raw in candidates {
-            let display = lightweight_trim(raw);
+    let results: Vec<String> = sqlx::query_scalar(query)
+        .bind(format!("%{}%", needle)) // Bind the search term with wildcards
+        .bind(AUTOCOMPLETE_MAX_CHOICES as i64) // Bind the limit
+        .fetch_all(db_pool)
+        .await
+        .unwrap_or_else(|err| {
+            println!("Database query failed: {}", err);
+            Vec::new()
+        });
 
-            if needle.is_empty() || display.to_lowercase().contains(&needle) {
-                choices.insert(display);
-                if choices.len() >= AUTOCOMPLETE_MAX_CHOICES {
-                    break 'outer;
-                }
+    // Process the results
+    for raw in results {
+        let display = lightweight_trim(raw);
+
+        if needle.is_empty() || display.to_lowercase().contains(&needle) {
+            choices.insert(display);
+            if choices.len() >= AUTOCOMPLETE_MAX_CHOICES {
+                break;
             }
         }
     }
@@ -217,40 +213,48 @@ async fn autocomplete_track(
 ) -> impl Iterator<Item = AutocompleteChoice> {
     println!("Autocomplete requested: tracks");
 
-    let data: &Data = ctx.data();
-    let library = data.library.read().await; // tokio::sync::RwLock
-
     let needle = partial.to_lowercase();
-    let mut choices: Vec<(String, String)> = Vec::with_capacity(AUTOCOMPLETE_MAX_CHOICES);
+    let db_pool = &ctx.data().db_pool;
 
-    let cmd = ctx.command().name.as_str();
+    // Query the database for tracks matching the partial input or associated tags
+    let query = "
+        SELECT DISTINCT tracks.id, tracks.track_title, tracks.track_artist, tracks.track_origin,
+                        GROUP_CONCAT(tags.tag, ', ') AS tags
+        FROM tracks
+        LEFT JOIN track_tags ON tracks.id = track_tags.track_id
+        LEFT JOIN tags ON track_tags.tag_id = tags.id
+        WHERE LOWER(tracks.track_title) LIKE ?1
+           OR LOWER(tracks.track_artist) LIKE ?1
+           OR LOWER(tracks.track_origin) LIKE ?1
+           OR LOWER(tags.tag) LIKE ?1
+        GROUP BY tracks.id, tracks.track_title, tracks.track_artist, tracks.track_origin
+        LIMIT ?2
+    ";
 
-    for info in library.values() {
-        let display = build_autocomplete_display(vec![
-                info.track_title.clone(),
-                info.track_artist.clone(),
-                info.track_origin.clone(),
-                { if info.tags.len() > 0 { info.tags.join(", ") } else { "No tags".to_string() } }
-            ]
-        );
+    let results: Vec<(String, String, String, String, Option<String>)> = sqlx::query_as(query)
+        .bind(format!("%{}%", needle)) // Bind the search term with wildcards
+        .bind(AUTOCOMPLETE_MAX_CHOICES as i64) // Bind the limit
+        .fetch_all(db_pool)
+        .await
+        .unwrap_or_else(|err| {
+            println!("Database query failed: {}", err);
+            Vec::new()
+        });
 
-        if needle.is_empty() || display.to_lowercase().contains(&needle) {
-            choices.push((display, info.id.clone()));
-            if choices.len() >= AUTOCOMPLETE_MAX_CHOICES {
-                break;
-            }
-        }
-    }
-    println!("Choices: {:#?}", choices.clone());
-    println!("Command invoking autocomplete: {}", cmd);
-    println!("Number of choices: {}", choices.len());
-    println!("Search term: {}", partial);
+    // Process the results into autocomplete choices
+    let mut choices: Vec<(String, String)> = results
+        .into_iter()
+        .map(|(id, title, artist, origin, tags)| {
+            let tags_display = tags.unwrap_or_else(|| "No tags".to_string());
+            let display = build_autocomplete_display(vec![title, artist, origin, tags_display]);
+            (display, id)
+        })
+        .collect();
 
     choices.sort_unstable_by(|(d1, _), (d2, _)| d1.cmp(d2));
     choices
         .into_iter()
-        .map(|(display, video_id)| {AutocompleteChoice::new(display, video_id)}
-    )
+        .map(|(display, video_id)| AutocompleteChoice::new(display, video_id))
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -292,17 +296,27 @@ pub async fn reset_tags(
     ctx: Context<'_>,
     #[description = "The track to reset the tags of"]
     #[autocomplete = "autocomplete_track"]
-    track: String
+    track: String,
 ) -> Result<(), Error> {
-    let data: &Data = ctx.data();
-    let mut library = data.library.write().await; // tokio::sync::RwLock
-    // Look up the TrackInfo by key and clear its tags
-    if let Some(track_info) = library.get_mut(&track) {
-        track_info.tags.clear();
-        write_track_metadata(track_info.clone()).await?;
-        ctx.say(format!("Reset tags for track `{}`", track_info.track_title)).await?;
+    let db_pool = &ctx.data().db_pool;
+
+    // Check if the track exists in the database
+    let track_exists: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?1")
+        .bind(&track)
+        .fetch_optional(db_pool)
+        .await?;
+
+    if let Some(track_id) = track_exists {
+        // Delete all tag associations for the track from the `track_tags` table
+        sqlx::query("DELETE FROM track_tags WHERE track_id = ?1")
+            .bind(&track_id)
+            .execute(db_pool)
+            .await?;
+
+        ctx.say(format!("Reset tags for track with ID `{}`", track_id))
+            .await?;
     } else {
-        ctx.say(format!("No track found with id `{}`", track)).await?;
+        ctx.say(format!("No track found with ID `{}`", track)).await?;
     }
 
     Ok(())
@@ -317,17 +331,48 @@ pub async fn add_tag(
     track: String,
     #[description = "The tag to add"]
     #[autocomplete = "autocomplete_metadata"]
-    tag: String
+    tag: String,
 ) -> Result<(), Error> {
-    let data: &Data = ctx.data();
-    let mut library = data.library.write().await; // tokio::sync::RwLock
-    // Look up the TrackInfo by key and clear its tags
-    if let Some(track_info) = library.get_mut(&track) {
-        track_info.tags.push(tag.clone().to_lowercase());
-        write_track_metadata(track_info.clone()).await?;
-        ctx.say(format!("Tag `{}` added to track `{}`", tag, track_info.track_title)).await?;
+    let db_pool = &ctx.data().db_pool;
+
+    // Check if the track exists in the database
+    let track_exists: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?1")
+        .bind(&track)
+        .fetch_optional(db_pool)
+        .await?;
+
+    if let Some(track_id) = track_exists {
+        // Ensure the tag exists in the `tags` table, or insert it if it doesn't
+        let tag_id: i64 = match sqlx::query_scalar("SELECT id FROM tags WHERE tag = ?1")
+            .bind(&tag.to_lowercase()) // Normalize the tag to lowercase
+            .fetch_optional(db_pool)
+            .await?
+        {
+            Some(id) => id,
+            None => {
+                // Insert the tag and retrieve its ID
+                sqlx::query("INSERT INTO tags (tag) VALUES (?1)")
+                    .bind(&tag.to_lowercase())
+                    .execute(db_pool)
+                    .await?;
+                sqlx::query_scalar("SELECT id FROM tags WHERE tag = ?1")
+                    .bind(&tag.to_lowercase())
+                    .fetch_one(db_pool)
+                    .await?
+            }
+        };
+
+        // Insert the association into the `track_tags` table
+        sqlx::query("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?1, ?2)")
+            .bind(&track_id)
+            .bind(tag_id)
+            .execute(db_pool)
+            .await?;
+
+        ctx.say(format!("Tag `{}` added to track with ID `{}`", tag, track_id))
+            .await?;
     } else {
-        ctx.say(format!("No track found with id `{}`", track)).await?;
+        ctx.say(format!("No track found with ID `{}`", track)).await?;
     }
 
     Ok(())
@@ -349,18 +394,33 @@ pub async fn title(
     #[autocomplete = "autocomplete_track"]
     track: String,
     #[description = "The new title to give the track"]
-    new_title: String
+    new_title: String,
 ) -> Result<(), Error> {
-    let data: &Data = ctx.data();
-    let mut library = data.library.write().await; // tokio::sync::RwLock
-    if let Some(track_info) = library.get_mut(&track) {
-        let old_title = track_info.track_title.clone();
-        track_info.track_title = new_title.clone();
-        write_track_metadata(track_info.clone()).await?;
-        ctx.say(format!("Set new title `{}` for track formerly known as `{}`", new_title, old_title)).await?;
+    let db_pool = &ctx.data().db_pool;
+
+    // Check if the track exists in the database
+    let track_exists: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?1")
+        .bind(&track)
+        .fetch_optional(db_pool)
+        .await?;
+
+    if let Some(track_id) = track_exists {
+        // Update the track's title in the database
+        sqlx::query("UPDATE tracks SET track_title = ?1 WHERE id = ?2")
+            .bind(&new_title)
+            .bind(&track_id)
+            .execute(db_pool)
+            .await?;
+
+        ctx.say(format!(
+            "Set new title `{}` for track with ID `{}`",
+            new_title, track_id
+        ))
+        .await?;
     } else {
-        ctx.say(format!("No track found with id `{}`", track)).await?;
-    }    
+        ctx.say(format!("No track found with ID `{}`", track)).await?;
+    }
+
     Ok(())
 }
 
@@ -373,23 +433,37 @@ pub async fn artist(
     track: String,
     #[description = "The new artist for the track"]
     #[autocomplete = "autocomplete_metadata"]
-    new_artist: String
+    new_artist: String,
 ) -> Result<(), Error> {
-    let data: &Data = ctx.data();
-    let mut library = data.library.write().await; // tokio::sync::RwLock
-    if let Some(track_info) = library.get_mut(&track) {
-        let track_title = &track_info.track_title;
-        let old_artist = track_info.track_artist.clone();
-        track_info.track_artist = new_artist.clone();
-        write_track_metadata(track_info.clone()).await?;
-        ctx.say(format!("Set new artist `{}` for track `{}` (old artist: `{}`)", new_artist, track_title, old_artist)).await?;
+    let db_pool = &ctx.data().db_pool;
+
+    // Check if the track exists in the database
+    let track_exists: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?1")
+        .bind(&track)
+        .fetch_optional(db_pool)
+        .await?;
+
+    if let Some(track_id) = track_exists {
+        // Update the track's artist in the database
+        sqlx::query("UPDATE tracks SET track_artist = ?1 WHERE id = ?2")
+            .bind(&new_artist)
+            .bind(&track_id)
+            .execute(db_pool)
+            .await?;
+
+        ctx.say(format!(
+            "Set new artist `{}` for track with ID `{}`",
+            new_artist, track_id
+        ))
+        .await?;
     } else {
-        ctx.say(format!("No track found with id `{}`", track)).await?;
-    }    
+        ctx.say(format!("No track found with ID `{}`", track)).await?;
+    }
+
     Ok(())
 }
 
-/// Set a track's origin (eg. game/movie title)
+/// Set a track's origin (e.g., game/movie title)
 #[poise::command(slash_command)]
 pub async fn origin(
     ctx: Context<'_>,
@@ -398,19 +472,33 @@ pub async fn origin(
     track: String,
     #[description = "The new origin for the track"]
     #[autocomplete = "autocomplete_metadata"]
-    new_origin: String
+    new_origin: String,
 ) -> Result<(), Error> {
-    let data: &Data = ctx.data();
-    let mut library = data.library.write().await; // tokio::sync::RwLock
-    if let Some(track_info) = library.get_mut(&track) {
-        let track_title = &track_info.track_title;
-        let old_origin = track_info.track_origin.clone();
-        track_info.track_origin = new_origin.clone();
-        write_track_metadata(track_info.clone()).await?;
-        ctx.say(format!("Set new origin `{}` for track `{}` (old origin: `{}`)", new_origin, track_title, old_origin)).await?;
+    let db_pool = &ctx.data().db_pool;
+
+    // Check if the track exists in the database
+    let track_exists: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?1")
+        .bind(&track)
+        .fetch_optional(db_pool)
+        .await?;
+
+    if let Some(track_id) = track_exists {
+        // Update the track's origin in the database
+        sqlx::query("UPDATE tracks SET track_origin = ?1 WHERE id = ?2")
+            .bind(&new_origin)
+            .bind(&track_id)
+            .execute(db_pool)
+            .await?;
+
+        ctx.say(format!(
+            "Set new origin `{}` for track with ID `{}`",
+            new_origin, track_id
+        ))
+        .await?;
     } else {
-        ctx.say(format!("No track found with id `{}`", track)).await?;
-    }    
+        ctx.say(format!("No track found with ID `{}`", track)).await?;
+    }
+
     Ok(())
 }
 
@@ -421,15 +509,13 @@ pub async fn download(
     #[description = "YouTube link to download from"] yt_link: String,
     #[description = "The actual title of the track"] track_title: Option<String>,
     #[description = "The actual artist of the track"] track_artist: Option<String>,
-    #[description = "The origin of the track (eg. game/movie title)"] track_origin: Option<String>
+    #[description = "The origin of the track (e.g., game/movie title)"] track_origin: Option<String>,
 ) -> Result<(), Error> {
-
     ctx.defer().await?;
 
-    let video_id = get_youtube_id(&yt_link).unwrap();
+    let video_id = get_youtube_id(&yt_link).ok_or("Invalid YouTube link")?;
 
-    // outputs the mp3 to:          media/audio/id.extension <- extension should be mp3
-    // outputs the info json to:    media/audio/id.info.json
+    // Download the track using yt-dlp
     let output = Command::new("yt-dlp")
         .arg("-t")
         .arg("mp3")
@@ -442,51 +528,69 @@ pub async fn download(
         .output()
         .expect("Failed to execute yt-dlp");
 
-    println!("{:?}", output);
-
-    // reprocesses the file at media/audio/id.info.json
-    // and deletes it on the return once the file has been read
-    let slim = process_ytdlp_json(video_id).unwrap();
-
-    let track_title = match track_title {
-        Some(title) => title,
-        None => slim.get("title").and_then(Value::as_str).unwrap().to_string()
-    };
-
-    let track_artist = match track_artist {
-        Some(artist) => artist,
-        None => slim.get("channel").and_then(Value::as_str).unwrap().to_string()
-    };
-
-    let track_origin = match track_origin {
-        Some(origin) => origin,
-        None => "No origin provided".into()
-    };
-
-    let new_track = TrackInfo {
-        id: slim.get("id").and_then(Value::as_str).unwrap().to_string(),
-        upload_date: slim.get("upload_date").and_then(Value::as_str).unwrap().to_string(),
-        yt_title: slim.get("title").and_then(Value::as_str).unwrap().to_string(),
-        yt_channel: slim.get("channel").and_then(Value::as_str).unwrap().to_string(),
-        track_title,
-        track_artist,
-        track_origin,
-        tags: Vec::new(),
-    };
-
-    let data: &Data = ctx.data();
-    {
-        let mut library = data.library.write().await; // tokio::sync::RwLock
-        library.insert(
-            new_track.id.clone(),
-            new_track.clone()
-        );
+    if !output.status.success() {
+        return Err(format!(
+            "yt-dlp failed with error: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )
+        .into());
     }
 
-    write_track_metadata(new_track).await?;
+    // Process the downloaded metadata JSON
+    let slim = process_ytdlp_json(video_id.clone()).map_err(|e| {
+        format!(
+            "Failed to process metadata JSON for video ID `{}`: {}",
+            video_id, e
+        )
+    })?;
 
-    let title = slim.get("title").and_then(Value::as_str).unwrap().to_string();
-    ctx.say(format!("File downloaded: `{title}`")).await?;
+    // Extract metadata or use provided values
+    let track_title = track_title.unwrap_or_else(|| {
+        slim.get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown Title")
+            .to_string()
+    });
+
+    let track_artist = track_artist.unwrap_or_else(|| {
+        slim.get("channel")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown Artist")
+            .to_string()
+    });
+
+    let track_origin = track_origin.unwrap_or_else(|| "No origin provided".to_string());
+
+    // Insert the track metadata into the database
+    let db_pool = &ctx.data().db_pool;
+    sqlx::query(
+        "INSERT INTO tracks (id, upload_date, yt_title, yt_channel, track_title, track_artist, track_origin)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )
+    .bind(&video_id)
+    .bind(
+        slim.get("upload_date")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown Date"),
+    )
+    .bind(
+        slim.get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown Title"),
+    )
+    .bind(
+        slim.get("channel")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown Channel"),
+    )
+    .bind(&track_title)
+    .bind(&track_artist)
+    .bind(&track_origin)
+    .execute(db_pool)
+    .await?;
+
+    ctx.say(format!("File downloaded and added to the library: `{}`", track_title))
+        .await?;
     Ok(())
 }
 
@@ -512,49 +616,62 @@ pub async fn play(
     ctx: Context<'_>,
     #[description = "Track to play now"]
     #[autocomplete = "autocomplete_track"]
-    track: String
+    track: String,
 ) -> Result<(), Error> {
+    let db_pool = &ctx.data().db_pool;
 
-    let guild = ctx.guild().expect("Must be in a guild to use voice").clone();
-    let vc_id = get_vc_id(ctx).await?;
-
-    let serenity_ctx = ctx.serenity_context();
-
-    let manager = songbird::get(serenity_ctx)
-        .await
-        .expect("Songbird was not initialized")
-        .clone();
-
-    join_vc(ctx, guild.clone(), vc_id).await?;
-    let track_path = format!("media/audio/{track}.mp3");
-    println!("{}", track_path.clone());
-
-    let path = std::env::current_dir()?;
-    println!("The current directory is {}", path.display());
-
-    let song_src = Compressed::new(
-        SongbirdFile::new(track_path).into(),
-        Bitrate::BitsPerSecond(128_000),
+    // Check if the track exists in the database
+    let track_metadata: Option<(String, String)> = sqlx::query_as(
+        "SELECT track_title, track_artist FROM tracks WHERE id = ?1",
     )
+    .bind(&track)
+    .fetch_optional(db_pool)
+    .await?;
+
+    if let Some((track_title, track_artist)) = track_metadata {
+        let guild = ctx.guild().expect("Must be in a guild to use voice").clone();
+        let vc_id = get_vc_id(ctx).await?;
+
+        let serenity_ctx = ctx.serenity_context();
+
+        let manager = songbird::get(serenity_ctx)
+            .await
+            .expect("Songbird was not initialized")
+            .clone();
+
+        join_vc(ctx, guild.clone(), vc_id).await?;
+        let track_path = format!("media/audio/{track}.mp3");
+        println!("{}", track_path.clone());
+
+        let path = std::env::current_dir()?;
+        println!("The current directory is {}", path.display());
+
+        let song_src = Compressed::new(
+            SongbirdFile::new(track_path).into(),
+            Bitrate::BitsPerSecond(128_000),
+        )
         .await
         .expect("An error occurred constructing the track source");
-    let _ = song_src.raw.spawn_loader();
+        let _ = song_src.raw.spawn_loader();
 
-    let data: &Data = ctx.data();
-    let library = data.library.read().await;
+        let data: &Data = ctx.data();
 
-    if let Some(handler_lock) = manager.get(guild.id.clone()) {
-        let mut handler = handler_lock.lock().await;
-        let track_handle = handler.play_only_input(song_src.into());
-        let _ = track_handle.enable_loop()?;
-        let mut handles = data.track_handles.write().await; // tokio::sync::RwLock
-        handles.insert(
-            guild.id,
-            track_handle
-        );
+        if let Some(handler_lock) = manager.get(guild.id.clone()) {
+            let mut handler = handler_lock.lock().await;
+            let track_handle = handler.play_only_input(song_src.into());
+            let _ = track_handle.enable_loop()?;
+            let mut handles = data.track_handles.write().await; // tokio::sync::RwLock
+            handles.insert(guild.id, track_handle);
+        }
+
+        ctx.say(format!(
+            "Now playing: `{}` by `{}`",
+            track_title, track_artist
+        ))
+        .await?;
+    } else {
+        ctx.say(format!("No track found with ID `{}`", track)).await?;
     }
-
-    ctx.say(format!("Playing selected track: `{}`", library.get(&track).unwrap().track_title)).await?;
 
     Ok(())
 }

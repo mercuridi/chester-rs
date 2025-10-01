@@ -5,42 +5,17 @@ mod json_handling;
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
 
-use std::fs;
-use std::path::PathBuf;
 use std::collections::HashMap;
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
-use songbird::SerenityInit; // brings in `.register_songbird()`
+use songbird::SerenityInit; use sqlx::SqlitePool;
+// brings in `.register_songbird()`
 use tokio::sync::RwLock;
 use dotenv::dotenv;
 
-use crate::definitions::{Data, Error, TrackInfo};
+use crate::definitions::{Data, Error};
 
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
-
-async fn load_media() -> Result<RwLock<HashMap<String, TrackInfo>>, Error> {
-    let mut library = HashMap::new();
-    let paths = fs::read_dir("media/metadata").unwrap();
-
-    for path in paths {
-        let path = path.unwrap().path();
-        if path.extension().unwrap() == "json" {
-            let read_track_info = load_track(path).await;
-            library.insert(
-                read_track_info.id.clone(),
-                read_track_info
-            );
-        }
-    }
-
-    Ok(RwLock::new(library))
-}
-
-async fn load_track(metadata_path: PathBuf) -> TrackInfo {
-    let data = fs::read_to_string(metadata_path).expect("Metadata file should exist and doesn't");
-    let track: TrackInfo = serde_json::from_str(&data).expect("Failed to deserialise JSON");
-    track
-}   
 
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     // 1) Inspect & log any command errors without moving out of `error`
@@ -65,9 +40,13 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    dotenv().ok();
+    // Initialize the SQLite connection pool
+    let database_url = "sqlite://media/metadata.sqlite3";
+    let pool = SqlitePool::connect(database_url).await?;
+
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
 
-    dotenv().ok();
     let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN in .env");
 
     let poise_commands = vec![
@@ -89,13 +68,6 @@ async fn main() -> Result<(), Error> {
         commands: poise_commands,
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: Some(">".into()),
-            // edit_tracker: Some(Arc::new(poise::EditTracker::for_timespan(
-            //     Duration::from_secs(3600),
-            // ))),
-            // additional_prefixes: vec![
-            //     poise::Prefix::Literal("hey bot,"),
-            //     poise::Prefix::Literal("hey bot"),
-            // ],
             ..Default::default()
         },
         // The global error handler for all error cases that may occur
@@ -112,17 +84,6 @@ async fn main() -> Result<(), Error> {
                 println!("Executed command {}!", ctx.command().qualified_name);
             })
         },
-        // Every command invocation must pass this check to continue execution
-        // command_check: Some(|ctx| {
-        //     Box::pin(async move {
-        //         if ctx.author().id == 123456789 {
-        //             return Ok(false);
-        //         }
-        //         Ok(true)
-        //     })
-        // }),
-        // Enforce command checks even for owners (enforced by default)
-        // Set to true to bypass checks, which is useful for testing
         skip_checks_for_owners: true,
         event_handler: |_ctx, event, _framework, _data| {
             Box::pin(async move {
@@ -136,8 +97,6 @@ async fn main() -> Result<(), Error> {
         ..Default::default()
     };
 
-    let library = load_media().await?;
-
     // 1) Build your Poise framework
     let framework = poise::Framework::builder()
         .options(poise_options)
@@ -146,7 +105,7 @@ async fn main() -> Result<(), Error> {
                 // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
                 Ok(
                     Data { 
-                        library,
+                        db_pool: pool,
                         track_handles: RwLock::new(HashMap::new())
                     }
                 )
