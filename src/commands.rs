@@ -444,7 +444,7 @@ pub async fn download(
 
     println!("{:?}", output);
 
-    // reproceses the file at media/audio/id.info.json
+    // reprocesses the file at media/audio/id.info.json
     // and deletes it on the return once the file has been read
     let slim = process_ytdlp_json(video_id).unwrap();
 
@@ -628,6 +628,37 @@ pub async fn paginate(ctx: Context<'_>) -> Result<(), Error> {
     ];
 
     poise::samples::paginate(ctx, pages).await?;
+
+    Ok(())
+}
+
+/// Toggles pause/unpause for the currently playing track
+#[poise::command(slash_command)]
+pub async fn pause(
+    ctx: Context<'_>,
+) -> Result<(), Error> {
+    // Ensure the command is used in a guild
+    let guild_id = if let Some(g) = ctx.guild_id() {
+        g
+    } else {
+        return Err("Pause command can only be used in a server.".into());
+    };
+
+    // Access the track handle for the current guild
+    let data: &Data = ctx.data();
+    let handles = data.track_handles.read().await; // tokio::sync::RwLock
+    if let Some(track_handle) = handles.get(&guild_id) {
+        let handle_info = track_handle.clone().get_info().await?;
+        if handle_info.playing == songbird::tracks::PlayMode::Play {
+            track_handle.pause()?;
+            ctx.say("Paused the currently playing track.").await?;
+        } else {
+            track_handle.play()?;
+            ctx.say("Resumed the currently paused track.").await?;
+        }
+    } else {
+        ctx.say("No track is currently playing.").await?;
+    }
 
     Ok(())
 }

@@ -81,7 +81,8 @@ async fn main() -> Result<(), Error> {
         commands::add_tag(),
         commands::set_metadata(),
         commands::loop_track(),
-        commands::paginate()
+        commands::paginate(),
+        commands::pause()
     ];
 
     let poise_options = poise::FrameworkOptions {
