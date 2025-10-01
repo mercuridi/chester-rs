@@ -5,6 +5,7 @@ use std::process::Command;
 use std::collections::HashSet;
 
 use serde_json::Value;
+use sqlx::{Sqlite, Pool};
 use url::Url;
 use poise::serenity_prelude::{ChannelId, Guild, AutocompleteChoice};
 use songbird::input::File as SongbirdFile;
@@ -28,6 +29,38 @@ const ELLIPSIS: &str = "…";
 const SEPARATOR: &str = " | ";
 const ELLIPSIS_LEN: usize = ELLIPSIS.len();
 const SEPARATOR_LEN: usize = SEPARATOR.len();
+
+async fn get_id_or_insert (
+    db_pool: &Pool<Sqlite>,
+    field_name: &str, // assumes the table is named after the field but plural
+    pls_find: &str
+) -> i64 {
+    // Ensure the tag exists in the `tags` table, or insert it if it doesn't
+    match sqlx::query_scalar("SELECT id FROM ?1s WHERE ?2 = ?3")
+        .bind(field_name)
+        .bind(field_name)
+        .bind(pls_find.to_lowercase()) // Normalize the tag to lowercase
+        .fetch_optional(db_pool)
+        .await.unwrap()
+    {
+        Some(id) => id,
+        None => {
+            // Insert the tag and retrieve its ID
+            sqlx::query("INSERT INTO ?1s (?2) VALUES (?3)")
+                .bind(field_name)
+                .bind(field_name)
+                .bind(pls_find.to_lowercase())
+                .execute(db_pool)
+                .await.unwrap();
+            sqlx::query_scalar("SELECT id FROM ?1s WHERE ?2 = ?3")
+                .bind(field_name)
+                .bind(field_name)
+                .bind(pls_find.to_lowercase())
+                .fetch_one(db_pool)
+                .await.unwrap()
+        }
+    }
+}
 
 fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
     // Build a display name
@@ -155,23 +188,43 @@ async fn join_vc(ctx: Context<'_>, guild: Guild, vc_id: ChannelId) -> Result<Arc
     Ok(join_result?)
 }
 
+async fn autocomplete_artist(
+    ctx: Context<'_>,
+    partial: &str,
+) -> impl Iterator<Item = String> {
+    autocomplete_metadata(ctx, partial, "artist").await
+}
+
+async fn autocomplete_origin(
+    ctx: Context<'_>,
+    partial: &str,
+) -> impl Iterator<Item = String> {
+    autocomplete_metadata(ctx, partial, "origin").await
+}
+
+async fn autocomplete_tag(
+    ctx: Context<'_>,
+    partial: &str,
+) -> impl Iterator<Item = String> {
+    autocomplete_metadata(ctx, partial, "tag").await
+}
+
 async fn autocomplete_metadata(
     ctx: Context<'_>,
     partial: &str,
+    mode: &str
 ) -> impl Iterator<Item = String> {
     println!("Autocomplete requested: metadata");
 
     let needle = partial.to_lowercase();
     let mut choices: HashSet<String> = HashSet::with_capacity(AUTOCOMPLETE_MAX_CHOICES);
 
-    let cmd = ctx.command().name.as_str();
-
     // Query the database for candidates based on the command
     let db_pool = &ctx.data().db_pool;
-    let query = match cmd {
-        "add_tag" => "SELECT DISTINCT tag FROM track_tags WHERE LOWER(tag) LIKE ?1 LIMIT ?2",
-        "artist" => "SELECT DISTINCT track_artist FROM tracks WHERE LOWER(track_artist) LIKE ?1 LIMIT ?2",
-        "origin" => "SELECT DISTINCT track_origin FROM tracks WHERE LOWER(track_origin) LIKE ?1 LIMIT ?2",
+    let query = match mode {
+        "tag" => "SELECT DISTINCT tag FROM tags WHERE LOWER(tag) LIKE ?1 LIMIT ?2",
+        "artist" => "SELECT DISTINCT artist FROM artists WHERE LOWER(artist) LIKE ?1 LIMIT ?2",
+        "origin" => "SELECT DISTINCT origin FROM origins WHERE LOWER(origin) LIKE ?1 LIMIT ?2",
         _ => return vec![].into_iter(), // Return an empty iterator for unsupported commands
     };
 
@@ -198,7 +251,8 @@ async fn autocomplete_metadata(
     }
 
     println!("Choices: {:#?}", choices.clone());
-    println!("Command invoking autocomplete: {}", cmd);
+    println!("Command invoking autocomplete: {}", ctx.command().name.as_str());
+    println!("Mode of autocomplete: {}", mode);
     println!("Number of choices: {}", choices.len());
     println!("Search term: {}", partial);
 
@@ -330,7 +384,7 @@ pub async fn add_tag(
     #[autocomplete = "autocomplete_track"]
     track: String,
     #[description = "The tag to add"]
-    #[autocomplete = "autocomplete_metadata"]
+    #[autocomplete = "autocomplete_tag"]
     tag: String,
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
@@ -342,25 +396,7 @@ pub async fn add_tag(
         .await?;
 
     if let Some(track_id) = track_exists {
-        // Ensure the tag exists in the `tags` table, or insert it if it doesn't
-        let tag_id: i64 = match sqlx::query_scalar("SELECT id FROM tags WHERE tag = ?1")
-            .bind(&tag.to_lowercase()) // Normalize the tag to lowercase
-            .fetch_optional(db_pool)
-            .await?
-        {
-            Some(id) => id,
-            None => {
-                // Insert the tag and retrieve its ID
-                sqlx::query("INSERT INTO tags (tag) VALUES (?1)")
-                    .bind(&tag.to_lowercase())
-                    .execute(db_pool)
-                    .await?;
-                sqlx::query_scalar("SELECT id FROM tags WHERE tag = ?1")
-                    .bind(&tag.to_lowercase())
-                    .fetch_one(db_pool)
-                    .await?
-            }
-        };
+        let tag_id = get_id_or_insert(db_pool, "tag", &tag).await;
 
         // Insert the association into the `track_tags` table
         sqlx::query("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?1, ?2)")
@@ -432,7 +468,7 @@ pub async fn artist(
     #[autocomplete = "autocomplete_track"]
     track: String,
     #[description = "The new artist for the track"]
-    #[autocomplete = "autocomplete_metadata"]
+    #[autocomplete = "autocomplete_artist"]
     new_artist: String,
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
@@ -471,7 +507,7 @@ pub async fn origin(
     #[autocomplete = "autocomplete_track"]
     track: String,
     #[description = "The new origin for the track"]
-    #[autocomplete = "autocomplete_metadata"]
+    #[autocomplete = "autocomplete_origin"]
     new_origin: String,
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
@@ -506,10 +542,15 @@ pub async fn origin(
 #[poise::command(slash_command)]
 pub async fn download(
     ctx: Context<'_>,
-    #[description = "YouTube link to download from"] yt_link: String,
+    #[description = "YouTube link to download from"]
+    yt_link: String,
+    #[description = "The actual artist of the track"]
+    #[autocomplete = "autocomplete_artist"]
+    track_artist: Option<String>,
+    #[description = "The origin of the track (e.g., game/movie title)"]
+    #[autocomplete = "autocomplete_origin"]
+    track_origin: Option<String>,
     #[description = "The actual title of the track"] track_title: Option<String>,
-    #[description = "The actual artist of the track"] track_artist: Option<String>,
-    #[description = "The origin of the track (e.g., game/movie title)"] track_origin: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
 
@@ -552,19 +593,14 @@ pub async fn download(
             .to_string()
     });
 
-    let track_artist = track_artist.unwrap_or_else(|| {
-        slim.get("channel")
-            .and_then(Value::as_str)
-            .unwrap_or("Unknown Artist")
-            .to_string()
-    });
+    let track_artist = track_artist.unwrap_or_else(|| "No artist provided".to_string());
 
     let track_origin = track_origin.unwrap_or_else(|| "No origin provided".to_string());
 
     // Insert the track metadata into the database
     let db_pool = &ctx.data().db_pool;
     sqlx::query(
-        "INSERT INTO tracks (id, upload_date, yt_title, yt_channel, track_title, track_artist, track_origin)
+        "INSERT INTO tracks (id, upload_date, yt_title, yt_channel, track_title, artist_id, origin_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
     )
     .bind(&video_id)
@@ -584,8 +620,8 @@ pub async fn download(
             .unwrap_or("Unknown Channel"),
     )
     .bind(&track_title)
-    .bind(&track_artist)
-    .bind(&track_origin)
+    .bind(get_id_or_insert(db_pool, "artist", &track_artist).await)
+    .bind(get_id_or_insert(db_pool, "origin", &track_origin).await)
     .execute(db_pool)
     .await?;
 
