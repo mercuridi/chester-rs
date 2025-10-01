@@ -520,7 +520,7 @@ pub async fn download(
         .arg("-t")
         .arg("mp3")
         .arg("-o")
-        .arg("media/audio/%(id)s.%(ext)s")
+        .arg("audio/%(id)s.%(ext)s")
         .arg("--no-playlist")
         .arg("--write-info-json")
         .arg("--no-progress")
@@ -640,7 +640,7 @@ pub async fn play(
             .clone();
 
         join_vc(ctx, guild.clone(), vc_id).await?;
-        let track_path = format!("media/audio/{track}.mp3");
+        let track_path = format!("audio/{track}.mp3");
         println!("{}", track_path.clone());
 
         let path = std::env::current_dir()?;

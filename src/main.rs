@@ -42,7 +42,7 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
 async fn main() -> Result<(), Error> {
     dotenv().ok();
     // Initialize the SQLite connection pool
-    let database_url = "sqlite://media/metadata.sqlite3";
+    let database_url = "sqlite://database/metadata.sqlite3";
     let pool = SqlitePool::connect(database_url).await?;
 
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
