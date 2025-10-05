@@ -18,29 +18,29 @@ pub async fn library(_ctx: Context<'_>) -> Result<(), Error> {
 /// /library all
 #[poise::command(slash_command)]
 async fn all(ctx: Context<'_>) -> Result<(), Error> {
-    library_dynamic(ctx, "", "tracks.track_title").await
+    library_dynamic(ctx, "").await
 }
 
 /// /library artist
 #[poise::command(slash_command)]
 async fn artist(ctx: Context<'_>) -> Result<(), Error> {
-    library_dynamic(ctx, "artist", "artists.artist").await
+    library_dynamic(ctx, "artist").await
 }
 
 
 /// /library origin
 #[poise::command(slash_command)]
 async fn origin(ctx: Context<'_>) -> Result<(), Error> {
-    library_dynamic(ctx, "origin", "origins.origin").await
+    library_dynamic(ctx, "origin").await
 }
 
 /// /library origin
 #[poise::command(slash_command)]
 async fn tags(ctx: Context<'_>) -> Result<(), Error> {
-    library_dynamic(ctx, "tags", "tags.tag").await
+    library_dynamic(ctx, "tags").await
 }
 
-async fn library_dynamic(ctx: Context<'_>, mode: &str, sort: &str) -> Result<(), Error> {
+async fn library_dynamic(ctx: Context<'_>, mode: &str) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
     // Define column weights and headers based on mode
@@ -51,7 +51,7 @@ async fn library_dynamic(ctx: Context<'_>, mode: &str, sort: &str) -> Result<(),
     };
 
     // 1️⃣ Fetch data
-    let raw_data = fetch_library_rows(db_pool, mode, sort).await;
+    let raw_data = fetch_library_rows(db_pool, mode).await;
 
     if raw_data.is_empty() {
         poise::say_reply(ctx, "No results found.").await?;
@@ -181,13 +181,13 @@ fn add_row_numbers(data: Vec<Vec<String>>) -> (Vec<Vec<String>>, usize) {
 async fn fetch_library_rows(
     db_pool: &sqlx::Pool<sqlx::Sqlite>,
     mode: &str,
-    sort: &str,
 ) -> Vec<Vec<String>> {
-    let (select_fields, num_columns) = match mode {
-        "artist" => ("tracks.track_title, artists.artist", 2),
-        "origin" => ("tracks.track_title, origins.origin", 2),
+    let (select_fields, sort, num_columns) = match mode {
+        "artist" => ("artists.artist, tracks.track_title", "artists.artist",2),
+        "origin" => ("origins.origin, tracks.track_title", "origins.origin",2),
         _ => (
             "tracks.track_title, artists.artist, origins.origin, GROUP_CONCAT(tags.tag, ', ') AS tags",
+            "tracks.track_title",
             4,
         ),
     };
