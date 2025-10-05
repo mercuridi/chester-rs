@@ -37,12 +37,26 @@ pub fn process_ytdlp_json(
 }
 
 pub fn lightweight_trim(mut choice: String, max_width: usize) -> String {
-    if choice.len() > max_width - 1 {
-        choice.truncate(max_width - ELLIPSIS_LEN);
+    if max_width <= ELLIPSIS_LEN {
+        return ELLIPSIS.to_string();
+    }
+
+    if choice.len() > max_width - ELLIPSIS_LEN {
+        let cutoff = max_width - ELLIPSIS_LEN;
+        let safe_cutoff = choice
+            .char_indices()
+            .take_while(|(idx, _)| *idx <= cutoff)
+            .map(|(idx, _)| idx)
+            .last()
+            .unwrap_or(0);
+
+        choice.truncate(safe_cutoff);
         choice.push_str(ELLIPSIS);
     }
+
     choice
 }
+
 
 pub fn get_youtube_id(link: &str) -> Option<String> {
     // Try to parse the URL; bail out if it's invalid
@@ -111,11 +125,6 @@ pub async fn get_id_or_insert(
                 .unwrap()
         }
     }
-}
-
-pub fn fmt_library_col(s: String, width: usize) -> String {
-    let trimmed = lightweight_trim(s, width);
-    format!("{:<width$}", trimmed, width = width)
 }
 
 pub async fn get_vc_id(ctx: DiscordContext<'_>) -> Result<ChannelId, Error> {

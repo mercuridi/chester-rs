@@ -67,10 +67,6 @@ async fn main() -> Result<(), Error> {
         cmd_management::add_tag(),
         cmd_management::set_metadata(),
         cmd_library::library(),
-        cmd_library::library_title(),
-        cmd_library::library_artist(),
-        cmd_library::library_origin(),
-        cmd_library::library_tags(),
     ];
 
     let poise_options = poise::FrameworkOptions {

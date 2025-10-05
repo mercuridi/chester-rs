@@ -1,246 +1,76 @@
 use crate::definitions::{Context, Error};
-use crate::library::{fmt_library_col};
+use crate::library::{lightweight_trim};
+
+use sqlx::Row;
 
 // constants for library pagination
-pub const LIBRARY_ROW_MAX_WIDTH:        usize =  56; // max 56
+pub const ROW_MAX_WIDTH:        usize =  56; // max 56
 pub const MAX_RESULTS_PER_PAGE:         usize = 20;
 pub const LIBRARY_SEPARATOR:            &str = " ";
 pub const ROW_SEPARATOR:                &str = "-";
 
-// CMD: library
-pub const LIBRARY_COLUMN_WIDTH_TITLE:   usize = 16;
-pub const LIBRARY_COLUMN_WIDTH_ARTIST:  usize = 14;
-pub const LIBRARY_COLUMN_WIDTH_ORIGIN:  usize = 14;
-pub const LIBRARY_COLUMN_WIDTH_TAGS:    usize = 12;
-
-// CMD: library_title
-pub const LIB_TIT_COLUMN_WIDTH_TITLE:   usize = 56;
-
-// CMD: library_artist
-pub const LIB_ART_COLUMN_WIDTH_ARTIST:  usize = 23;
-pub const LIB_ART_COLUMN_WIDTH_TITLE:   usize = 30;
-
-// CMD: library_origin
-pub const LIB_ORI_COLUMN_WIDTH_ORIGIN:  usize = 23;
-pub const LIB_ORI_COLUMN_WIDTH_TITLE:   usize = 30;
-
-// CMD: library_tag
-pub const LIB_TAG_COLUMN_WIDTH_TAGS:    usize = 12;
-pub const LIB_TAG_COLUMN_WIDTH_TITLE:   usize = 44;
-
 /// /library
-#[poise::command(slash_command)]
-pub async fn library(ctx: Context<'_>) -> Result<(), Error> {
-    // Pass a default sort order, e.g., by track title
-    library_sorted(ctx, "tracks.track_title").await
+#[poise::command(slash_command, subcommands("all", "artist", "origin", "tags"))]
+pub async fn library(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
 }
 
-/// /library title
+/// /library all
 #[poise::command(slash_command)]
-pub async fn library_title(ctx: Context<'_>) -> Result<(), Error> {
-    // SQL query to fetch only track titles, sorted by title
-    let query = "
-        SELECT track_title
-        FROM tracks
-        ORDER BY track_title
-    ";
-
-    let db_pool = &ctx.data().db_pool;
-
-    let titles: Vec<String> = sqlx::query_as::<_, (String,)>(query)
-        .fetch_all(db_pool)
-        .await
-        .unwrap_or_else(|err| {
-            println!("Database query failed: {}", err);
-            Vec::new()
-        })
-        .into_iter()
-        .map(|(title,)| {
-            // Fill the column fully
-            fmt_library_col(title, LIB_TIT_COLUMN_WIDTH_TITLE)
-        })
-        .collect();
-
-    // Header
-    let header = fmt_library_col("TITLE".to_string(), LIB_TIT_COLUMN_WIDTH_TITLE);
-    let separator = ROW_SEPARATOR.repeat(LIBRARY_ROW_MAX_WIDTH);
-
-    // Paginate
-    let mut pages: Vec<String> = Vec::new();
-    for chunk in titles.chunks(MAX_RESULTS_PER_PAGE) {
-        let rows = chunk.join("\n");
-        let body = format!("{}\n{}\n{}", header, separator, rows);
-        pages.push(format!("```text\n{}\n```", body));
-    }
-
-    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
-    poise::samples::paginate(ctx, &page_refs).await?;
-
-    Ok(())
+async fn all(ctx: Context<'_>) -> Result<(), Error> {
+    library_dynamic(ctx, "", "tracks.track_title").await
 }
 
 /// /library artist
 #[poise::command(slash_command)]
-pub async fn library_artist(ctx: Context<'_>) -> Result<(), Error> {
-    // SQL query to fetch artist and title
-    let query = "
-        SELECT artists.artist, tracks.track_title
-        FROM tracks
-        LEFT JOIN artists ON tracks.artist_id = artists.id
-        ORDER BY artists.artist, tracks.track_title
-    ";
-
-    let db_pool = &ctx.data().db_pool;
-
-    let entries: Vec<String> = sqlx::query_as::<_, (String, String)>(query)
-        .fetch_all(db_pool)
-        .await
-        .unwrap_or_else(|err| {
-            println!("Database query failed: {}", err);
-            Vec::new()
-        })
-        .into_iter()
-        .map(|(artist, title)| {
-            format!(
-                "{}{}{}",
-                fmt_library_col(artist, LIB_ART_COLUMN_WIDTH_ARTIST),
-                LIBRARY_SEPARATOR,
-                fmt_library_col(title, LIB_ART_COLUMN_WIDTH_TITLE),
-            )
-        })
-        .collect();
-
-    // Header
-    let header = format!(
-        "{}{}{}",
-        fmt_library_col("ARTIST".to_string(), LIB_ART_COLUMN_WIDTH_ARTIST),
-        LIBRARY_SEPARATOR,
-        fmt_library_col("TITLE".to_string(), LIB_ART_COLUMN_WIDTH_TITLE),
-    );
-    let separator = ROW_SEPARATOR.repeat(LIBRARY_ROW_MAX_WIDTH);
-
-    // Paginate
-    let mut pages: Vec<String> = Vec::new();
-    for chunk in entries.chunks(MAX_RESULTS_PER_PAGE) {
-        let rows = chunk.join("\n");
-        let body = format!("{}\n{}\n{}", header, separator, rows);
-        pages.push(format!("```text\n{}\n```", body));
-    }
-
-    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
-    poise::samples::paginate(ctx, &page_refs).await?;
-
-    Ok(())
+async fn artist(ctx: Context<'_>) -> Result<(), Error> {
+    library_dynamic(ctx, "artist", "artists.artist").await
 }
 
 
 /// /library origin
 #[poise::command(slash_command)]
-pub async fn library_origin(ctx: Context<'_>) -> Result<(), Error> {
-    // SQL query to fetch origin and title
-    let query = "
-        SELECT origins.origin, tracks.track_title
-        FROM tracks
-        LEFT JOIN origins ON tracks.origin_id = origins.id
-        ORDER BY origins.origin, tracks.track_title
-    ";
-
-    let db_pool = &ctx.data().db_pool;
-
-    let entries: Vec<String> = sqlx::query_as::<_, (String, String)>(query)
-        .fetch_all(db_pool)
-        .await
-        .unwrap_or_else(|err| {
-            println!("Database query failed: {}", err);
-            Vec::new()
-        })
-        .into_iter()
-        .map(|(origin, title)| {
-            format!(
-                "{}{}{}",
-                fmt_library_col(origin, LIB_ORI_COLUMN_WIDTH_ORIGIN),
-                LIBRARY_SEPARATOR,
-                fmt_library_col(title, LIB_ORI_COLUMN_WIDTH_TITLE),
-            )
-        })
-        .collect();
-
-    // Header
-    let header = format!(
-        "{}{}{}",
-        fmt_library_col("ORIGIN".to_string(), LIB_ORI_COLUMN_WIDTH_ORIGIN),
-        LIBRARY_SEPARATOR,
-        fmt_library_col("TITLE".to_string(), LIB_ORI_COLUMN_WIDTH_TITLE),
-    );
-    let separator = ROW_SEPARATOR.repeat(LIBRARY_ROW_MAX_WIDTH);
-
-    // Paginate
-    let mut pages: Vec<String> = Vec::new();
-    for chunk in entries.chunks(MAX_RESULTS_PER_PAGE) {
-        let rows = chunk.join("\n");
-        let body = format!("{}\n{}\n{}", header, separator, rows);
-        pages.push(format!("```text\n{}\n```", body));
-    }
-
-    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
-    poise::samples::paginate(ctx, &page_refs).await?;
-
-    Ok(())
+async fn origin(ctx: Context<'_>) -> Result<(), Error> {
+    library_dynamic(ctx, "origin", "origins.origin").await
 }
 
-
-/// /library tags
+/// /library origin
 #[poise::command(slash_command)]
-pub async fn library_tags(ctx: Context<'_>) -> Result<(), Error> {
-    // SQL query to fetch tag and track title pairs
-    let query = "
-        SELECT tags.tag, tracks.track_title
-        FROM tracks
-        LEFT JOIN track_tags ON tracks.id = track_tags.track_id
-        LEFT JOIN tags ON track_tags.tag_id = tags.id
-        ORDER BY 
-            CASE WHEN tags.tag IS NULL THEN 1 ELSE 0 END, 
-            tags.tag, 
-            tracks.track_title
-    ";
+async fn tags(ctx: Context<'_>) -> Result<(), Error> {
+    library_dynamic(ctx, "tags", "tags.tag").await
+}
 
+async fn library_dynamic(ctx: Context<'_>, mode: &str, sort: &str) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
-    let entries: Vec<String> = sqlx::query_as::<_, (Option<String>, String)>(query)
-        .fetch_all(db_pool)
-        .await
-        .unwrap_or_else(|err| {
-            println!("Database query failed: {}", err);
-            Vec::new()
-        })
-        .into_iter()
-        .map(|(tag_opt, title)| {
-            let tag = tag_opt.unwrap_or_else(|| "No tag".to_string());
-            format!(
-                "{}{}{}",
-                fmt_library_col(tag, LIB_TAG_COLUMN_WIDTH_TAGS),
-                LIBRARY_SEPARATOR,
-                fmt_library_col(title, LIB_TAG_COLUMN_WIDTH_TITLE),
-            )
-        })
-        .collect();
+    // Define column weights and headers based on mode
+    let (weights, headers) = match mode {
+        "artist" => (vec![2.0, 1.0], vec!["Title", "Artist"]),
+        "origin" => (vec![2.0, 1.0], vec!["Title", "Origin"]),
+        _ => (vec![3.0, 1.5, 1.5, 1.0], vec!["Title", "Artist", "Origin", "Tags"]),
+    };
 
-    // Header
-    let header = format!(
-        "{}{}{}",
-        fmt_library_col("TAG".to_string(), LIB_TAG_COLUMN_WIDTH_TAGS),
-        LIBRARY_SEPARATOR,
-        fmt_library_col("TITLE".to_string(), LIB_TAG_COLUMN_WIDTH_TITLE),
-    );
-    let separator = ROW_SEPARATOR.repeat(LIBRARY_ROW_MAX_WIDTH);
+    // 1️⃣ Fetch data
+    let raw_data = fetch_library_rows(db_pool, mode, sort).await;
 
-    // Paginate
-    let mut pages: Vec<String> = Vec::new();
-    for chunk in entries.chunks(MAX_RESULTS_PER_PAGE) {
-        let rows = chunk.join("\n");
-        let body = format!("{}\n{}\n{}", header, separator, rows);
-        pages.push(format!("```text\n{}\n```", body));
+    if raw_data.is_empty() {
+        poise::say_reply(ctx, "No results found.").await?;
+        return Ok(());
     }
+
+    // 2️⃣ Add row numbers
+    let (data_with_rownum, rownum_width) = add_row_numbers(raw_data);
+
+    // 3️⃣ Compute column widths (rownum included)
+    let col_widths = compute_column_widths(&weights, rownum_width);
+
+    // 4️⃣ Format table
+    let mut headers_with_rownum = vec!["#"];
+    headers_with_rownum.extend(headers.clone());
+    let (header, formatted_rows) = format_table(&headers_with_rownum, &data_with_rownum, &col_widths);
+
+    // 5️⃣ Paginate
+    let pages = paginate_table(&header, &formatted_rows, MAX_RESULTS_PER_PAGE);
 
     let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
     poise::samples::paginate(ctx, &page_refs).await?;
@@ -249,26 +79,132 @@ pub async fn library_tags(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 
+fn paginate_table(header: &str, rows: &[String], max_per_page: usize) -> Vec<String> {
+    let separator = ROW_SEPARATOR.repeat(ROW_MAX_WIDTH);
+    rows.chunks(max_per_page)
+        .map(|chunk| {
+            format!("```text\n{}\n{}\n{}\n```", header, separator, chunk.join("\n"))
+        })
+        .collect()
+}
 
-/// Return a paginated printout of the entire library
-pub async fn library_sorted(ctx: Context<'_>, sort: &str) -> Result<(), Error> {
+
+fn format_table(
+    headers: &[&str],
+    data: &[Vec<String>],
+    col_widths: &[usize],
+) -> (String, Vec<String>) {
+    let header = headers
+    .iter()
+    .enumerate()
+    .map(|(i, h)| {
+        if i == 0 {
+            h.to_string()
+        } else {
+            lightweight_trim(h.to_string(), col_widths[i])
+        }
+    })
+    .collect::<Vec<_>>()
+    .join(LIBRARY_SEPARATOR);
+
+let formatted_rows = data
+    .iter()
+    .map(|row| {
+        row.iter()
+            .enumerate()
+            .map(|(i, val)| {
+                if i == 0 {
+                    val.clone()
+                } else {
+                    lightweight_trim(val.clone(), col_widths[i])
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(LIBRARY_SEPARATOR)
+    })
+    .collect();
+
+
+    (header, formatted_rows)
+}
+
+
+
+fn compute_column_widths(weights: &[f64], rownum_width: usize) -> Vec<usize> {
+    let num_columns = weights.len() + 1; // rownum + content
+    let separator_space = num_columns - 1;
+
+    let remaining_width = ROW_MAX_WIDTH - rownum_width;
+    let total_weight: f64 = weights.iter().sum();
+
+    let mut col_widths = vec![rownum_width];
+    for w in weights {
+        let width = ((*w / total_weight) * remaining_width as f64).floor() as usize;
+        col_widths.push(width.max(4));
+    }
+
+    // Adjust for rounding to match total width exactly
+    let current_total: usize = col_widths.iter().sum::<usize>() + separator_space;
+    let mut extra_space = ROW_MAX_WIDTH as isize - current_total as isize;
+    let mut i = 1;
+    while extra_space > 0 {
+        col_widths[i] += 1;
+        extra_space -= 1;
+        i += 1;
+        if i >= col_widths.len() {
+            i = 1;
+        }
+    }
+
+    col_widths
+}
+
+
+
+fn add_row_numbers(data: Vec<Vec<String>>) -> (Vec<Vec<String>>, usize) {
+    let total_rows = data.len();
+    let rownum_width = total_rows.to_string().len() + 1; // e.g., "12."
+    let data_with_rownum = data
+        .into_iter()
+        .enumerate()
+        .map(|(i, mut row)| {
+            let mut new_row = vec![format!("{}.", i + 1)];
+            new_row.append(&mut row);
+            new_row
+        })
+        .collect();
+    (data_with_rownum, rownum_width)
+}
+
+
+async fn fetch_library_rows(
+    db_pool: &sqlx::Pool<sqlx::Sqlite>,
+    mode: &str,
+    sort: &str,
+) -> Vec<Vec<String>> {
+    let (select_fields, num_columns) = match mode {
+        "artist" => ("tracks.track_title, artists.artist", 2),
+        "origin" => ("tracks.track_title, origins.origin", 2),
+        _ => (
+            "tracks.track_title, artists.artist, origins.origin, GROUP_CONCAT(tags.tag, ', ') AS tags",
+            4,
+        ),
+    };
+
     let query = format!(
         "
-        SELECT DISTINCT tracks.track_title, artists.artist, origins.origin, GROUP_CONCAT(tags.tag, ', ') AS tags
+        SELECT DISTINCT {select_fields}
         FROM tracks
         LEFT JOIN track_tags ON tracks.id = track_tags.track_id
         LEFT JOIN tags ON track_tags.tag_id = tags.id
         LEFT JOIN artists ON tracks.artist_id = artists.id
         LEFT JOIN origins ON tracks.origin_id = origins.id
-        GROUP BY tracks.id, tracks.track_title, artists.artist, origins.origin
-        ORDER BY {}
-        ",
-        sort
+        GROUP BY tracks.id
+        ORDER BY {sort}
+        "
     );
 
-    let db_pool = &ctx.data().db_pool;
-
-    let library: Vec<String> = sqlx::query_as(&query)
+    sqlx::query(&query)
         .fetch_all(db_pool)
         .await
         .unwrap_or_else(|err| {
@@ -276,54 +212,10 @@ pub async fn library_sorted(ctx: Context<'_>, sort: &str) -> Result<(), Error> {
             Vec::new()
         })
         .into_iter()
-        .map(|(title, artist, origin, tags): (String, String, String, Option<String>)| {
-            let tags_display = tags.unwrap_or_else(|| "No tags".to_string());
-        
-            format!(
-                "{}{}{}{}{}{}{}",
-                fmt_library_col(title, LIBRARY_COLUMN_WIDTH_TITLE),
-                LIBRARY_SEPARATOR,
-                fmt_library_col(artist,LIBRARY_COLUMN_WIDTH_ARTIST ),
-                LIBRARY_SEPARATOR,
-                fmt_library_col(origin, LIBRARY_COLUMN_WIDTH_ORIGIN),
-                LIBRARY_SEPARATOR,
-                fmt_library_col(tags_display, LIBRARY_COLUMN_WIDTH_TAGS),
-            )
+        .map(|row| {
+            (0..num_columns)
+                .map(|i| row.try_get(i).unwrap_or_else(|_| Some("No data".to_string())).unwrap_or_else(|| "No data".to_string()))
+                .collect::<Vec<String>>()
         })
-        .collect();
-
-    let mut pages: Vec<String> = Vec::new();
-
-    // Build the header once
-    let header = format!(
-        "{}{}{}{}{}{}{}",
-        fmt_library_col("TITLE".to_string(), LIBRARY_COLUMN_WIDTH_TITLE),
-        LIBRARY_SEPARATOR,
-        fmt_library_col("ARTIST".to_string(), LIBRARY_COLUMN_WIDTH_ARTIST),
-        LIBRARY_SEPARATOR,
-        fmt_library_col("ORIGIN".to_string(), LIBRARY_COLUMN_WIDTH_ORIGIN),
-        LIBRARY_SEPARATOR,
-        fmt_library_col("TAGS".to_string(), LIBRARY_COLUMN_WIDTH_TAGS),
-    );
-
-    // Separator (56 chars wide: fill with '-')
-    let separator = "-".repeat(LIBRARY_ROW_MAX_WIDTH);
-
-    for chunk in library.chunks(MAX_RESULTS_PER_PAGE) {
-        // Format the rows
-        let rows = chunk.join("\n");
-
-        // Put together: header + separator + rows
-        let body = format!("{}\n{}\n{}", header, separator, rows);
-
-        // Wrap in code block
-        let formatted = format!("```text\n{}\n```", body);
-        pages.push(formatted);
-    }
-
-    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
-    poise::samples::paginate(ctx, &page_refs).await?;
-
-
-    Ok(())
+        .collect()
 }
