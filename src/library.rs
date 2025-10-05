@@ -36,6 +36,14 @@ pub fn process_ytdlp_json(
     Ok(slim)
 }
 
+// pub fn lightweight_trim(mut choice: String, max_width: usize) -> String {
+//     if choice.len() > max_width - ELLIPSIS_LEN {
+//         choice.truncate(max_width - ELLIPSIS_LEN);
+//         choice.push_str(ELLIPSIS);
+//     }
+//     choice
+// }
+
 pub fn lightweight_trim(mut choice: String, max_width: usize) -> String {
     if max_width <= ELLIPSIS_LEN {
         return ELLIPSIS.to_string();

@@ -45,12 +45,14 @@ async fn library_dynamic(ctx: Context<'_>, mode: &str) -> Result<(), Error> {
 
     // Define column weights and headers based on mode
     let (weights, headers) = match mode {
-        "artist" => (vec![2.0, 1.0], vec!["Title", "Artist"]),
-        "origin" => (vec![2.0, 1.0], vec!["Title", "Origin"]),
-        _ => (vec![3.0, 1.5, 1.5, 1.0], vec!["Title", "Artist", "Origin", "Tags"]),
+        "artist" => (vec![1.0, 2.0], vec!["Artist", "Title"]),
+        "origin" => (vec![1.0, 2.0], vec!["Origin", "Title"]),
+        "tags" => (vec![2.0, 2.0], vec!["Tag", "Title"]),
+        _ => (vec![2.0, 1.5, 1.5, 1.5], vec!["Title", "Artist", "Origin", "Tags"]),
     };
+    
 
-    // 1️⃣ Fetch data
+    // Fetch data
     let raw_data = fetch_library_rows(db_pool, mode).await;
 
     if raw_data.is_empty() {
@@ -58,18 +60,18 @@ async fn library_dynamic(ctx: Context<'_>, mode: &str) -> Result<(), Error> {
         return Ok(());
     }
 
-    // 2️⃣ Add row numbers
+    // Add row numbers
     let (data_with_rownum, rownum_width) = add_row_numbers(raw_data);
 
-    // 3️⃣ Compute column widths (rownum included)
+    // Compute column widths (rownum included)
     let col_widths = compute_column_widths(&weights, rownum_width);
 
-    // 4️⃣ Format table
+    // Format table
     let mut headers_with_rownum = vec!["#"];
     headers_with_rownum.extend(headers.clone());
     let (header, formatted_rows) = format_table(&headers_with_rownum, &data_with_rownum, &col_widths);
 
-    // 5️⃣ Paginate
+    // Paginate
     let pages = paginate_table(&header, &formatted_rows, MAX_RESULTS_PER_PAGE);
 
     let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
@@ -182,41 +184,111 @@ async fn fetch_library_rows(
     db_pool: &sqlx::Pool<sqlx::Sqlite>,
     mode: &str,
 ) -> Vec<Vec<String>> {
-    let (select_fields, sort, num_columns) = match mode {
-        "artist" => ("artists.artist, tracks.track_title", "artists.artist",2),
-        "origin" => ("origins.origin, tracks.track_title", "origins.origin",2),
-        _ => (
-            "tracks.track_title, artists.artist, origins.origin, GROUP_CONCAT(tags.tag, ', ') AS tags",
-            "tracks.track_title",
-            4,
-        ),
-    };
-
-    let query = format!(
-        "
-        SELECT DISTINCT {select_fields}
-        FROM tracks
-        LEFT JOIN track_tags ON tracks.id = track_tags.track_id
-        LEFT JOIN tags ON track_tags.tag_id = tags.id
-        LEFT JOIN artists ON tracks.artist_id = artists.id
-        LEFT JOIN origins ON tracks.origin_id = origins.id
-        GROUP BY tracks.id
-        ORDER BY {sort}
-        "
-    );
-
-    sqlx::query(&query)
-        .fetch_all(db_pool)
-        .await
-        .unwrap_or_else(|err| {
-            println!("Database query failed: {}", err);
-            Vec::new()
-        })
-        .into_iter()
-        .map(|row| {
-            (0..num_columns)
-                .map(|i| row.try_get(i).unwrap_or_else(|_| Some("No data".to_string())).unwrap_or_else(|| "No data".to_string()))
-                .collect::<Vec<String>>()
-        })
-        .collect()
+    match mode {
+        "artist" => {
+            let query = "
+                SELECT artists.artist, tracks.track_title
+                FROM tracks
+                LEFT JOIN artists ON tracks.artist_id = artists.id
+                ORDER BY artists.artist
+            ";
+            sqlx::query(query)
+                .fetch_all(db_pool)
+                .await
+                .unwrap_or_else(|err| {
+                    println!("Database query failed: {}", err);
+                    Vec::new()
+                })
+                .into_iter()
+                .map(|row| {
+                    vec![
+                        row.try_get::<String, _>(0).unwrap_or_else(|_| "No artist".to_string()),
+                        row.try_get::<String, _>(1).unwrap_or_else(|_| "No title".to_string()),
+                    ]
+                })
+                .collect()
+        }
+        "origin" => {
+            let query = "
+                SELECT origins.origin, tracks.track_title
+                FROM tracks
+                LEFT JOIN origins ON tracks.origin_id = origins.id
+                ORDER BY origins.origin
+            ";
+            sqlx::query(query)
+                .fetch_all(db_pool)
+                .await
+                .unwrap_or_else(|err| {
+                    println!("Database query failed: {}", err);
+                    Vec::new()
+                })
+                .into_iter()
+                .map(|row| {
+                    vec![
+                        row.try_get::<String, _>(0).unwrap_or_else(|_| "No origin".to_string()),
+                        row.try_get::<String, _>(1).unwrap_or_else(|_| "No title".to_string()),
+                    ]
+                })
+                .collect()
+        }
+        "tags" => {
+            let query = "
+                SELECT 
+                    COALESCE(tags.tag, 'No tags') AS tag,
+                    tracks.track_title
+                FROM tracks
+                LEFT JOIN track_tags ON tracks.id = track_tags.track_id
+                LEFT JOIN tags ON track_tags.tag_id = tags.id
+                ORDER BY 
+                    CASE WHEN tags.tag IS NULL THEN 1 ELSE 0 END,
+                    tag,
+                    tracks.track_title
+            ";
+            sqlx::query(query)
+                .fetch_all(db_pool)
+                .await
+                .unwrap_or_else(|err| {
+                    println!("Database query failed: {}", err);
+                    Vec::new()
+                })
+                .into_iter()
+                .map(|row| {
+                    vec![
+                        row.try_get::<String, _>(0).unwrap_or_else(|_| "No tags".to_string()),
+                        row.try_get::<String, _>(1).unwrap_or_else(|_| "No title".to_string()),
+                    ]
+                })
+                .collect()
+        }
+        _ => {
+            // default: show all tracks with artist, origin, tags concatenated
+            let query = "
+                SELECT tracks.track_title, artists.artist, origins.origin, GROUP_CONCAT(tags.tag, ', ') AS tags
+                FROM tracks
+                LEFT JOIN artists ON tracks.artist_id = artists.id
+                LEFT JOIN origins ON tracks.origin_id = origins.id
+                LEFT JOIN track_tags ON tracks.id = track_tags.track_id
+                LEFT JOIN tags ON track_tags.tag_id = tags.id
+                GROUP BY tracks.id
+                ORDER BY tracks.track_title
+            ";
+            sqlx::query(query)
+                .fetch_all(db_pool)
+                .await
+                .unwrap_or_else(|err| {
+                    println!("Database query failed: {}", err);
+                    Vec::new()
+                })
+                .into_iter()
+                .map(|row| {
+                    vec![
+                        row.try_get::<String, _>(0).unwrap_or_else(|_| "No title".to_string()),
+                        row.try_get::<String, _>(1).unwrap_or_else(|_| "No artist".to_string()),
+                        row.try_get::<String, _>(2).unwrap_or_else(|_| "No origin".to_string()),
+                        row.try_get::<String, _>(3).unwrap_or_else(|_| "".to_string()),
+                    ]
+                })
+                .collect()
+        }
+    }
 }
