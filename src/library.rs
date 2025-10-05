@@ -1,5 +1,5 @@
 use crate::constants::{ELLIPSIS, ELLIPSIS_LEN};
-use crate::definitions::{Context, Error};
+use crate::definitions::{Context as DiscordContext, Error};
 
 use songbird::Call;
 use tokio::sync::Mutex;
@@ -7,6 +7,34 @@ use poise::serenity_prelude::{ChannelId, Guild};
 use sqlx::{Sqlite, Pool};
 use url::Url;
 use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use serde_json::{json, Value};
+use std::fs;
+
+pub fn process_ytdlp_json(
+    file_id: String
+) -> Result<serde_json::Value> {
+    let path = format!("audio/{file_id}.info.json");
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read {:?}", path))?;
+
+    // Parse the full JSON
+    let v: Value = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse JSON from {:?}", path))?;
+
+    // Extract only the fields we want
+    let slim = json!({
+        "id": v.get("id").cloned().unwrap(),
+        "upload_date": v.get("upload_date").cloned().unwrap(),
+        "title": v.get("title").cloned().unwrap(),
+        "channel": v.get("channel").cloned().unwrap(),
+    });
+
+    fs::remove_file(&path).ok();
+
+    Ok(slim)
+}
 
 pub fn lightweight_trim(mut choice: String, max_width: usize) -> String {
     if choice.len() > max_width - 1 {
@@ -90,7 +118,7 @@ pub fn fmt_library_col(s: String, width: usize) -> String {
     format!("{:<width$}", trimmed, width = width)
 }
 
-pub async fn get_vc_id(ctx: Context<'_>) -> Result<ChannelId, Error> {
+pub async fn get_vc_id(ctx: DiscordContext<'_>) -> Result<ChannelId, Error> {
     println!("Getting VC id");
 
     let guild_id = ctx.guild_id().unwrap();
@@ -108,7 +136,7 @@ pub async fn get_vc_id(ctx: Context<'_>) -> Result<ChannelId, Error> {
     Ok(voice_channel_id)
 }
 
-pub async fn join_vc(ctx: Context<'_>, guild: Guild, vc_id: ChannelId) -> Result<Arc<Mutex<Call>>, Error>{
+pub async fn join_vc(ctx: DiscordContext<'_>, guild: Guild, vc_id: ChannelId) -> Result<Arc<Mutex<Call>>, Error>{
     println!("Joining user's voice chat");
 
     let manager = songbird::get(ctx.serenity_context())

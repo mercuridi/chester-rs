@@ -1,10 +1,12 @@
-mod commands;
+mod cmd_controls;
 mod definitions;
 mod json_handling;
 mod autocomplete;
 mod constants;
 mod library;
 mod cmd_library;
+mod cmd_admin;
+mod cmd_management;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -53,17 +55,17 @@ async fn main() -> Result<(), Error> {
     let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN in .env");
 
     let poise_commands = vec![
-        commands::help(),
-        commands::register(),
-        commands::join(),
-        commands::play(),
-        commands::leave(),
-        commands::download(),
-        commands::reset_tags(),
-        commands::add_tag(),
-        commands::set_metadata(),
-        commands::loop_track(),
-        commands::pause(),
+        cmd_admin::help(),
+        cmd_admin::register(),
+        cmd_controls::join(),
+        cmd_controls::play(),
+        cmd_controls::leave(),
+        cmd_controls::loop_track(),
+        cmd_controls::pause(),
+        cmd_management::download(),
+        cmd_management::reset_tags(),
+        cmd_management::add_tag(),
+        cmd_management::set_metadata(),
         cmd_library::library(),
         cmd_library::library_title(),
         cmd_library::library_artist(),
