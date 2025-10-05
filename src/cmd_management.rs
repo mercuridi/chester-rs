@@ -18,9 +18,25 @@ pub async fn download(
     track_origin: Option<String>,
     #[description = "The actual title of the track"] track_title: Option<String>,
 ) -> Result<(), Error> {
-    ctx.defer().await?;
 
     let video_id = get_youtube_id(&yt_link).ok_or("Invalid YouTube link")?;
+
+    // guard against duplicate downloads
+    let db_pool = &ctx.data().db_pool;
+    match sqlx::query_scalar::<_, String>("SELECT track_title FROM tracks WHERE id = ?1")
+        .bind(&video_id)
+        .fetch_optional(db_pool)
+        .await
+        .unwrap()
+    {
+        Some(title) => {
+            ctx.say(format!("This track exists in the database already as `{}`.", title)).await?;
+            return Ok(())
+        }
+        None => ()
+    }
+
+    ctx.defer().await?;
 
     // Download the track using yt-dlp
     let output = Command::new("yt-dlp")

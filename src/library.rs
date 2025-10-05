@@ -106,6 +106,8 @@ pub async fn get_id_or_insert(
 ) -> i64 {
     let table_name = format!("{}s", field_name);
 
+    if &table_name == "tracks" {panic!("time for you to fix this type mismatch bug you left behind");}
+
     // Build SELECT statement with identifiers in the string
     let select_sql = format!("SELECT id FROM {} WHERE {} = ?1", table_name, field_name);
 
