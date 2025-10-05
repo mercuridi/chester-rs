@@ -1,8 +1,16 @@
 use crate::definitions::Context;
 use std::collections::HashSet;
 use poise::serenity_prelude::AutocompleteChoice;
-use crate::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH, AUTOCOMPLETE_SEPARATOR_LEN, AUTOCOMPLETE_SEPARATOR, ELLIPSIS, ELLIPSIS_LEN};
+use crate::constants::{
+    ELLIPSIS,
+    ELLIPSIS_LEN
+};
 use crate::library::{lightweight_trim};
+
+pub const AUTOCOMPLETE_MAX_CHOICES: usize = 25; // max  25
+pub const AUTOCOMPLETE_MAX_LENGTH: usize = 100; // max 100
+pub const AUTOCOMPLETE_SEPARATOR: &str = " | ";
+pub const AUTOCOMPLETE_SEPARATOR_LEN: usize = AUTOCOMPLETE_SEPARATOR.len();
 
 pub async fn autocomplete_artist(
     ctx: Context<'_>,

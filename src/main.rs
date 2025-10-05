@@ -4,6 +4,7 @@ mod json_handling;
 mod autocomplete;
 mod constants;
 mod library;
+mod cmd_library;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -62,12 +63,12 @@ async fn main() -> Result<(), Error> {
         commands::add_tag(),
         commands::set_metadata(),
         commands::loop_track(),
-        commands::library(),
-        commands::library_title(),
-        commands::library_artist(),
-        commands::library_origin(),
-        commands::library_tags(),
-        commands::pause()
+        commands::pause(),
+        cmd_library::library(),
+        cmd_library::library_title(),
+        cmd_library::library_artist(),
+        cmd_library::library_origin(),
+        cmd_library::library_tags(),
     ];
 
     let poise_options = poise::FrameworkOptions {
