@@ -95,35 +95,36 @@ fn format_table(
     col_widths: &[usize],
 ) -> (String, Vec<String>) {
     let header = headers
-    .iter()
-    .enumerate()
-    .map(|(i, h)| {
-        if i == 0 {
-            h.to_string()
-        } else {
-            lightweight_trim(h.to_string(), col_widths[i])
-        }
-    })
-    .collect::<Vec<_>>()
-    .join(LIBRARY_SEPARATOR);
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let text = if i == 0 { h.to_string() } else { lightweight_trim(h.to_string(), col_widths[i]) };
+            if i == 0 {
+                format!("{:>width$}", text, width = col_widths[i])
+            } else {
+                format!("{:<width$}", text, width = col_widths[i])
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(LIBRARY_SEPARATOR); // single space separator
 
-let formatted_rows = data
-    .iter()
-    .map(|row| {
-        row.iter()
-            .enumerate()
-            .map(|(i, val)| {
-                if i == 0 {
-                    val.clone()
-                } else {
-                    lightweight_trim(val.clone(), col_widths[i])
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(LIBRARY_SEPARATOR)
-    })
-    .collect();
-
+    let formatted_rows = data
+        .iter()
+        .map(|row| {
+            row.iter()
+                .enumerate()
+                .map(|(i, val)| {
+                    let text = if i == 0 { val.clone() } else { lightweight_trim(val.clone(), col_widths[i]) };
+                    if i == 0 {
+                        format!("{:>width$}", text, width = col_widths[i])
+                    } else {
+                        format!("{:<width$}", text, width = col_widths[i])
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(LIBRARY_SEPARATOR)
+        })
+        .collect();
 
     (header, formatted_rows)
 }
