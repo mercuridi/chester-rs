@@ -1,0 +1,121 @@
+use crate::constants::{ELLIPSIS, ELLIPSIS_LEN};
+use crate::definitions::{Context, Error};
+
+use songbird::Call;
+use tokio::sync::Mutex;
+use poise::serenity_prelude::{ChannelId, Guild};
+use sqlx::{Sqlite, Pool};
+use url::Url;
+use std::sync::Arc;
+
+pub fn lightweight_trim(mut choice: String, max_width: usize) -> String {
+    if choice.len() > max_width - 1 {
+        choice.truncate(max_width - ELLIPSIS_LEN);
+        choice.push_str(ELLIPSIS);
+    }
+    choice
+}
+
+pub fn get_youtube_id(link: &str) -> Option<String> {
+    // Try to parse the URL; bail out if it's invalid
+    println!("Parsing YouTube link {}", link);
+    let url = Url::parse(link).ok()?;
+    let host = url.host_str()?;
+
+    match host {
+        // Short links: https://youtu.be/VIDEO_ID
+        "youtu.be" => {
+            // path_segments() -> segments between the slashes
+            url.path_segments()
+               .and_then(|mut segs| segs.next())
+               .map(|id| id.to_string())
+        }
+
+        // Standard watch URLs, mobile, or www embeds
+        "www.youtube.com" | "youtube.com" | "m.youtube.com" => {
+            // 1) /watch?v=VIDEO_ID
+            if let Some((_, v)) = url.query_pairs().find(|(k, _)| k == "v") {
+                return Some(v.into_owned());
+            }
+            // 2) /embed/VIDEO_ID
+            url.path_segments()
+               .and_then(|mut segs| {
+                   segs.find(|part| *part == "embed").and_then(|_| segs.next())
+               })
+               .map(|id| id.to_string())
+        }
+
+        _ => None,
+    }
+}
+
+pub async fn get_id_or_insert(
+    db_pool: &Pool<Sqlite>,
+    field_name: &str, // singular, e.g. "tag"
+    pls_find: &str,
+) -> i64 {
+    let table_name = format!("{}s", field_name);
+
+    // Build SELECT statement with identifiers in the string
+    let select_sql = format!("SELECT id FROM {} WHERE {} = ?1", table_name, field_name);
+
+    match sqlx::query_scalar::<_, i64>(&select_sql)
+        .bind(&pls_find)
+        .fetch_optional(db_pool)
+        .await
+        .unwrap()
+    {
+        Some(id) => id,
+        None => {
+            // Insert new value
+            let insert_sql = format!("INSERT INTO {} ({}) VALUES (?1)", table_name, field_name);
+            sqlx::query(&insert_sql)
+                .bind(&pls_find)
+                .execute(db_pool)
+                .await
+                .unwrap();
+
+            // Fetch its id
+            sqlx::query_scalar::<_, i64>(&select_sql)
+                .bind(&pls_find)
+                .fetch_one(db_pool)
+                .await
+                .unwrap()
+        }
+    }
+}
+
+pub fn fmt_library_col(s: String, width: usize) -> String {
+    let trimmed = lightweight_trim(s, width);
+    format!("{:<width$}", trimmed, width = width)
+}
+
+pub async fn get_vc_id(ctx: Context<'_>) -> Result<ChannelId, Error> {
+    println!("Getting VC id");
+
+    let guild_id = ctx.guild_id().unwrap();
+
+    let voice_state = ctx.serenity_context()
+        .cache
+        .clone()
+        .guild(guild_id)
+        .and_then(|g| g.voice_states.get(&ctx.author().id).cloned());
+    let voice_channel_id = match voice_state.and_then(|vs| vs.channel_id) {
+        Some(c) => c,
+        None => return Err("The user is not in a voice channel.".into())
+    };
+
+    Ok(voice_channel_id)
+}
+
+pub async fn join_vc(ctx: Context<'_>, guild: Guild, vc_id: ChannelId) -> Result<Arc<Mutex<Call>>, Error>{
+    println!("Joining user's voice chat");
+
+    let manager = songbird::get(ctx.serenity_context())
+        .await
+        .expect("Error getting the Songbird client from the manager")
+        .clone();
+
+    let join_result = manager.join(guild.id, vc_id).await;
+    Ok(join_result?)
+}

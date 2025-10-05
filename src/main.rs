@@ -1,6 +1,9 @@
 mod commands;
 mod definitions;
 mod json_handling;
+mod autocomplete;
+mod constants;
+mod library;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -8,7 +11,6 @@ mod json_handling;
 use std::collections::HashMap;
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
 use songbird::SerenityInit; use sqlx::SqlitePool;
-// brings in `.register_songbird()`
 use tokio::sync::RwLock;
 use dotenv::dotenv;
 
