@@ -49,8 +49,8 @@ pub fn lightweight_trim(mut choice: String, max_width: usize) -> String {
         return ELLIPSIS.to_string();
     }
 
-    if choice.len() > max_width - ELLIPSIS_LEN {
-        let cutoff = max_width - ELLIPSIS_LEN;
+    if choice.len() > max_width {
+        let cutoff = max_width - 1;
         let safe_cutoff = choice
             .char_indices()
             .take_while(|(idx, _)| *idx <= cutoff)
