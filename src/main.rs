@@ -60,7 +60,11 @@ async fn main() -> Result<(), Error> {
         commands::add_tag(),
         commands::set_metadata(),
         commands::loop_track(),
-        commands::paginate(),
+        commands::library(),
+        commands::library_title(),
+        commands::library_artist(),
+        commands::library_origin(),
+        commands::library_tags(),
         commands::pause()
     ];
 

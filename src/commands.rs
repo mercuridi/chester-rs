@@ -20,15 +20,42 @@ use crate::json_handling::process_ytdlp_json;
 ////////////////////////////////////////////////////////////////////////////////
 // Helper functions
 
-// MAX here is 25 (Discord limitation)
-const AUTOCOMPLETE_MAX_CHOICES: usize = 25;
+// Constants with Discord-imposed limitations
+const AUTOCOMPLETE_MAX_CHOICES: usize = 25; // max  25
+const AUTOCOMPLETE_MAX_LENGTH: usize = 100; // max 100
+const LIBRARY_ROW_MAX_WIDTH:   usize =  56; // max  56
 
-// MAX here is 100 (Discord limitation)
-const AUTOCOMPLETE_MAX_LENGTH: usize = 100;
+// constants for autocomplete display
 const ELLIPSIS: &str = "…";
-const SEPARATOR: &str = " | ";
+const AUTOCOMPLETE_SEPARATOR: &str = " | ";
 const ELLIPSIS_LEN: usize = ELLIPSIS.len();
-const SEPARATOR_LEN: usize = SEPARATOR.len();
+const AUTOCOMPLETE_SEPARATOR_LEN: usize = AUTOCOMPLETE_SEPARATOR.len();
+
+// constants for library pagination
+const MAX_RESULTS_PER_PAGE:         usize = 20;
+const LIBRARY_SEPARATOR: &str = " ";
+const ROW_SEPARATOR: &str = "-";
+
+// CMD: library
+const LIBRARY_COLUMN_WIDTH_TITLE:   usize = 16;
+const LIBRARY_COLUMN_WIDTH_ARTIST:  usize = 14;
+const LIBRARY_COLUMN_WIDTH_ORIGIN:  usize = 14;
+const LIBRARY_COLUMN_WIDTH_TAGS:    usize = 12;
+
+// CMD: library_title
+const LIB_TIT_COLUMN_WIDTH_TITLE:   usize = 56;
+
+// CMD: library_artist
+const LIB_ART_COLUMN_WIDTH_ARTIST:  usize = 23;
+const LIB_ART_COLUMN_WIDTH_TITLE:   usize = 30;
+
+// CMD: library_origin
+const LIB_ORI_COLUMN_WIDTH_ORIGIN:  usize = 23;
+const LIB_ORI_COLUMN_WIDTH_TITLE:   usize = 30;
+
+// CMD: library_tag
+const LIB_TAG_COLUMN_WIDTH_TAGS:    usize = 12;
+const LIB_TAG_COLUMN_WIDTH_TITLE:   usize = 44;
 
 async fn get_id_or_insert(
     db_pool: &Pool<Sqlite>,
@@ -69,7 +96,7 @@ async fn get_id_or_insert(
 
 fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
     // Build a display name
-    let content_max_length = AUTOCOMPLETE_MAX_LENGTH - (SEPARATOR_LEN * to_display.len()) + 1;
+    let content_max_length = AUTOCOMPLETE_MAX_LENGTH - (AUTOCOMPLETE_SEPARATOR_LEN * to_display.len()) + 1;
 
     let mut lens: Vec<usize> = to_display
         .iter()
@@ -118,17 +145,23 @@ fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
         excess = excess.saturating_sub(chop);
     }
 
-    to_display.join(SEPARATOR)
+    to_display.join(AUTOCOMPLETE_SEPARATOR)
 
 }
 
-fn lightweight_trim(mut choice: String) -> String {
-    if choice.len() > 99 {
-        choice.truncate(99);
+fn lightweight_trim(mut choice: String, max_width: usize) -> String {
+    if choice.len() > max_width - 1 {
+        choice.truncate(max_width - 1);
         choice.push_str(ELLIPSIS);
     }
     choice
 }
+
+fn fmt_library_col(s: String, width: usize) -> String {
+    let trimmed = lightweight_trim(s, width);
+    format!("{:<width$}", trimmed, width = width)
+}
+
 
 fn get_youtube_id(link: &str) -> Option<String> {
     // Try to parse the URL; bail out if it's invalid
@@ -245,7 +278,7 @@ async fn autocomplete_metadata(
 
     // Process the results
     for raw in results {
-        let display = lightweight_trim(raw);
+        let display = lightweight_trim(raw, AUTOCOMPLETE_MAX_LENGTH);
 
         if needle.is_empty() || display.to_lowercase().contains(&needle) {
             choices.insert(display);
@@ -374,10 +407,16 @@ pub async fn reset_tags(
             .execute(db_pool)
             .await?;
 
-        ctx.say(format!("Reset tags for track with ID `{}`", track_id))
+        let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
+            .bind(&track)
+            .fetch_optional(db_pool)
+            .await?
+            .unwrap();
+
+        ctx.say(format!("Reset tags for track `{}`", track_title))
             .await?;
     } else {
-        ctx.say(format!("No track found with ID `{}`", track)).await?;
+        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
     }
 
     Ok(())
@@ -412,10 +451,15 @@ pub async fn add_tag(
             .execute(db_pool)
             .await?;
 
-        ctx.say(format!("Tag `{}` added to track with ID `{}`", tag, track_id))
-            .await?;
+        let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
+            .bind(&track)
+            .fetch_optional(db_pool)
+            .await?
+            .unwrap();
+
+        ctx.say(format!("Tag `{}` added to track `{}`", tag, track_title)).await?;
     } else {
-        ctx.say(format!("No track found with ID `{}`", track)).await?;
+        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
     }
 
     Ok(())
@@ -449,19 +493,22 @@ pub async fn title(
 
     if let Some(track_id) = track_exists {
         // Update the track's title in the database
+        let old_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
+            .bind(&track)
+            .fetch_optional(db_pool)
+            .await?
+            .unwrap();
+
         sqlx::query("UPDATE tracks SET track_title = ?1 WHERE id = ?2")
             .bind(&new_title)
             .bind(&track_id)
             .execute(db_pool)
             .await?;
 
-        ctx.say(format!(
-            "Set new title `{}` for track with ID `{}`",
-            new_title, track_id
-        ))
+        ctx.say(format!("Set new title `{}` for track `{}`", new_title, old_title))
         .await?;
     } else {
-        ctx.say(format!("No track found with ID `{}`", track)).await?;
+        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
     }
 
     Ok(())
@@ -494,13 +541,15 @@ pub async fn artist(
             .execute(db_pool)
             .await?;
 
-        ctx.say(format!(
-            "Set new artist `{}` for track with ID `{}`",
-            new_artist, track_id
-        ))
-        .await?;
+        let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
+            .bind(&track)
+            .fetch_optional(db_pool)
+            .await?
+            .unwrap();
+
+        ctx.say(format!("Set new artist `{}` for track `{}`",new_artist, track_title)).await?;
     } else {
-        ctx.say(format!("No track found with ID `{}`", track)).await?;
+        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
     }
 
     Ok(())
@@ -533,13 +582,16 @@ pub async fn origin(
             .execute(db_pool)
             .await?;
 
-        ctx.say(format!(
-            "Set new origin `{}` for track with ID `{}`",
-            new_origin, track_id
-        ))
+        let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
+            .bind(&track)
+            .fetch_optional(db_pool)
+            .await?
+            .unwrap();
+
+        ctx.say(format!("Set new origin `{}` for track `{}`", new_origin, track_title))
         .await?;
     } else {
-        ctx.say(format!("No track found with ID `{}`", track)).await?;
+        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
     }
 
     Ok(())
@@ -660,7 +712,9 @@ pub async fn play(
 
     // Check if the track exists in the database
     let track_metadata: Option<(String, String)> = sqlx::query_as(
-        "SELECT track_title, track_artist FROM tracks WHERE id = ?1",
+        "SELECT track_title, artists.artist FROM tracks 
+        LEFT JOIN artists ON tracks.artist_id = artists.id
+        WHERE tracks.id = ?1",
     )
     .bind(&track)
     .fetch_optional(db_pool)
@@ -708,7 +762,7 @@ pub async fn play(
         ))
         .await?;
     } else {
-        ctx.say(format!("No track found with ID `{}`", track)).await?;
+        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
     }
 
     Ok(())
@@ -773,16 +827,302 @@ pub async fn leave(
     Ok(())
 }
 
-#[poise::command(slash_command, prefix_command)]
-pub async fn paginate(ctx: Context<'_>) -> Result<(), Error> {
-    let pages = &[
-        "`Content of first page`",
-        "`Content of second page`",
-        "`Content of third page`",
-        "`Content of fourth page`",
-    ];
+/// /library
+#[poise::command(slash_command)]
+pub async fn library(ctx: Context<'_>) -> Result<(), Error> {
+    // Pass a default sort order, e.g., by track title
+    library_sorted(ctx, "tracks.track_title").await
+}
 
-    poise::samples::paginate(ctx, pages).await?;
+/// /library title
+#[poise::command(slash_command)]
+pub async fn library_title(ctx: Context<'_>) -> Result<(), Error> {
+    // SQL query to fetch only track titles, sorted by title
+    let query = "
+        SELECT track_title
+        FROM tracks
+        ORDER BY track_title
+    ";
+
+    let db_pool = &ctx.data().db_pool;
+
+    let titles: Vec<String> = sqlx::query_as::<_, (String,)>(query)
+        .fetch_all(db_pool)
+        .await
+        .unwrap_or_else(|err| {
+            println!("Database query failed: {}", err);
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(title,)| {
+            // Fill the column fully
+            fmt_library_col(title, LIB_TIT_COLUMN_WIDTH_TITLE)
+        })
+        .collect();
+
+    // Header
+    let header = fmt_library_col("TITLE".to_string(), LIB_TIT_COLUMN_WIDTH_TITLE);
+    let separator = ROW_SEPARATOR.repeat(LIBRARY_ROW_MAX_WIDTH);
+
+    // Paginate
+    let mut pages: Vec<String> = Vec::new();
+    for chunk in titles.chunks(MAX_RESULTS_PER_PAGE) {
+        let rows = chunk.join("\n");
+        let body = format!("{}\n{}\n{}", header, separator, rows);
+        pages.push(format!("```text\n{}\n```", body));
+    }
+
+    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
+    poise::samples::paginate(ctx, &page_refs).await?;
+
+    Ok(())
+}
+
+/// /library artist
+#[poise::command(slash_command)]
+pub async fn library_artist(ctx: Context<'_>) -> Result<(), Error> {
+    // SQL query to fetch artist and title
+    let query = "
+        SELECT artists.artist, tracks.track_title
+        FROM tracks
+        LEFT JOIN artists ON tracks.artist_id = artists.id
+        ORDER BY artists.artist, tracks.track_title
+    ";
+
+    let db_pool = &ctx.data().db_pool;
+
+    let entries: Vec<String> = sqlx::query_as::<_, (String, String)>(query)
+        .fetch_all(db_pool)
+        .await
+        .unwrap_or_else(|err| {
+            println!("Database query failed: {}", err);
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(artist, title)| {
+            format!(
+                "{}{}{}",
+                fmt_library_col(artist, LIB_ART_COLUMN_WIDTH_ARTIST),
+                LIBRARY_SEPARATOR,
+                fmt_library_col(title, LIB_ART_COLUMN_WIDTH_TITLE),
+            )
+        })
+        .collect();
+
+    // Header
+    let header = format!(
+        "{}{}{}",
+        fmt_library_col("ARTIST".to_string(), LIB_ART_COLUMN_WIDTH_ARTIST),
+        LIBRARY_SEPARATOR,
+        fmt_library_col("TITLE".to_string(), LIB_ART_COLUMN_WIDTH_TITLE),
+    );
+    let separator = ROW_SEPARATOR.repeat(LIBRARY_ROW_MAX_WIDTH);
+
+    // Paginate
+    let mut pages: Vec<String> = Vec::new();
+    for chunk in entries.chunks(MAX_RESULTS_PER_PAGE) {
+        let rows = chunk.join("\n");
+        let body = format!("{}\n{}\n{}", header, separator, rows);
+        pages.push(format!("```text\n{}\n```", body));
+    }
+
+    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
+    poise::samples::paginate(ctx, &page_refs).await?;
+
+    Ok(())
+}
+
+
+/// /library origin
+#[poise::command(slash_command)]
+pub async fn library_origin(ctx: Context<'_>) -> Result<(), Error> {
+    // SQL query to fetch origin and title
+    let query = "
+        SELECT origins.origin, tracks.track_title
+        FROM tracks
+        LEFT JOIN origins ON tracks.origin_id = origins.id
+        ORDER BY origins.origin, tracks.track_title
+    ";
+
+    let db_pool = &ctx.data().db_pool;
+
+    let entries: Vec<String> = sqlx::query_as::<_, (String, String)>(query)
+        .fetch_all(db_pool)
+        .await
+        .unwrap_or_else(|err| {
+            println!("Database query failed: {}", err);
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(origin, title)| {
+            format!(
+                "{}{}{}",
+                fmt_library_col(origin, LIB_ORI_COLUMN_WIDTH_ORIGIN),
+                LIBRARY_SEPARATOR,
+                fmt_library_col(title, LIB_ORI_COLUMN_WIDTH_TITLE),
+            )
+        })
+        .collect();
+
+    // Header
+    let header = format!(
+        "{}{}{}",
+        fmt_library_col("ORIGIN".to_string(), LIB_ORI_COLUMN_WIDTH_ORIGIN),
+        LIBRARY_SEPARATOR,
+        fmt_library_col("TITLE".to_string(), LIB_ORI_COLUMN_WIDTH_TITLE),
+    );
+    let separator = ROW_SEPARATOR.repeat(LIBRARY_ROW_MAX_WIDTH);
+
+    // Paginate
+    let mut pages: Vec<String> = Vec::new();
+    for chunk in entries.chunks(MAX_RESULTS_PER_PAGE) {
+        let rows = chunk.join("\n");
+        let body = format!("{}\n{}\n{}", header, separator, rows);
+        pages.push(format!("```text\n{}\n```", body));
+    }
+
+    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
+    poise::samples::paginate(ctx, &page_refs).await?;
+
+    Ok(())
+}
+
+
+/// /library tags
+#[poise::command(slash_command)]
+pub async fn library_tags(ctx: Context<'_>) -> Result<(), Error> {
+    // SQL query to fetch tag and track title pairs
+    let query = "
+        SELECT tags.tag, tracks.track_title
+        FROM tracks
+        LEFT JOIN track_tags ON tracks.id = track_tags.track_id
+        LEFT JOIN tags ON track_tags.tag_id = tags.id
+        ORDER BY 
+            CASE WHEN tags.tag IS NULL THEN 1 ELSE 0 END, 
+            tags.tag, 
+            tracks.track_title
+    ";
+
+    let db_pool = &ctx.data().db_pool;
+
+    let entries: Vec<String> = sqlx::query_as::<_, (Option<String>, String)>(query)
+        .fetch_all(db_pool)
+        .await
+        .unwrap_or_else(|err| {
+            println!("Database query failed: {}", err);
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(tag_opt, title)| {
+            let tag = tag_opt.unwrap_or_else(|| "No tag".to_string());
+            format!(
+                "{}{}{}",
+                fmt_library_col(tag, LIB_TAG_COLUMN_WIDTH_TAGS),
+                LIBRARY_SEPARATOR,
+                fmt_library_col(title, LIB_TAG_COLUMN_WIDTH_TITLE),
+            )
+        })
+        .collect();
+
+    // Header
+    let header = format!(
+        "{}{}{}",
+        fmt_library_col("TAG".to_string(), LIB_TAG_COLUMN_WIDTH_TAGS),
+        LIBRARY_SEPARATOR,
+        fmt_library_col("TITLE".to_string(), LIB_TAG_COLUMN_WIDTH_TITLE),
+    );
+    let separator = ROW_SEPARATOR.repeat(LIBRARY_ROW_MAX_WIDTH);
+
+    // Paginate
+    let mut pages: Vec<String> = Vec::new();
+    for chunk in entries.chunks(MAX_RESULTS_PER_PAGE) {
+        let rows = chunk.join("\n");
+        let body = format!("{}\n{}\n{}", header, separator, rows);
+        pages.push(format!("```text\n{}\n```", body));
+    }
+
+    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
+    poise::samples::paginate(ctx, &page_refs).await?;
+
+    Ok(())
+}
+
+
+
+/// Return a paginated printout of the entire library
+pub async fn library_sorted(ctx: Context<'_>, sort: &str) -> Result<(), Error> {
+    let query = format!(
+        "
+        SELECT DISTINCT tracks.track_title, artists.artist, origins.origin, GROUP_CONCAT(tags.tag, ', ') AS tags
+        FROM tracks
+        LEFT JOIN track_tags ON tracks.id = track_tags.track_id
+        LEFT JOIN tags ON track_tags.tag_id = tags.id
+        LEFT JOIN artists ON tracks.artist_id = artists.id
+        LEFT JOIN origins ON tracks.origin_id = origins.id
+        GROUP BY tracks.id, tracks.track_title, artists.artist, origins.origin
+        ORDER BY {}
+        ",
+        sort
+    );
+
+    let db_pool = &ctx.data().db_pool;
+
+    let library: Vec<String> = sqlx::query_as(&query)
+        .fetch_all(db_pool)
+        .await
+        .unwrap_or_else(|err| {
+            println!("Database query failed: {}", err);
+            Vec::new()
+        })
+        .into_iter()
+        .map(|(title, artist, origin, tags): (String, String, String, Option<String>)| {
+            let tags_display = tags.unwrap_or_else(|| "No tags".to_string());
+        
+            format!(
+                "{}{}{}{}{}{}{}",
+                fmt_library_col(title, LIBRARY_COLUMN_WIDTH_TITLE),
+                LIBRARY_SEPARATOR,
+                fmt_library_col(artist,LIBRARY_COLUMN_WIDTH_ARTIST ),
+                LIBRARY_SEPARATOR,
+                fmt_library_col(origin, LIBRARY_COLUMN_WIDTH_ORIGIN),
+                LIBRARY_SEPARATOR,
+                fmt_library_col(tags_display, LIBRARY_COLUMN_WIDTH_TAGS),
+            )
+        })
+        .collect();
+
+    let mut pages: Vec<String> = Vec::new();
+
+    // Build the header once
+    let header = format!(
+        "{}{}{}{}{}{}{}",
+        fmt_library_col("TITLE".to_string(), LIBRARY_COLUMN_WIDTH_TITLE),
+        LIBRARY_SEPARATOR,
+        fmt_library_col("ARTIST".to_string(), LIBRARY_COLUMN_WIDTH_ARTIST),
+        LIBRARY_SEPARATOR,
+        fmt_library_col("ORIGIN".to_string(), LIBRARY_COLUMN_WIDTH_ORIGIN),
+        LIBRARY_SEPARATOR,
+        fmt_library_col("TAGS".to_string(), LIBRARY_COLUMN_WIDTH_TAGS),
+    );
+
+    // Separator (56 chars wide: fill with '-')
+    let separator = "-".repeat(LIBRARY_ROW_MAX_WIDTH);
+
+    for chunk in library.chunks(MAX_RESULTS_PER_PAGE) {
+        // Format the rows
+        let rows = chunk.join("\n");
+
+        // Put together: header + separator + rows
+        let body = format!("{}\n{}\n{}", header, separator, rows);
+
+        // Wrap in code block
+        let formatted = format!("```text\n{}\n```", body);
+        pages.push(formatted);
+    }
+
+    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
+    poise::samples::paginate(ctx, &page_refs).await?;
+
 
     Ok(())
 }
