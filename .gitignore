@@ -6,7 +6,6 @@
 *.mp3
 *.mp4
 *.json
-*.sqlite3
 
 libs
 cache
