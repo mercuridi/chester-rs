@@ -4,12 +4,15 @@ use crate::library::{lightweight_trim};
 use sqlx::Row;
 
 // constants for library pagination
-const ROW_MAX_WIDTH:        usize =  56; // max 56
+const ROW_MAX_WIDTH_PAGINATE:       usize =  56; // max 56
+const ROW_MAX_WIDTH_BLOCK:          usize =  66; 
 const MAX_RESULTS_PER_PAGE:         usize = 20;
+const MAX_RESULTS_PER_BLOCK:        usize = 20;
 const LIBRARY_SEPARATOR:            &str = " ";
 const ROW_SEPARATOR:                &str = "-";
 const DUPLICATE_INDICATOR:          &str = "^^^";
 
+const PAGINATE_MODE: bool = true;
 
 /// /library
 #[poise::command(slash_command, subcommands("all", "artist", "origin", "tags"))]
@@ -45,6 +48,7 @@ async fn library_dynamic(ctx: Context<'_>, mode: &str) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
     // Define column weights and headers based on mode
+    println!("Setting weights and header presence");
     let (weights, headers) = match mode {
         "artist" => (vec![1.0, 2.0], vec!["Artist", "Title"]),
         "origin" => (vec![1.5, 2.0], vec!["Origin", "Title"]),
@@ -53,6 +57,7 @@ async fn library_dynamic(ctx: Context<'_>, mode: &str) -> Result<(), Error> {
     };
     
     // Fetch data
+    println!("Fetching data");
     let raw_data = fetch_library_rows(db_pool, mode).await;
 
     if raw_data.is_empty() {
@@ -60,33 +65,51 @@ async fn library_dynamic(ctx: Context<'_>, mode: &str) -> Result<(), Error> {
         return Ok(());
     }
 
+    // calculate row max width
+    let row_max_width = { if PAGINATE_MODE {ROW_MAX_WIDTH_PAGINATE} else {ROW_MAX_WIDTH_BLOCK} };
+
     // Add row numbers
+    println!("Adding row numbers");
     let (data_with_rownum, rownum_width) = add_row_numbers(raw_data);
 
     // Compute column widths (rownum included)
-    let col_widths = compute_column_widths(&weights, rownum_width);
+    println!("Computing column widths");
+    let col_widths = compute_column_widths(&weights, rownum_width, row_max_width);
 
     // Format table
+    println!("Formatting the table");
     let mut headers_with_rownum = vec!["#"];
     headers_with_rownum.extend(headers.clone());
     let (header, formatted_rows) = format_table(&headers_with_rownum, &data_with_rownum, &col_widths, mode);
 
-    // Paginate
-    let pages = paginate_table(&header, &formatted_rows, MAX_RESULTS_PER_PAGE);
+    println!("Matching on paginate mode");
+    match PAGINATE_MODE {
+        true => {
+            // Paginate
+            println!("Paginating output");
+            let pages = paginate_table(&header, &formatted_rows, MAX_RESULTS_PER_PAGE, row_max_width);
 
-    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
-    poise::samples::paginate(ctx, &page_refs).await?;
+            let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
+            poise::samples::paginate(ctx, &page_refs).await?;
+        }
+        false => {
+            // Full markdown
+            println!("Single-block output");
+            let pages = paginate_table(&header, &formatted_rows, MAX_RESULTS_PER_BLOCK, row_max_width);
+            for page in pages {
+                ctx.say(page).await?;
+            }
+        }
+    }
 
     Ok(())
 }
 
 
-fn paginate_table(header: &str, rows: &[String], max_per_page: usize) -> Vec<String> {
-    let separator = ROW_SEPARATOR.repeat(ROW_MAX_WIDTH);
+fn paginate_table(header: &str, rows: &[String], max_per_page: usize, row_max_width: usize) -> Vec<String> {
+    let separator = ROW_SEPARATOR.repeat(row_max_width);
     rows.chunks(max_per_page)
-        .map(|chunk| {
-            format!("```ansi\n\u{001b}[0;39m{}\n{}\n{}\n```", header, separator, chunk.join("\n"))
-        })
+        .map(|chunk| { format!("```\n{}\n{}\n{}\n```", header, separator, chunk.join("\n")) })
         .collect()
 }
 
@@ -120,7 +143,7 @@ fn format_table(
             let mut formatted_row = Vec::with_capacity(row.len());
 
             for (j, val) in row.iter().enumerate() {
-                // Compare with previous row; replace with blank if identical
+                // Compare with previous row; replace with indicator if identical
                 let text = if j == 0 {
                     val.clone()
                 } else if val == &previous_row[j] && &previous_row[j] != "" && i % MAX_RESULTS_PER_PAGE != 0 {
@@ -149,11 +172,11 @@ fn format_table(
 
 
 
-fn compute_column_widths(weights: &[f64], rownum_width: usize) -> Vec<usize> {
+fn compute_column_widths(weights: &[f64], rownum_width: usize, row_max_width: usize) -> Vec<usize> {
     let num_columns = weights.len() + 1; // rownum + content
     let separator_space = num_columns - 1;
 
-    let remaining_width = ROW_MAX_WIDTH - rownum_width - separator_space;
+    let remaining_width = row_max_width - rownum_width - separator_space;
     let total_weight: f64 = weights.iter().sum();
 
     let mut col_widths = vec![rownum_width];
@@ -164,7 +187,7 @@ fn compute_column_widths(weights: &[f64], rownum_width: usize) -> Vec<usize> {
 
     // Adjust for rounding to match total width exactly
     let current_total: usize = col_widths.iter().sum::<usize>() + separator_space;
-    let mut extra_space = ROW_MAX_WIDTH as isize - current_total as isize;
+    let mut extra_space = row_max_width as isize - current_total as isize;
     println!("first pass result: {:?}", col_widths);
     println!("first pass total : {}", current_total);
     println!("first pass spare : {}", extra_space);
