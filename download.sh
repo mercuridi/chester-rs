@@ -7,8 +7,22 @@ DB_PATH="database/metadata.sqlite3"
 OUTPUT_DIR="audio"
 mkdir -p "$OUTPUT_DIR"
 
-# Number of parallel downloads
-PARALLEL_JOBS=8  # Adjust based on your CPU/network
+# Default: no parallel execution
+PARALLEL_MODE=false
+PARALLEL_JOBS=8  # Adjust this number if needed
+
+# Parse CLI arguments
+for arg in "$@"; do
+    case "$arg" in
+        -p|--parallel)
+            PARALLEL_MODE=true
+            ;;
+        *)
+            echo "Usage: $0 [--parallel|-p]"
+            exit 1
+            ;;
+    esac
+done
 
 # Function to download a single video ID
 download_video() {
@@ -21,15 +35,28 @@ download_video() {
     fi
 
     echo "Downloading $ID..."
-    yt-dlp -t mp3 -o "$OUTPUT_DIR/%(id)s.%(ext)s" --no-playlist --no-progress "https://www.youtube.com/watch?v=$ID"
-    
+    ./yt-dlp -x --audio-format mp3 --audio-quality 0 \
+        --ffmpeg-location "$(which ffmpeg)" \
+        -o "$OUTPUT_DIR/%(id)s.%(ext)s" \
+        --no-playlist --no-progress \
+        "https://www.youtube.com/watch?v=$ID"
+
     if [[ $? -ne 0 ]]; then
         echo "Failed to download $ID"
     fi
 }
 
+# Export the function and output dir for xargs if using parallel
 export -f download_video
 export OUTPUT_DIR
 
-# Fetch all video IDs and feed them to xargs for parallel execution
-sqlite3 "$DB_PATH" "SELECT id FROM tracks;" | xargs -n 1 -P "$PARALLEL_JOBS" -I {} bash -c 'download_video "$@"' _ {}
+# Run in parallel or serial mode
+if [ "$PARALLEL_MODE" = true ]; then
+    echo "Running in parallel mode with $PARALLEL_JOBS jobs..."
+    sqlite3 "$DB_PATH" "SELECT id FROM tracks;" | xargs -n 1 -P "$PARALLEL_JOBS" -I {} bash -c 'download_video "$@"' _ {}
+else
+    echo "Running in serial mode..."
+    while IFS= read -r ID; do
+        download_video "$ID"
+    done < <(sqlite3 "$DB_PATH" "SELECT id FROM tracks;")
+fi
