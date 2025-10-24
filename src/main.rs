@@ -62,6 +62,7 @@ async fn main() -> Result<(), Error> {
         cmd_controls::leave(),
         cmd_controls::loop_track(),
         cmd_controls::pause(),
+        cmd_controls::now_playing(),
         cmd_management::download(),
         cmd_management::reset_tags(),
         cmd_management::add_tag(),
@@ -111,7 +112,8 @@ async fn main() -> Result<(), Error> {
                 Ok(
                     Data { 
                         db_pool: pool,
-                        track_handles: RwLock::new(HashMap::new())
+                        track_handles: RwLock::new(HashMap::new()),
+                        track_metadata: RwLock::new(HashMap::new())
                     }
                 )
             })

@@ -74,7 +74,13 @@ pub async fn play(
         if let Some(handler_lock) = manager.get(guild.id.clone()) {
             let mut handler = handler_lock.lock().await;
             let track_handle = handler.play_only_input(song_src.into());
-            let _ = track_handle.enable_loop()?;
+
+            // Store the track ID in the shared metadata map
+            {
+                let mut track_metadata = data.track_metadata.write().await; // tokio::sync::RwLock
+                track_metadata.insert(guild.id, track.clone());
+            }
+
             let mut handles = data.track_handles.write().await; // tokio::sync::RwLock
             handles.insert(guild.id, track_handle);
         }
@@ -86,6 +92,59 @@ pub async fn play(
         .await?;
     } else {
         ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
+    }
+
+    Ok(())
+}
+
+/// Displays the currently playing track's details
+#[poise::command(slash_command)]
+pub async fn now_playing(
+    ctx: Context<'_>,
+) -> Result<(), Error> {
+    // Ensure the command is used in a guild
+    let guild_id = if let Some(g) = ctx.guild_id() {
+        g
+    } else {
+        return Err("This command can only be used in a server.".into());
+    };
+
+    // Access the track metadata for the current guild
+    let data: &Data = ctx.data();
+    let track_metadata = data.track_metadata.read().await; // tokio::sync::RwLock
+    if let Some(track_id) = track_metadata.get(&guild_id) {
+        let db_pool = &ctx.data().db_pool;
+
+        // Query the database for track details
+        let track_details: Option<(String, String, String, Option<String>)> = sqlx::query_as(
+            "SELECT tracks.track_title, artists.artist, origins.origin,
+                    GROUP_CONCAT(tags.tag, ', ') AS tags
+            FROM tracks
+            LEFT JOIN artists ON tracks.artist_id = artists.id
+            LEFT JOIN origins ON tracks.origin_id = origins.id
+            LEFT JOIN track_tags ON tracks.id = track_tags.track_id
+            LEFT JOIN tags ON track_tags.tag_id = tags.id
+            WHERE tracks.id = ?1
+            GROUP BY tracks.id, artists.artist, origins.origin"
+        )
+        .bind(track_id)
+        .fetch_optional(db_pool)
+        .await?;
+
+        if let Some((title, artist, origin, tags)) = track_details {
+            ctx.say(format!(
+                "Now Playing:\n**Title:** {}\n**Artist:** {}\n**Origin:** {}\n**Tags:** {}",
+                title,
+                artist,
+                origin,
+                tags.unwrap_or_else(|| "None".to_string())
+            ))
+            .await?;
+        } else {
+            ctx.say("No details found for the currently playing track.").await?;
+        }
+    } else {
+        ctx.say("No track is currently playing.").await?;
     }
 
     Ok(())

@@ -6,8 +6,9 @@ use std::collections::HashMap;
 
 // Defines user data; this is always available in the Serenity context of an invocation
 pub struct Data {
-    pub db_pool: SqlitePool, // Add the database pool here
-    pub track_handles: RwLock<HashMap<GuildId, TrackHandle>>
+    pub db_pool: SqlitePool, // Database pool
+    pub track_handles: RwLock<HashMap<GuildId, TrackHandle>>, // Track handles for each guild
+    pub track_metadata: RwLock<HashMap<GuildId, String>>, // Map of GuildId to currently playing track ID
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
