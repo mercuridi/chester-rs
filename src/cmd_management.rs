@@ -39,7 +39,7 @@ pub async fn download(
     ctx.defer().await?;
 
     // Download the track using yt-dlp
-    let output = Command::new("yt-dlp")
+    let output = Command::new("./yt-dlp")
         .arg("-t")
         .arg("mp3")
         .arg("-o")

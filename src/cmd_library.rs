@@ -8,7 +8,7 @@ const ROW_MAX_WIDTH:        usize =  56; // max 56
 const MAX_RESULTS_PER_PAGE:         usize = 20;
 const LIBRARY_SEPARATOR:            &str = " ";
 const ROW_SEPARATOR:                &str = "-";
-const DUPLICATE_INDICATOR:          &str = "^^^";
+const DUPLICATE_INDICATOR:          &str = "";
 
 
 /// /library
