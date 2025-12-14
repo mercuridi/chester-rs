@@ -39,6 +39,8 @@ async fn autocomplete_metadata(
     mode: &str
 ) -> impl Iterator<Item = String> {
     println!("Autocomplete requested: metadata");
+    println!("Partial search: {}", &partial);
+
 
     let needle = partial.to_lowercase();
     let mut choices: HashSet<String> = HashSet::with_capacity(AUTOCOMPLETE_MAX_CHOICES);

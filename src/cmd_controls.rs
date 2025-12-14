@@ -74,6 +74,8 @@ pub async fn play(
         if let Some(handler_lock) = manager.get(guild.id.clone()) {
             let mut handler = handler_lock.lock().await;
             let track_handle = handler.play_only_input(song_src.into());
+            let _ = track_handle.enable_loop()?;
+
 
             // Store the track ID in the shared metadata map
             {
