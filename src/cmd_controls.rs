@@ -63,7 +63,7 @@ pub async fn play(
 
         let song_src = Compressed::new(
             SongbirdFile::new(track_path).into(),
-            Bitrate::BitsPerSecond(128_000),
+            Bitrate::Bits(128_000),
         )
         .await
         .expect("An error occurred constructing the track source");
