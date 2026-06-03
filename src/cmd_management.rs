@@ -1,6 +1,6 @@
-use crate::definitions::{Context, Error};
+use crate::definitions::{Context, Error, VideoId};
 use crate::autocomplete::{autocomplete_track, autocomplete_tag, autocomplete_origin, autocomplete_artist};
-use crate::library::{get_id_or_insert, get_youtube_id, process_ytdlp_json};
+use crate::library::{get_id_or_insert, get_youtube_id, process_ytdlp_json, require_track};
 use std::process::Command;
 use serde_json::Value;
 
@@ -153,29 +153,15 @@ pub async fn reset_tags(
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
-    // Check if the track exists in the database
-    let track_exists: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?1")
-        .bind(&track)
-        .fetch_optional(db_pool)
+    let info = require_track(db_pool, &VideoId::from(track)).await?;
+
+    sqlx::query("DELETE FROM track_tags WHERE track_id = ?1")
+        .bind(info.id.as_str())
+        .execute(db_pool)
         .await?;
 
-    if let Some(track_id) = track_exists {
-        // Delete all tag associations for the track from the `track_tags` table
-        sqlx::query("DELETE FROM track_tags WHERE track_id = ?1")
-            .bind(&track_id)
-            .execute(db_pool)
-            .await?;
-
-        let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
-            .bind(&track)
-            .fetch_optional(db_pool)
-            .await?.ok_or("Track not found in database")?;
-
-        ctx.say(format!("Reset tags for track `{}`", track_title))
-            .await?;
-    } else {
-        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
-    }
+    ctx.say(format!("Reset tags for track `{}`", info.title))
+        .await?;
 
     Ok(())
 }
@@ -193,31 +179,22 @@ pub async fn add_tag(
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
-    // Check if the track exists in the database
-    let track_exists: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?1")
-        .bind(&track)
-        .fetch_optional(db_pool)
+    let info = require_track(db_pool, &VideoId::from(track)).await?;
+
+    let tag_id = get_id_or_insert(db_pool, "tag", &tag).await?;
+
+    sqlx::query("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?1, ?2)")
+        .bind(info.id.as_str())
+        .bind(tag_id)
+        .execute(db_pool)
         .await?;
 
-    if let Some(track_id) = track_exists {
-        let tag_id = get_id_or_insert(db_pool, "tag", &tag).await?;
-
-        // Insert the association into the `track_tags` table
-        sqlx::query("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?1, ?2)")
-            .bind(&track_id)
-            .bind(tag_id)
-            .execute(db_pool)
-            .await?;
-
-        let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
-            .bind(&track)
-            .fetch_optional(db_pool)
-            .await?.ok_or("Track not found in database")?;
-
-        ctx.say(format!("Tag `{}` added to track `{}`", tag, track_title)).await?;
-    } else {
-        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
-    }
+    ctx.say(format!(
+        "Tag `{}` added to track `{}`",
+        tag,
+        info.title
+    ))
+    .await?;
 
     Ok(())
 }
@@ -242,33 +219,27 @@ pub async fn title(
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
-    // Check if the track exists in the database
-    let track_exists: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?1")
-        .bind(&track)
-        .fetch_optional(db_pool)
+    let track_id = VideoId::from(track);
+    let info = require_track(db_pool, &track_id).await?;
+
+    let old_title = info.title.clone();
+
+    sqlx::query("UPDATE tracks SET track_title = ?1 WHERE id = ?2")
+        .bind(&new_title)
+        .bind(info.id.as_str())
+        .execute(db_pool)
         .await?;
 
-    if let Some(track_id) = track_exists {
-        // Update the track's title in the database
-        let old_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
-            .bind(&track)
-            .fetch_optional(db_pool)
-            .await?.ok_or("Track not found in database")?;
-
-        sqlx::query("UPDATE tracks SET track_title = ?1 WHERE id = ?2")
-            .bind(&new_title)
-            .bind(&track_id)
-            .execute(db_pool)
-            .await?;
-
-        ctx.say(format!("Set new title `{}` for track `{}`", new_title, old_title))
-        .await?;
-    } else {
-        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
-    }
+    ctx.say(format!(
+        "Set new title `{}` for track `{}`",
+        new_title,
+        old_title
+    ))
+    .await?;
 
     Ok(())
 }
+
 
 /// Set a track's artist
 #[poise::command(slash_command)]
@@ -283,30 +254,22 @@ pub async fn artist(
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
-    // Check if the track exists in the database
-    let track_exists: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?1")
-        .bind(&track)
-        .fetch_optional(db_pool)
+    let info = require_track(db_pool, &VideoId::from(track)).await?;
+
+    let artist_id = get_id_or_insert(db_pool, "artist", &new_artist).await?;
+
+    sqlx::query("UPDATE tracks SET artist_id = ?1 WHERE id = ?2")
+        .bind(artist_id)
+        .bind(info.id.as_str())
+        .execute(db_pool)
         .await?;
 
-    if let Some(track_id) = track_exists {
-        // Update the track's artist in the database
-        let artist_id = get_id_or_insert(db_pool, "artist", &new_artist).await?;
-        sqlx::query("UPDATE tracks SET artist_id = ?1 WHERE id = ?2")
-            .bind(artist_id)
-            .bind(&track_id)
-            .execute(db_pool)
-            .await?;
-
-        let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
-            .bind(&track)
-            .fetch_optional(db_pool)
-            .await?.ok_or("Track not found in database")?;
-
-        ctx.say(format!("Set new artist `{}` for track `{}`",new_artist, track_title)).await?;
-    } else {
-        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
-    }
+    ctx.say(format!(
+        "Set new artist `{}` for track `{}`",
+        new_artist,
+        info.title
+    ))
+    .await?;
 
     Ok(())
 }
@@ -324,31 +287,22 @@ pub async fn origin(
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
-    // Check if the track exists in the database
-    let track_exists: Option<String> = sqlx::query_scalar("SELECT id FROM tracks WHERE id = ?1")
-        .bind(&track)
-        .fetch_optional(db_pool)
+    let info = require_track(db_pool, &VideoId::from(track)).await?;
+
+    let origin_id = get_id_or_insert(db_pool, "origin", &new_origin).await?;
+
+    sqlx::query("UPDATE tracks SET origin_id = ?1 WHERE id = ?2")
+        .bind(origin_id)
+        .bind(info.id.as_str())
+        .execute(db_pool)
         .await?;
 
-    if let Some(track_id) = track_exists {
-        // Update the track's origin in the database
-        let origin_id = get_id_or_insert(db_pool, "origin", &new_origin).await?;
-        sqlx::query("UPDATE tracks SET origin_id = ?1 WHERE id = ?2")
-            .bind(origin_id)
-            .bind(&track_id)
-            .execute(db_pool)
-            .await?;
-
-        let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
-            .bind(&track)
-            .fetch_optional(db_pool)
-            .await?.ok_or("Track not found in database")?;
-
-        ctx.say(format!("Set new origin `{}` for track `{}`", new_origin, track_title))
-        .await?;
-    } else {
-        ctx.say(format!("The track `{}` could not be found in the database.", track)).await?;
-    }
+    ctx.say(format!(
+        "Set new origin `{}` for track `{}`",
+        new_origin,
+        info.title
+    ))
+    .await?;
 
     Ok(())
 }

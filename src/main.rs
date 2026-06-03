@@ -109,13 +109,7 @@ async fn main() -> Result<(), Error> {
         .setup(|_ctx, _ready, _framework| {
             Box::pin(async move {
                 // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(
-                    Data { 
-                        db_pool: pool,
-                        track_handles: RwLock::new(HashMap::new()),
-                        track_metadata: RwLock::new(HashMap::new())
-                    }
-                )
+                Ok(Data::new(pool))
             })
         })
         .build();
