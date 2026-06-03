@@ -1,6 +1,8 @@
 .DS_Store
 yt-dlp
 
+cookies.txt
+
 .env
 *.dca
 *.m4a

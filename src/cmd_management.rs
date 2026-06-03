@@ -47,6 +47,8 @@ pub async fn download(
         .arg("--no-playlist")
         .arg("--write-info-json")
         .arg("--no-progress")
+        .arg("--cookies")
+        .arg("cookies.txt")
         .arg(yt_link)
         .output()
         .expect("Failed to execute yt-dlp");
