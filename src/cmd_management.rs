@@ -1,8 +1,11 @@
-use crate::definitions::{Context, Error, VideoId};
+use crate::definitions::{Context, Error, VideoId, TrackInfo};
 use crate::autocomplete::{autocomplete_track, autocomplete_tag, autocomplete_origin, autocomplete_artist};
 use crate::library::{get_id_or_insert, get_youtube_id, process_ytdlp_json, require_track};
+use crate::track_resolver::lookup_track;
 use std::process::Command;
 use serde_json::Value;
+use sqlx::SqlitePool;
+
 
 pub async fn download_direct(
     ctx: Context<'_>,
@@ -10,43 +13,44 @@ pub async fn download_direct(
     track_artist: Option<String>,
     track_origin: Option<String>,
     track_title: Option<String>,
-) -> Result<(String, String, String), Error> {
-    let video_id = get_youtube_id(&yt_link).ok_or("Invalid YouTube link")?;
-
-    let db_pool = &ctx.data().db_pool;
-
-    // guard against duplicate downloads
-    match sqlx::query_scalar::<_, String>(
-        "SELECT track_title FROM tracks WHERE id = ?1",
-    )
-    .bind(&video_id)
-    .fetch_optional(db_pool)
-    .await?
-    {
-        Some(title) => {
-            ctx.say(format!(
-                "This track exists in the database already as `{}`.",
-                title
-            ))
-            .await?;
-
-            let (title_db, artist_db): (String, String) = sqlx::query_as(
-                "SELECT track_title, artist_id FROM tracks WHERE id = ?1",
-            )
-            .bind(&video_id)
-            .fetch_one(db_pool)
-            .await?;
-
-            let artist_name: String = artist_db;
-
-            return Ok((video_id, title_db, artist_name));
-        }
-        None => {}
-    }
-
+) -> Result<TrackInfo, Error> {
     ctx.defer().await?;
 
-    // Download the track using yt-dlp
+    let track = download_track(
+        &ctx.data().db_pool,
+        yt_link,
+        track_artist,
+        track_origin,
+        track_title,
+    )
+    .await?;
+
+    ctx.say(format!(
+        "File downloaded and added to the library: `{}`",
+        track.title
+    ))
+    .await?;
+
+    Ok(track)
+}
+
+pub async fn download_track(
+    db_pool: &SqlitePool,
+    yt_link: String,
+    track_artist: Option<String>,
+    track_origin: Option<String>,
+    track_title: Option<String>,
+) -> Result<TrackInfo, Error> {
+    let video_id = VideoId::from(
+        get_youtube_id(&yt_link)
+            .ok_or("Invalid YouTube link")?
+    );
+
+    // Guard against duplicate downloads
+    if let Some(track) = lookup_track(db_pool, &video_id).await? {
+        return Ok(track);
+    }
+
     let output = Command::new("./yt-dlp")
         .arg("-t")
         .arg("mp3")
@@ -69,36 +73,48 @@ pub async fn download_direct(
         .into());
     }
 
-    let slim = process_ytdlp_json(video_id.clone()).map_err(|e| {
-        format!(
-            "Failed to process metadata JSON for video ID `{}`: {}",
-            video_id, e
-        )
-    })?;
+    let slim = process_ytdlp_json(video_id.as_str().to_string())
+        .map_err(|e| {
+            format!(
+                "Failed to process metadata JSON for video ID `{}`: {}",
+                video_id.as_str(),
+                e
+            )
+        })?;
 
-    let track_title = track_title.unwrap_or_else(|| {
+    let title = track_title.unwrap_or_else(|| {
         slim.get("title")
             .and_then(Value::as_str)
             .unwrap_or("Unknown Title")
             .to_string()
     });
 
-    let track_artist = track_artist.unwrap_or_else(|| {
+    let artist = track_artist.unwrap_or_else(|| {
         "No artist provided".to_string()
     });
 
-    let track_origin = track_origin.unwrap_or_else(|| {
+    let origin = track_origin.unwrap_or_else(|| {
         "No origin provided".to_string()
     });
 
-    let artist_id = get_id_or_insert(db_pool, "artist", &track_artist).await?;
-    let origin_id = get_id_or_insert(db_pool, "origin", &track_origin).await?;
+    let artist_id =
+        get_id_or_insert(db_pool, "artist", &artist).await?;
+
+    let origin_id =
+        get_id_or_insert(db_pool, "origin", &origin).await?;
 
     sqlx::query(
-        "INSERT INTO tracks (id, upload_date, yt_title, track_title, artist_id, origin_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO tracks (
+            id,
+            upload_date,
+            yt_title,
+            track_title,
+            artist_id,
+            origin_id
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     )
-    .bind(&video_id)
+    .bind(video_id.as_str())
     .bind(
         slim.get("upload_date")
             .and_then(Value::as_str)
@@ -109,19 +125,18 @@ pub async fn download_direct(
             .and_then(Value::as_str)
             .unwrap_or("Unknown Title"),
     )
-    .bind(&track_title)
+    .bind(&title)
     .bind(artist_id)
     .bind(origin_id)
     .execute(db_pool)
     .await?;
 
-    ctx.say(format!(
-        "File downloaded and added to the library: `{}`",
-        track_title
-    ))
-    .await?;
-
-    Ok((video_id, track_title, track_artist))
+    Ok(TrackInfo {
+        id: video_id,
+        title,
+        artist,
+        origin,
+    })
 }
 
 /// Download a track from a YouTube link

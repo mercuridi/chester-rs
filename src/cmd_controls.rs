@@ -5,10 +5,10 @@ use songbird::input::File as SongbirdFile;
 use songbird::input::cached::Compressed;
 use songbird::driver::Bitrate;
 use songbird::tracks::LoopState;
-use crate::definitions::{Context, Error, Data, NowPlaying, TrackInfo, VideoId};
-use crate::library::{get_vc_id, join_vc, get_youtube_id};
+use crate::definitions::{Context, Error, Data, NowPlaying, TrackInfo};
+use crate::library::{get_vc_id, join_vc};
 use crate::autocomplete::*;
-use crate::cmd_management::download_direct;
+use crate::track_resolver::resolve_track;
 
 /// Joins your voice channel
 #[poise::command(slash_command)]
@@ -96,65 +96,16 @@ pub async fn play(
     // variable as the argument's name due to the autocorrect implementation
     // makes much more sense on user-end to name it track
 ) -> Result<(), Error> {
-    // immediately fix the above comment's note so the code is clearer
-    let track_ref = track;
+    let track_info =
+        resolve_track(&ctx.data().db_pool, track).await?;
 
-    let db_pool = &ctx.data().db_pool;
-
-    // Normalize input early (URL or raw ID → YouTube ID)
-    let lookup_id = get_youtube_id(&track_ref)
-        .unwrap_or_else(|| track_ref.clone());
-
-    // Try DB lookup using normalized ID
-    let track_metadata: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT tracks.track_title,
-                artists.artist,
-                origins.origin
-        FROM tracks
-        LEFT JOIN artists ON tracks.artist_id = artists.id
-        LEFT JOIN origins ON tracks.origin_id = origins.id
-        WHERE tracks.id = ?1",
-    )
-    .bind(&lookup_id)
-    .fetch_optional(db_pool)
-    .await?;
-
-    let track_info = match track_metadata {
-        Some((title, artist, origin)) => {
-            TrackInfo {
-                id: VideoId::from(lookup_id.clone()),
-                title,
-                artist,
-                origin,
-            }
-        }
-
-        None => {
-            ctx.say(format!(
-                "Track `{}` not found locally. Downloading...",
-                lookup_id
-            ))
-            .await?;
-
-            let (track_id, title, artist) =
-                download_direct(ctx, track_ref, None, None, None).await?;
-
-            TrackInfo {
-                id: VideoId::from(track_id),
-                title,
-                artist,
-                origin: "Unknown".to_string(), // see note below
-            }
-        }
-    };
-
-    // Single unified playback path
     play_direct(ctx, track_info.clone()).await?;
 
     ctx.say(format!(
-        "Now playing: `{}` by `{}`",
+        "Now playing: `{}` by `{}`, from `{}`.",
         track_info.title,
-        track_info.artist
+        track_info.artist,
+        track_info.origin
     ))
     .await?;
 
