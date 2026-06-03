@@ -84,8 +84,14 @@ pub async fn play(
     ctx: Context<'_>,
     #[description = "Track to play now"]
     #[autocomplete = "autocomplete_track"]
-    track_ref: String,
+    track: String, 
+    // track here actually refers to a youtube id but discord exposes this
+    // variable as the argument's name due to the autocorrect implementation
+    // makes much more sense on user-end to name it track
 ) -> Result<(), Error> {
+    // immediately fix the above comment's note so the code is clearer
+    let track_ref = track;
+
     let db_pool = &ctx.data().db_pool;
 
     // Normalize input early (URL or raw ID → YouTube ID)
