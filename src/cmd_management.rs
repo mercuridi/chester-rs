@@ -4,21 +4,13 @@ use crate::library::{get_id_or_insert, get_youtube_id, process_ytdlp_json};
 use std::process::Command;
 use serde_json::Value;
 
-/// Download a track from a YouTube link
-#[poise::command(slash_command)]
-pub async fn download(
+pub async fn download_direct(
     ctx: Context<'_>,
-    #[description = "YouTube link to download from"]
     yt_link: String,
-    #[description = "The actual artist of the track"]
-    #[autocomplete = "autocomplete_artist"]
     track_artist: Option<String>,
-    #[description = "The origin of the track (e.g., game/movie title)"]
-    #[autocomplete = "autocomplete_origin"]
     track_origin: Option<String>,
-    #[description = "The actual title of the track"] track_title: Option<String>,
-) -> Result<(), Error> {
-
+    track_title: Option<String>,
+) -> Result<String, Error> {
     let video_id = get_youtube_id(&yt_link).ok_or("Invalid YouTube link")?;
 
     // guard against duplicate downloads
@@ -31,7 +23,7 @@ pub async fn download(
     {
         Some(title) => {
             ctx.say(format!("This track exists in the database already as `{}`.", title)).await?;
-            return Ok(())
+            return Ok(video_id)
         }
         None => ()
     }
@@ -106,6 +98,25 @@ pub async fn download(
 
     ctx.say(format!("File downloaded and added to the library: `{}`", track_title))
         .await?;
+    Ok(video_id)
+}
+
+/// Download a track from a YouTube link
+#[poise::command(slash_command)]
+pub async fn download(
+    ctx: Context<'_>,
+    #[description = "YouTube link to download from"]
+    yt_link: String,
+    #[description = "The actual artist of the track"]
+    #[autocomplete = "autocomplete_artist"]
+    track_artist: Option<String>,
+    #[description = "The origin of the track (e.g., game/movie title)"]
+    #[autocomplete = "autocomplete_origin"]
+    track_origin: Option<String>,
+    #[description = "The actual title of the track"]
+    track_title: Option<String>,
+) -> Result<(), Error> {
+    download_direct(ctx, yt_link, track_artist, track_origin, track_title).await?;
     Ok(())
 }
 
