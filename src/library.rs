@@ -25,10 +25,10 @@ pub fn process_ytdlp_json(
 
     // Extract only the fields we want
     let slim = json!({
-        "id": v.get("id").cloned().unwrap(),
-        "upload_date": v.get("upload_date").cloned().unwrap(),
-        "title": v.get("title").cloned().unwrap(),
-        "channel": v.get("channel").cloned().unwrap(),
+        "id": v.get("id").cloned().ok_or_else(|| anyhow::anyhow!("Missing 'id' field in yt-dlp JSON"))?,
+        "upload_date": v.get("upload_date").cloned().ok_or_else(|| anyhow::anyhow!("Missing 'upload_date' field in yt-dlp JSON"))?,
+        "title": v.get("title").cloned().ok_or_else(|| anyhow::anyhow!("Missing 'title' field in yt-dlp JSON"))?,
+        "channel": v.get("channel").cloned().ok_or_else(|| anyhow::anyhow!("Missing 'channel' field in yt-dlp JSON"))?,
     });
 
     fs::remove_file(&path).ok();
@@ -103,10 +103,12 @@ pub async fn get_id_or_insert(
     db_pool: &Pool<Sqlite>,
     field_name: &str, // singular, e.g. "tag"
     pls_find: &str,
-) -> i64 {
+) -> Result<i64, Error> {
     let table_name = format!("{}s", field_name);
 
-    if &table_name == "tracks" {panic!("time for you to fix this type mismatch bug you left behind");}
+    if &table_name == "tracks" {
+        return Err("get_id_or_insert cannot be used with 'track' field".into());
+    }
 
     // Build SELECT statement with identifiers in the string
     let select_sql = format!("SELECT id FROM {} WHERE {} = ?1", table_name, field_name);
@@ -115,9 +117,9 @@ pub async fn get_id_or_insert(
         .bind(&pls_find)
         .fetch_optional(db_pool)
         .await
-        .unwrap()
+        .map_err(|e| format!("Database select failed for {}: {}", table_name, e))?
     {
-        Some(id) => id,
+        Some(id) => Ok(id),
         None => {
             // Insert new value
             let insert_sql = format!("INSERT INTO {} ({}) VALUES (?1)", table_name, field_name);
@@ -125,22 +127,22 @@ pub async fn get_id_or_insert(
                 .bind(&pls_find)
                 .execute(db_pool)
                 .await
-                .unwrap();
+                .map_err(|e| format!("Database insert failed for {}: {}", table_name, e))?;
 
             // Fetch its id
-            sqlx::query_scalar::<_, i64>(&select_sql)
+            let id = sqlx::query_scalar::<_, i64>(&select_sql)
                 .bind(&pls_find)
                 .fetch_one(db_pool)
                 .await
-                .unwrap()
+                .map_err(|e| format!("Database fetch after insert failed for {}: {}", table_name, e))?;
+            
+            Ok(id)
         }
     }
 }
 
 pub async fn get_vc_id(ctx: DiscordContext<'_>) -> Result<ChannelId, Error> {
-    println!("Getting VC id");
-
-    let guild_id = ctx.guild_id().unwrap();
+    let guild_id = ctx.guild_id().ok_or("Not in a guild context")?;
 
     let voice_state = ctx.serenity_context()
         .cache

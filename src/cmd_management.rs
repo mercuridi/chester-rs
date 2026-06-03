@@ -21,8 +21,7 @@ pub async fn download_direct(
     )
     .bind(&video_id)
     .fetch_optional(db_pool)
-    .await
-    .unwrap()
+    .await?
     {
         Some(title) => {
             ctx.say(format!(
@@ -92,6 +91,9 @@ pub async fn download_direct(
         "No origin provided".to_string()
     });
 
+    let artist_id = get_id_or_insert(db_pool, "artist", &track_artist).await?;
+    let origin_id = get_id_or_insert(db_pool, "origin", &track_origin).await?;
+
     sqlx::query(
         "INSERT INTO tracks (id, upload_date, yt_title, track_title, artist_id, origin_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -108,8 +110,8 @@ pub async fn download_direct(
             .unwrap_or("Unknown Title"),
     )
     .bind(&track_title)
-    .bind(get_id_or_insert(db_pool, "artist", &track_artist).await)
-    .bind(get_id_or_insert(db_pool, "origin", &track_origin).await)
+    .bind(artist_id)
+    .bind(origin_id)
     .execute(db_pool)
     .await?;
 
@@ -167,8 +169,7 @@ pub async fn reset_tags(
         let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
             .bind(&track)
             .fetch_optional(db_pool)
-            .await?
-            .unwrap();
+            .await?.ok_or("Track not found in database")?;
 
         ctx.say(format!("Reset tags for track `{}`", track_title))
             .await?;
@@ -199,7 +200,7 @@ pub async fn add_tag(
         .await?;
 
     if let Some(track_id) = track_exists {
-        let tag_id = get_id_or_insert(db_pool, "tag", &tag).await;
+        let tag_id = get_id_or_insert(db_pool, "tag", &tag).await?;
 
         // Insert the association into the `track_tags` table
         sqlx::query("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?1, ?2)")
@@ -211,8 +212,7 @@ pub async fn add_tag(
         let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
             .bind(&track)
             .fetch_optional(db_pool)
-            .await?
-            .unwrap();
+            .await?.ok_or("Track not found in database")?;
 
         ctx.say(format!("Tag `{}` added to track `{}`", tag, track_title)).await?;
     } else {
@@ -253,8 +253,7 @@ pub async fn title(
         let old_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
             .bind(&track)
             .fetch_optional(db_pool)
-            .await?
-            .unwrap();
+            .await?.ok_or("Track not found in database")?;
 
         sqlx::query("UPDATE tracks SET track_title = ?1 WHERE id = ?2")
             .bind(&new_title)
@@ -292,8 +291,9 @@ pub async fn artist(
 
     if let Some(track_id) = track_exists {
         // Update the track's artist in the database
+        let artist_id = get_id_or_insert(db_pool, "artist", &new_artist).await?;
         sqlx::query("UPDATE tracks SET artist_id = ?1 WHERE id = ?2")
-            .bind(get_id_or_insert(db_pool, "artist", &new_artist).await)
+            .bind(artist_id)
             .bind(&track_id)
             .execute(db_pool)
             .await?;
@@ -301,8 +301,7 @@ pub async fn artist(
         let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
             .bind(&track)
             .fetch_optional(db_pool)
-            .await?
-            .unwrap();
+            .await?.ok_or("Track not found in database")?;
 
         ctx.say(format!("Set new artist `{}` for track `{}`",new_artist, track_title)).await?;
     } else {
@@ -333,8 +332,9 @@ pub async fn origin(
 
     if let Some(track_id) = track_exists {
         // Update the track's origin in the database
+        let origin_id = get_id_or_insert(db_pool, "origin", &new_origin).await?;
         sqlx::query("UPDATE tracks SET origin_id = ?1 WHERE id = ?2")
-            .bind(get_id_or_insert(db_pool, "origin", &new_origin).await)
+            .bind(origin_id)
             .bind(&track_id)
             .execute(db_pool)
             .await?;
@@ -342,8 +342,7 @@ pub async fn origin(
         let track_title: String = sqlx::query_scalar("SELECT track_title FROM tracks WHERE id = ?1")
             .bind(&track)
             .fetch_optional(db_pool)
-            .await?
-            .unwrap();
+            .await?.ok_or("Track not found in database")?;
 
         ctx.say(format!("Set new origin `{}` for track `{}`", new_origin, track_title))
         .await?;

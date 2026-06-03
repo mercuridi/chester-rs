@@ -157,7 +157,7 @@ pub fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
             .iter()
             .enumerate()
             .max_by_key(|&(_, &l)| l)
-            .unwrap();
+            .expect("lens vector should never be empty when truncating autocomplete display");
 
         // decide how many bytes to chop
         let chop = excess.min(max_len);
