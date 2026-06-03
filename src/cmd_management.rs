@@ -10,22 +10,39 @@ pub async fn download_direct(
     track_artist: Option<String>,
     track_origin: Option<String>,
     track_title: Option<String>,
-) -> Result<String, Error> {
+) -> Result<(String, String, String), Error> {
     let video_id = get_youtube_id(&yt_link).ok_or("Invalid YouTube link")?;
 
-    // guard against duplicate downloads
     let db_pool = &ctx.data().db_pool;
-    match sqlx::query_scalar::<_, String>("SELECT track_title FROM tracks WHERE id = ?1")
-        .bind(&video_id)
-        .fetch_optional(db_pool)
-        .await
-        .unwrap()
+
+    // guard against duplicate downloads
+    match sqlx::query_scalar::<_, String>(
+        "SELECT track_title FROM tracks WHERE id = ?1",
+    )
+    .bind(&video_id)
+    .fetch_optional(db_pool)
+    .await
+    .unwrap()
     {
         Some(title) => {
-            ctx.say(format!("This track exists in the database already as `{}`.", title)).await?;
-            return Ok(video_id)
+            ctx.say(format!(
+                "This track exists in the database already as `{}`.",
+                title
+            ))
+            .await?;
+
+            let (title_db, artist_db): (String, String) = sqlx::query_as(
+                "SELECT track_title, artist_id FROM tracks WHERE id = ?1",
+            )
+            .bind(&video_id)
+            .fetch_one(db_pool)
+            .await?;
+
+            let artist_name: String = artist_db;
+
+            return Ok((video_id, title_db, artist_name));
         }
-        None => ()
+        None => {}
     }
 
     ctx.defer().await?;
@@ -41,7 +58,7 @@ pub async fn download_direct(
         .arg("--no-progress")
         .arg("--cookies")
         .arg("cookies.txt")
-        .arg(yt_link)
+        .arg(&yt_link)
         .output()
         .expect("Failed to execute yt-dlp");
 
@@ -53,7 +70,6 @@ pub async fn download_direct(
         .into());
     }
 
-    // Process the downloaded metadata JSON
     let slim = process_ytdlp_json(video_id.clone()).map_err(|e| {
         format!(
             "Failed to process metadata JSON for video ID `{}`: {}",
@@ -61,7 +77,6 @@ pub async fn download_direct(
         )
     })?;
 
-    // Extract metadata or use provided values
     let track_title = track_title.unwrap_or_else(|| {
         slim.get("title")
             .and_then(Value::as_str)
@@ -69,12 +84,14 @@ pub async fn download_direct(
             .to_string()
     });
 
-    let track_artist = track_artist.unwrap_or_else(|| "No artist provided".to_string());
+    let track_artist = track_artist.unwrap_or_else(|| {
+        "No artist provided".to_string()
+    });
 
-    let track_origin = track_origin.unwrap_or_else(|| "No origin provided".to_string());
+    let track_origin = track_origin.unwrap_or_else(|| {
+        "No origin provided".to_string()
+    });
 
-    // Insert the track metadata into the database
-    let db_pool = &ctx.data().db_pool;
     sqlx::query(
         "INSERT INTO tracks (id, upload_date, yt_title, track_title, artist_id, origin_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -96,9 +113,13 @@ pub async fn download_direct(
     .execute(db_pool)
     .await?;
 
-    ctx.say(format!("File downloaded and added to the library: `{}`", track_title))
-        .await?;
-    Ok(video_id)
+    ctx.say(format!(
+        "File downloaded and added to the library: `{}`",
+        track_title
+    ))
+    .await?;
+
+    Ok((video_id, track_title, track_artist))
 }
 
 /// Download a track from a YouTube link

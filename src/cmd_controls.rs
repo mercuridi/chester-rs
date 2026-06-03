@@ -108,16 +108,10 @@ pub async fn play(
     .fetch_optional(db_pool)
     .await?;
 
-    let track_ref = match track_metadata {
+    let (track_ref, title, artist) = match track_metadata {
         Some((track_title, track_artist)) => {
-            ctx.say(format!(
-                "Now playing: `{}` by `{}`",
-                track_title, track_artist
-            ))
-            .await?;
-
             // Already downloaded/local
-            lookup_id
+            (lookup_id, track_title, track_artist)
         }
         None => {
             ctx.say(format!(
@@ -133,6 +127,12 @@ pub async fn play(
 
     // Single unified playback path
     play_direct(ctx, track_ref).await?;
+
+    ctx.say(format!(
+        "Now playing: `{}` by `{}`",
+        title, artist
+    ))
+    .await?;
 
     Ok(())
 }
