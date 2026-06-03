@@ -1,6 +1,5 @@
 mod cmd_controls;
 mod definitions;
-mod json_handling;
 mod autocomplete;
 mod constants;
 mod library;
@@ -11,10 +10,8 @@ mod cmd_management;
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
 
-use std::collections::HashMap;
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
 use songbird::SerenityInit; use sqlx::SqlitePool;
-use tokio::sync::RwLock;
 use dotenv::dotenv;
 
 use crate::definitions::{Data, Error};
