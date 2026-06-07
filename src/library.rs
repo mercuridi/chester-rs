@@ -1,4 +1,4 @@
-use crate::constants::{ELLIPSIS, ELLIPSIS_LEN};
+use crate::constants::{ELLIPSIS, ELLIPSIS_DISPLAY_WIDTH};
 use crate::definitions::{PoiseContext, Error};
 
 use songbird::Call;
@@ -36,7 +36,7 @@ pub fn process_ytdlp_json(
 }
 
 pub fn lightweight_trim(mut choice: String, max_width: usize) -> String {
-    if max_width <= ELLIPSIS_LEN {
+    if max_width <= ELLIPSIS_DISPLAY_WIDTH {
         return ELLIPSIS.to_string();
     }
 
