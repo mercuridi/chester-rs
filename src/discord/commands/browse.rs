@@ -1,14 +1,14 @@
 use crate::definitions::{PoiseContext, Error};
-use crate::utils::format::lightweight_trim;
 use crate::db::repository::{fetch_library_all, fetch_library_by_artist, fetch_library_by_incomplete, fetch_library_by_origin, fetch_library_by_tag};
 
 // constants for library pagination
-const ROW_MAX_WIDTH:                usize = 50; // max 56
-const MAX_RESULTS_PER_PAGE:         usize = 20;
-const LIBRARY_SEPARATOR:            &str = " ";
-const ROW_SEPARATOR:                &str = "-";
-const DUPLICATE_INDICATOR:          &str = "";
-
+const ROW_MAX_WIDTH:        usize = 56;
+const MAX_RESULTS_PER_PAGE: usize = 20;
+const LIBRARY_SEPARATOR:    &str  = " ";
+const ROW_SEPARATOR:        &str  = "-";
+const DUPLICATE_INDICATOR:  &str  = "";
+const ELLIPSIS:             &str  = "…";
+const ELLIPSIS_DISPLAY_WIDTH: usize = 1; // display width, not byte length
 
 /// /library
 #[poise::command(slash_command, subcommands("all", "artist", "origin", "tags", "incomplete"))]
@@ -87,7 +87,12 @@ async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error>
 
     let mut headers_with_rownum = vec!["#"];
     headers_with_rownum.extend(headers.clone());
-    let (header, formatted_rows) = format_table(&headers_with_rownum, &data_with_rownum, &col_widths, mode);
+    let (header, formatted_rows) = format_table(
+        &headers_with_rownum,
+        &data_with_rownum,
+        &col_widths,
+        rownum_width,
+    );
 
     let pages = paginate_table(&header, &formatted_rows, MAX_RESULTS_PER_PAGE);
     let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
@@ -96,113 +101,147 @@ async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error>
     Ok(())
 }
 
+fn truncate_to_display_width(s: &str, max_display_width: usize) -> String {
+    if max_display_width == 0 {
+        return String::new();
+    }
 
-fn paginate_table(header: &str, rows: &[String], max_per_page: usize) -> Vec<String> {
-    let separator = ROW_SEPARATOR.repeat(ROW_MAX_WIDTH);
-    rows.chunks(max_per_page)
-        .map(|chunk| {
-            format!("```ansi\n\u{001b}[0;39m{}\n{}\n{}\n```", header, separator, chunk.join("\n"))
-        })
-        .collect()
+    // Count display characters, not bytes
+    let char_count = s.chars().count();
+    if char_count <= max_display_width {
+        return s.to_string();
+    }
+
+    // Need to truncate — reserve room for ellipsis
+    let truncate_at = max_display_width.saturating_sub(ELLIPSIS_DISPLAY_WIDTH);
+    let truncated: String = s.chars().take(truncate_at).collect();
+    format!("{}{}", truncated, ELLIPSIS)
 }
 
+fn pad_right(s: &str, display_width: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count >= display_width {
+        return s.to_string();
+    }
+    let padding = display_width - char_count;
+    format!("{}{}", s, " ".repeat(padding))
+}
+
+fn pad_left(s: &str, display_width: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count >= display_width {
+        return s.to_string();
+    }
+    let padding = display_width - char_count;
+    format!("{}{}", " ".repeat(padding), s)
+}
+
+fn compute_column_widths(weights: &[f64], rownum_width: usize) -> Vec<usize> {
+    let num_content_cols = weights.len();
+    // total separators = one between each column including rownum col
+    let separator_count = num_content_cols; // rownum + N content cols = N separators
+    let available = ROW_MAX_WIDTH
+        .saturating_sub(rownum_width)
+        .saturating_sub(separator_count);
+
+    let total_weight: f64 = weights.iter().sum();
+
+    let mut col_widths: Vec<usize> = weights
+        .iter()
+        .map(|w| {
+            ((w / total_weight) * available as f64).floor() as usize
+        })
+        .map(|w| w.max(4))
+        .collect();
+
+    // Distribute any leftover chars left-to-right
+    let used: usize = col_widths.iter().sum::<usize>() + rownum_width + separator_count;
+    let mut leftover = ROW_MAX_WIDTH.saturating_sub(used);
+    let mut i = 0;
+    while leftover > 0 {
+        col_widths[i] += 1;
+        leftover -= 1;
+        i = (i + 1) % col_widths.len();
+    }
+
+    tracing::debug!("col_widths (excl rownum): {:?}", col_widths);
+    tracing::debug!(
+        "total check: {} + {} rownum + {} seps = {}",
+        col_widths.iter().sum::<usize>(),
+        rownum_width,
+        separator_count,
+        col_widths.iter().sum::<usize>() + rownum_width + separator_count
+    );
+
+    col_widths
+}
 
 fn format_table(
     headers: &[&str],
     data: &[Vec<String>],
-    col_widths: &[usize],
-    _mode: &str
+    col_widths: &[usize], // does NOT include rownum width — passed separately
+    rownum_width: usize,
 ) -> (String, Vec<String>) {
-    tracing::debug!("{:?}", col_widths);
+    // Build header row
+    // col_widths[0] corresponds to headers[1] (first content col after rownum)
+    let header = {
+        let rownum_cell = pad_left("#", rownum_width);
+        let content_cells: String = headers[1..]
+            .iter()
+            .enumerate()
+            .map(|(i, h)| {
+                let truncated = truncate_to_display_width(h, col_widths[i]);
+                pad_right(&truncated, col_widths[i])
+            })
+            .collect::<Vec<_>>()
+            .join(LIBRARY_SEPARATOR);
+        format!("{}{}{}", rownum_cell, LIBRARY_SEPARATOR, content_cells)
+    };
 
-    let header = headers
-        .iter()
-        .enumerate()
-        .map(|(i, h)| {
-            let text = if i == 0 { h.to_string() } else { lightweight_trim(h.to_string(), col_widths[i]) };
-            match i {
-                0 => format!("{:>width$}", text, width = col_widths[i]),
-                _ => format!("{:<width$}", text, width = col_widths[i])
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(LIBRARY_SEPARATOR);
-
-    let mut previous_row: Vec<String> = vec!["".to_string(); headers.len()];
+    let mut previous_row: Vec<String> = vec![String::new(); headers.len() - 1];
 
     let formatted_rows = data
-        .iter().enumerate()
-        .map(|(i, row)| {
-            let mut formatted_row = Vec::with_capacity(row.len());
+        .iter()
+        .enumerate()
+        .map(|(row_idx, row)| {
+            // row[0] is the row number string e.g. "1."
+            // row[1..] are the content columns
+            let rownum_cell = pad_left(&row[0], rownum_width);
 
-            for (j, val) in row.iter().enumerate() {
-                // Compare with previous row; replace with blank if identical
-                let text = if j == 0 {
-                    val.clone()
-                } else if val == &previous_row[j] && &previous_row[j] != "" && i % MAX_RESULTS_PER_PAGE != 0 {
-                    DUPLICATE_INDICATOR.to_string()
-                } else {
-                    lightweight_trim(val.clone(), col_widths[j])
-                };
-                let formatted = if j == 0 {
-                    format!("{:>width$}", text, width = col_widths[j])
-                } else {
-                    format!("{:<width$}", text, width = col_widths[j])
-                };
+            let content_cells: String = row[1..]
+                .iter()
+                .enumerate()
+                .map(|(col_idx, val)| {
+                    let is_duplicate = val == &previous_row[col_idx]
+                        && !previous_row[col_idx].is_empty()
+                        && row_idx % MAX_RESULTS_PER_PAGE != 0;
 
-                formatted_row.push(formatted);
+                    let text = if is_duplicate {
+                        DUPLICATE_INDICATOR.to_string()
+                    } else {
+                        truncate_to_display_width(val, col_widths[col_idx])
+                    };
+
+                    pad_right(&text, col_widths[col_idx])
+                })
+                .collect::<Vec<_>>()
+                .join(LIBRARY_SEPARATOR);
+
+            // Update previous row tracker (content cols only)
+            for (col_idx, val) in row[1..].iter().enumerate() {
+                previous_row[col_idx] = val.clone();
             }
 
-            // Update previous_row for next iteration
-            previous_row = row.clone();
-            formatted_row.join(LIBRARY_SEPARATOR)
+            format!("{}{}{}", rownum_cell, LIBRARY_SEPARATOR, content_cells)
         })
         .collect();
 
     (header, formatted_rows)
 }
 
-
-
-
-fn compute_column_widths(weights: &[f64], rownum_width: usize) -> Vec<usize> {
-    let num_columns = weights.len() + 1; // rownum + content
-    let separator_space = num_columns - 1;
-
-    let remaining_width = ROW_MAX_WIDTH - rownum_width - separator_space;
-    let total_weight: f64 = weights.iter().sum();
-
-    let mut col_widths = vec![rownum_width];
-    for w in weights {
-        let width = ((*w / total_weight) * remaining_width as f64).floor() as usize;
-        col_widths.push(width.max(4));
-    }
-
-    // Adjust for rounding to match total width exactly
-    let current_total: usize = col_widths.iter().sum::<usize>() + separator_space;
-    let mut extra_space = ROW_MAX_WIDTH as isize - current_total as isize;
-    tracing::debug!("first pass result: {:?}", col_widths);
-    tracing::debug!("first pass total : {}", current_total);
-    tracing::debug!("first pass spare : {}", extra_space);
-    let mut i = 1;
-    while extra_space > 0 {
-        col_widths[i] += 1;
-        extra_space -= 1;
-        i += 1;
-        if i >= col_widths.len() {
-            i = 1;
-        }
-    }
-    tracing::debug!("second pass result: {:?}", col_widths);
-
-    col_widths
-}
-
-
-
 fn add_row_numbers(data: Vec<Vec<String>>) -> (Vec<Vec<String>>, usize) {
     let total_rows = data.len();
-    let rownum_width = total_rows.to_string().len() + 1; // e.g., "12."
+    let rownum_width = total_rows.to_string().len() + 1; // e.g. "12." = 3
     let data_with_rownum = data
         .into_iter()
         .enumerate()
@@ -213,4 +252,18 @@ fn add_row_numbers(data: Vec<Vec<String>>) -> (Vec<Vec<String>>, usize) {
         })
         .collect();
     (data_with_rownum, rownum_width)
+}
+
+fn paginate_table(header: &str, rows: &[String], max_per_page: usize) -> Vec<String> {
+    let separator = ROW_SEPARATOR.repeat(ROW_MAX_WIDTH);
+    rows.chunks(max_per_page)
+        .map(|chunk| {
+            format!(
+                "```ansi\n\u{001b}[0;39m{}\n{}\n{}\n```",
+                header,
+                separator,
+                chunk.join("\n")
+            )
+        })
+        .collect()
 }
