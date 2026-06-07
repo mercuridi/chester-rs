@@ -4,6 +4,7 @@ mod db;
 mod discord;
 mod player;
 mod utils;
+mod library_sync;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -11,6 +12,7 @@ mod utils;
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
 use songbird::SerenityInit; use sqlx::SqlitePool;
 use dotenv::dotenv;
+use tracing::info;
 
 use crate::definitions::{Data, Error};
 
@@ -54,6 +56,15 @@ async fn main() -> Result<(), Error> {
     let pool = SqlitePool::connect(database_url).await?;
 
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
+
+    let stats = library_sync::sync_audio_library(&pool).await?;
+
+    info!(
+        downloaded = stats.downloaded,
+        failed = stats.failed,
+        skipped = stats.skipped,
+        "Library sync complete"
+    );
 
     let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN in .env");
 

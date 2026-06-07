@@ -1,6 +1,5 @@
 use crate::definitions::{PoiseContext, MetadataKind};
 use crate::db::repository::{search_incomplete_tracks, search_metadata, search_tracks};
-use std::collections::HashSet;
 use poise::serenity_prelude::AutocompleteChoice;
 use crate::utils::format::{lightweight_trim, build_autocomplete_display};
 
