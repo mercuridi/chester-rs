@@ -102,7 +102,7 @@ fn format_table(
     col_widths: &[usize],
     _mode: &str
 ) -> (String, Vec<String>) {
-    println!("{:?}", col_widths);
+    tracing::debug!("{:?}", col_widths);
 
     let header = headers
         .iter()
@@ -170,9 +170,9 @@ fn compute_column_widths(weights: &[f64], rownum_width: usize) -> Vec<usize> {
     // Adjust for rounding to match total width exactly
     let current_total: usize = col_widths.iter().sum::<usize>() + separator_space;
     let mut extra_space = ROW_MAX_WIDTH as isize - current_total as isize;
-    println!("first pass result: {:?}", col_widths);
-    println!("first pass total : {}", current_total);
-    println!("first pass spare : {}", extra_space);
+    tracing::debug!("first pass result: {:?}", col_widths);
+    tracing::debug!("first pass total : {}", current_total);
+    tracing::debug!("first pass spare : {}", extra_space);
     let mut i = 1;
     while extra_space > 0 {
         col_widths[i] += 1;
@@ -182,7 +182,7 @@ fn compute_column_widths(weights: &[f64], rownum_width: usize) -> Vec<usize> {
             i = 1;
         }
     }
-    println!("second pass result: {:?}", col_widths);
+    tracing::debug!("second pass result: {:?}", col_widths);
 
     col_widths
 }

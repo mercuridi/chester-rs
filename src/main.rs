@@ -20,6 +20,8 @@ use dotenv::dotenv;
 
 use crate::definitions::{Data, Error};
 
+use tracing_subscriber::EnvFilter;
+
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
 
@@ -32,7 +34,7 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
         }
         // Log command errors
         poise::FrameworkError::Command { ctx, error: cmd_err, .. } => {
-            println!("Error in command `{}`: {:?}", ctx.command().name, cmd_err);
+            tracing::debug!("Error in command `{}`: {:?}", ctx.command().name, cmd_err);
         }
         // You can match other variants here if you like...
         _ => {}
@@ -40,12 +42,18 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
 
     // 2) Forward the _owned_ `error` to Poise's default handler so it replies in Discord
     if let Err(e) = poise::builtins::on_error(error).await {
-        eprintln!("Error while handling error: {}", e);
+        tracing::error!("Error while handling error: {}", e);
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env()
+        .add_directive("chester_rs=debug".parse().unwrap())
+        .add_directive("warn".parse().unwrap()))
+        .init();
+
     dotenv().ok();
     // Initialize the SQLite connection pool
     let database_url = "sqlite://database/metadata.sqlite3";
@@ -82,19 +90,19 @@ async fn main() -> Result<(), Error> {
         // This code is run before every command
         pre_command: |ctx| {
             Box::pin(async move {
-                println!("Executing command {}...", ctx.command().qualified_name);
+                tracing::debug!("Executing command {}...", ctx.command().qualified_name);
             })
         },
         // This code is run after a command if it was successful (returned Ok)
         post_command: |ctx| {
             Box::pin(async move {
-                println!("Executed command {}!", ctx.command().qualified_name);
+                tracing::debug!("Executed command {}!", ctx.command().qualified_name);
             })
         },
         skip_checks_for_owners: true,
         event_handler: |_ctx, event, _framework, _data| {
             Box::pin(async move {
-                println!(
+                tracing::debug!(
                     "Got an event in event handler: {:?}",
                     event.snake_case_name()
                 );

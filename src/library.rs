@@ -58,7 +58,7 @@ pub fn lightweight_trim(mut choice: String, max_width: usize) -> String {
 
 pub fn get_youtube_id(link: &str) -> Option<String> {
     // Try to parse the URL; bail out if it's invalid
-    println!("Parsing YouTube link {}", link);
+    tracing::debug!("Parsing YouTube link {}", link);
     let url = Url::parse(link).ok()?;
     let host = url.host_str()?;
 
@@ -111,7 +111,7 @@ pub fn require_guild(ctx: PoiseContext<'_>) -> Result<GuildId, Error> {
 }
 
 pub async fn join_vc(ctx: PoiseContext<'_>, guild: Guild, vc_id: ChannelId) -> Result<Arc<Mutex<Call>>, Error>{
-    println!("Joining user's voice chat");
+    tracing::debug!("Joining user's voice chat");
 
     let manager = songbird::get(ctx.serenity_context())
         .await
