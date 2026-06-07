@@ -1,5 +1,5 @@
 use crate::constants::{ELLIPSIS, ELLIPSIS_LEN};
-use crate::definitions::{Context as DiscordContext, Error, TrackInfo, VideoId};
+use crate::definitions::{Context as DiscordContext, Error};
 
 use songbird::Call;
 use tokio::sync::Mutex;
@@ -158,44 +158,4 @@ pub async fn join_vc(ctx: DiscordContext<'_>, guild: Guild, vc_id: ChannelId) ->
 
     let join_result = manager.join(guild.id, vc_id).await;
     Ok(join_result?)
-}
-
-pub async fn get_track(
-    db_pool: &Pool<Sqlite>,
-    track_id: &VideoId,
-) -> Result<Option<TrackInfo>, Error> {
-    let row: Option<(String, String, String, String)> = sqlx::query_as(
-        r#"
-        SELECT
-            tracks.track_title,
-            artists.artist,
-            origins.origin,
-            tracks.yt_title
-        FROM tracks
-        LEFT JOIN artists ON tracks.artist_id = artists.id
-        LEFT JOIN origins ON tracks.origin_id = origins.id
-        WHERE tracks.id = ?1
-        "#,
-    )
-    .bind(track_id.as_str())
-    .fetch_optional(db_pool)
-    .await
-    .map_err(|e| format!("Failed to fetch track: {}", e))?;
-
-    Ok(row.map(|(title, artist, origin, _yt_title)| TrackInfo {
-        id: track_id.clone(),
-        title,
-        artist,
-        origin,
-    }))
-}
-
-pub async fn require_track(
-    db: &Pool<Sqlite>,
-    id: &VideoId,
-) -> Result<TrackInfo, Error> {
-    match get_track(db, id).await? {
-        Some(track) => Ok(track),
-        None => Err("The track could not be found in the database.".into()),
-    }
 }

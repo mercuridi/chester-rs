@@ -63,3 +63,12 @@ pub async fn resolve_track(
 
     Ok(track)
 }
+
+pub async fn require_track(
+    db_pool: &SqlitePool,
+    id: &VideoId,
+) -> Result<TrackInfo, Error> {
+    lookup_track(db_pool, id)
+        .await?
+        .ok_or_else(|| "Track could not be found in the database.".into())
+}

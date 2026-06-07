@@ -1,7 +1,8 @@
 use crate::definitions::{Context, Error, VideoId, TrackInfo};
 use crate::autocomplete::{autocomplete_track, autocomplete_tag, autocomplete_origin, autocomplete_artist};
-use crate::library::{get_id_or_insert, require_track};
+use crate::library::{get_id_or_insert};
 use crate::downloader::download_track;
+use crate::track_resolver::require_track;
 
 pub async fn download_direct(
     ctx: Context<'_>,
