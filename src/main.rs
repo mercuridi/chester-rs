@@ -7,6 +7,7 @@ mod cmd_library;
 mod cmd_admin;
 mod cmd_management;
 mod track_resolver;
+mod downloader;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports

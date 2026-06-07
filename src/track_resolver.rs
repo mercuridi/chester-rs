@@ -1,6 +1,7 @@
 use crate::definitions::{Error, TrackInfo, VideoId};
 use crate::library::get_youtube_id;
-use crate::cmd_management::download_track;
+use crate::downloader::download_track;
+
 use sqlx::SqlitePool;
 
 pub async fn lookup_track(
