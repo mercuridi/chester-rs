@@ -3,6 +3,8 @@ yt-dlp
 
 cookies.txt
 
+docs/rebuild-plan
+
 .env
 *.dca
 *.m4a

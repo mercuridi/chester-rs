@@ -1,0 +1,12 @@
+# Don't publish to crates.io
+publish = false
+
+# Push the tag and commit automatically
+push = true
+tag = true
+
+# Run git-cliff to update CHANGELOG.md before committing the version bump
+pre-release-hook = ["git-cliff", "-o", "CHANGELOG.md", "--tag", "{{version}}"]
+
+# The commit message for the version bump commit
+tag-message = "chore(release): v{{version}}"
