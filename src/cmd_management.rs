@@ -1,8 +1,11 @@
 use crate::definitions::{Error, MetadataKind, PoiseContext, TrackInfo, VideoId};
 use crate::autocomplete::{autocomplete_track, autocomplete_tag, autocomplete_origin, autocomplete_artist};
-use crate::library::{get_or_insert_metadata_id};
 use crate::downloader::download_track;
-use crate::track_resolver::require_track;
+use crate::repository::{
+    get_or_insert_metadata_id, require_track,
+    delete_track_tags, insert_track_tag,
+    update_track_title, update_track_artist, update_track_origin,
+};
 
 pub async fn download_direct(
     ctx: PoiseContext<'_>,
@@ -59,17 +62,11 @@ pub async fn reset_tags(
     track: String,
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
-
     let info = require_track(db_pool, &VideoId::from(track)).await?;
 
-    sqlx::query("DELETE FROM track_tags WHERE track_id = ?1")
-        .bind(info.id.as_str())
-        .execute(db_pool)
-        .await?;
+    delete_track_tags(db_pool, &info.id).await?;
 
-    ctx.say(format!("Reset tags for track `{}`", info.title))
-        .await?;
-
+    ctx.say(format!("Reset tags for track `{}`", info.title)).await?;
     Ok(())
 }
 
@@ -85,24 +82,12 @@ pub async fn add_tag(
     tag: String,
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
-
     let info = require_track(db_pool, &VideoId::from(track)).await?;
-
     let tag_id = get_or_insert_metadata_id(db_pool, MetadataKind::Tag, &tag).await?;
 
-    sqlx::query("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?1, ?2)")
-        .bind(info.id.as_str())
-        .bind(tag_id)
-        .execute(db_pool)
-        .await?;
+    insert_track_tag(db_pool, &info.id, tag_id).await?;
 
-    ctx.say(format!(
-        "Tag `{}` added to track `{}`",
-        tag,
-        info.title
-    ))
-    .await?;
-
+    ctx.say(format!("Tag `{}` added to track `{}`", tag, info.title)).await?;
     Ok(())
 }
 
@@ -125,28 +110,19 @@ pub async fn title(
     new_title: String,
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
-
     let track_id = VideoId::from(track);
     let info = require_track(db_pool, &track_id).await?;
 
-    let old_title = info.title.clone();
-
-    sqlx::query("UPDATE tracks SET track_title = ?1 WHERE id = ?2")
-        .bind(&new_title)
-        .bind(info.id.as_str())
-        .execute(db_pool)
-        .await?;
+    update_track_title(db_pool, &info.id, &new_title).await?;
 
     ctx.say(format!(
         "Set new title `{}` for track `{}`",
         new_title,
-        old_title
+        info.title
     ))
     .await?;
-
     Ok(())
 }
-
 
 /// Set a track's artist
 #[poise::command(slash_command)]
@@ -160,16 +136,10 @@ pub async fn artist(
     new_artist: String,
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
-
     let info = require_track(db_pool, &VideoId::from(track)).await?;
-
     let artist_id = get_or_insert_metadata_id(db_pool, MetadataKind::Artist, &new_artist).await?;
 
-    sqlx::query("UPDATE tracks SET artist_id = ?1 WHERE id = ?2")
-        .bind(artist_id)
-        .bind(info.id.as_str())
-        .execute(db_pool)
-        .await?;
+    update_track_artist(db_pool, &info.id, artist_id).await?;
 
     ctx.say(format!(
         "Set new artist `{}` for track `{}`",
@@ -177,7 +147,6 @@ pub async fn artist(
         info.title
     ))
     .await?;
-
     Ok(())
 }
 
@@ -193,16 +162,10 @@ pub async fn origin(
     new_origin: String,
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
-
     let info = require_track(db_pool, &VideoId::from(track)).await?;
-
     let origin_id = get_or_insert_metadata_id(db_pool, MetadataKind::Origin, &new_origin).await?;
 
-    sqlx::query("UPDATE tracks SET origin_id = ?1 WHERE id = ?2")
-        .bind(origin_id)
-        .bind(info.id.as_str())
-        .execute(db_pool)
-        .await?;
+    update_track_origin(db_pool, &info.id, origin_id).await?;
 
     ctx.say(format!(
         "Set new origin `{}` for track `{}`",
@@ -210,6 +173,5 @@ pub async fn origin(
         info.title
     ))
     .await?;
-
     Ok(())
 }

@@ -1,10 +1,9 @@
 use crate::constants::{ELLIPSIS, ELLIPSIS_LEN};
-use crate::definitions::{PoiseContext, Error, MetadataKind};
+use crate::definitions::{PoiseContext, Error};
 
 use songbird::Call;
 use tokio::sync::Mutex;
 use poise::serenity_prelude::{ChannelId, Guild};
-use sqlx::{Sqlite, Pool};
 use url::Url;
 use std::sync::Arc;
 
@@ -87,37 +86,6 @@ pub fn get_youtube_id(link: &str) -> Option<String> {
         }
 
         _ => None,
-    }
-}
-
-
-pub async fn get_or_insert_metadata_id(
-    db_pool: &Pool<Sqlite>,
-    kind: MetadataKind,
-    value: &str,
-) -> Result<i64, Error> {
-    let select_sql = kind.select_sql();
-
-    match sqlx::query_scalar::<_, i64>(select_sql)
-        .bind(value)
-        .fetch_optional(db_pool)
-        .await
-        .map_err(|e| format!("Database select failed: {}", e))?
-    {
-        Some(id) => Ok(id),
-        None => {
-            sqlx::query(kind.insert_sql())
-                .bind(value)
-                .execute(db_pool)
-                .await
-                .map_err(|e| format!("Database insert failed: {}", e))?;
-
-            Ok(sqlx::query_scalar::<_, i64>(select_sql)
-                .bind(value)
-                .fetch_one(db_pool)
-                .await
-                .map_err(|e| format!("Database fetch after insert failed: {}", e))?)
-        }
     }
 }
 

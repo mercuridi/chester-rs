@@ -1,7 +1,6 @@
 use crate::definitions::{PoiseContext, Error};
 use crate::library::{lightweight_trim};
-
-use sqlx::Row;
+use crate::repository::{fetch_library_all, fetch_library_by_artist, fetch_library_by_origin, fetch_library_by_tag};
 
 // constants for library pagination
 const ROW_MAX_WIDTH:        usize =  56; // max 56
@@ -44,36 +43,42 @@ async fn tags(ctx: PoiseContext<'_>) -> Result<(), Error> {
 async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
-    // Define column weights and headers based on mode
-    let (weights, headers) = match mode {
-        "artist" => (vec![1.0, 2.0], vec!["Artist", "Title"]),
-        "origin" => (vec![1.5, 2.0], vec!["Origin", "Title"]),
-        "tags" => (vec![1.0, 4.0], vec!["Tag", "Title"]),
-        _ => (vec![2.0, 1.5, 1.5, 1.5], vec!["Title", "Artist", "Origin", "Tags"]),
+    let (weights, headers, raw_data) = match mode {
+        "artist" => (
+            vec![1.0, 2.0],
+            vec!["Artist", "Title"],
+            fetch_library_by_artist(db_pool).await?,
+        ),
+        "origin" => (
+            vec![1.5, 2.0],
+            vec!["Origin", "Title"],
+            fetch_library_by_origin(db_pool).await?,
+        ),
+        "tags" => (
+            vec![1.0, 4.0],
+            vec!["Tag", "Title"],
+            fetch_library_by_tag(db_pool).await?,
+        ),
+        _ => (
+            vec![2.0, 1.5, 1.5, 1.5],
+            vec!["Title", "Artist", "Origin", "Tags"],
+            fetch_library_all(db_pool).await?,
+        ),
     };
-    
-    // Fetch data
-    let raw_data = fetch_library_rows(db_pool, mode).await;
 
     if raw_data.is_empty() {
         poise::say_reply(ctx, "No results found.").await?;
         return Ok(());
     }
 
-    // Add row numbers
     let (data_with_rownum, rownum_width) = add_row_numbers(raw_data);
-
-    // Compute column widths (rownum included)
     let col_widths = compute_column_widths(&weights, rownum_width);
 
-    // Format table
     let mut headers_with_rownum = vec!["#"];
     headers_with_rownum.extend(headers.clone());
     let (header, formatted_rows) = format_table(&headers_with_rownum, &data_with_rownum, &col_widths, mode);
 
-    // Paginate
     let pages = paginate_table(&header, &formatted_rows, MAX_RESULTS_PER_PAGE);
-
     let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
     poise::samples::paginate(ctx, &page_refs).await?;
 
@@ -197,118 +202,4 @@ fn add_row_numbers(data: Vec<Vec<String>>) -> (Vec<Vec<String>>, usize) {
         })
         .collect();
     (data_with_rownum, rownum_width)
-}
-
-
-async fn fetch_library_rows(
-    db_pool: &sqlx::Pool<sqlx::Sqlite>,
-    mode: &str,
-) -> Vec<Vec<String>> {
-    match mode {
-        "artist" => {
-            let query = "
-                SELECT artists.artist, tracks.track_title
-                FROM tracks
-                LEFT JOIN artists ON tracks.artist_id = artists.id
-                ORDER BY artists.artist
-            ";
-            sqlx::query(query)
-                .fetch_all(db_pool)
-                .await
-                .unwrap_or_else(|err| {
-                    println!("Database query failed: {}", err);
-                    Vec::new()
-                })
-                .into_iter()
-                .map(|row| {
-                    vec![
-                        row.try_get::<String, _>(0).unwrap_or_else(|_| "No artist".to_string()),
-                        row.try_get::<String, _>(1).unwrap_or_else(|_| "No title".to_string()),
-                    ]
-                })
-                .collect()
-        }
-        "origin" => {
-            let query = "
-                SELECT origins.origin, tracks.track_title
-                FROM tracks
-                LEFT JOIN origins ON tracks.origin_id = origins.id
-                ORDER BY origins.origin
-            ";
-            sqlx::query(query)
-                .fetch_all(db_pool)
-                .await
-                .unwrap_or_else(|err| {
-                    println!("Database query failed: {}", err);
-                    Vec::new()
-                })
-                .into_iter()
-                .map(|row| {
-                    vec![
-                        row.try_get::<String, _>(0).unwrap_or_else(|_| "No origin".to_string()),
-                        row.try_get::<String, _>(1).unwrap_or_else(|_| "No title".to_string()),
-                    ]
-                })
-                .collect()
-        }
-        "tags" => {
-            let query = "
-                SELECT 
-                    COALESCE(tags.tag, 'No tags') AS tag,
-                    tracks.track_title
-                FROM tracks
-                LEFT JOIN track_tags ON tracks.id = track_tags.track_id
-                LEFT JOIN tags ON track_tags.tag_id = tags.id
-                ORDER BY 
-                    CASE WHEN tags.tag IS NULL THEN 1 ELSE 0 END,
-                    tag,
-                    tracks.track_title
-            ";
-            sqlx::query(query)
-                .fetch_all(db_pool)
-                .await
-                .unwrap_or_else(|err| {
-                    println!("Database query failed: {}", err);
-                    Vec::new()
-                })
-                .into_iter()
-                .map(|row| {
-                    vec![
-                        row.try_get::<String, _>(0).unwrap_or_else(|_| "No tags".to_string()),
-                        row.try_get::<String, _>(1).unwrap_or_else(|_| "No title".to_string()),
-                    ]
-                })
-                .collect()
-        }
-        _ => {
-            // default: show all tracks with artist, origin, tags concatenated
-            let query = "
-                SELECT tracks.track_title, artists.artist, origins.origin, GROUP_CONCAT(tags.tag, ', ') AS tags
-                FROM tracks
-                LEFT JOIN artists ON tracks.artist_id = artists.id
-                LEFT JOIN origins ON tracks.origin_id = origins.id
-                LEFT JOIN track_tags ON tracks.id = track_tags.track_id
-                LEFT JOIN tags ON track_tags.tag_id = tags.id
-                GROUP BY tracks.id
-                ORDER BY tracks.track_title
-            ";
-            sqlx::query(query)
-                .fetch_all(db_pool)
-                .await
-                .unwrap_or_else(|err| {
-                    println!("Database query failed: {}", err);
-                    Vec::new()
-                })
-                .into_iter()
-                .map(|row| {
-                    vec![
-                        row.try_get::<String, _>(0).unwrap_or_else(|_| "No title".to_string()),
-                        row.try_get::<String, _>(1).unwrap_or_else(|_| "No artist".to_string()),
-                        row.try_get::<String, _>(2).unwrap_or_else(|_| "No origin".to_string()),
-                        row.try_get::<String, _>(3).unwrap_or_else(|_| "".to_string()),
-                    ]
-                })
-                .collect()
-        }
-    }
 }

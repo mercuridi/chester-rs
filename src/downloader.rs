@@ -2,9 +2,10 @@ use std::process::Command;
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use crate::track_resolver::lookup_track;
-use crate::library::{get_youtube_id, process_ytdlp_json, get_or_insert_metadata_id};
+use crate::library::{get_youtube_id, process_ytdlp_json};
 use crate::definitions::{Error, MetadataKind, TrackInfo, VideoId};
+use crate::repository::{get_or_insert_metadata_id, insert_new_track, lookup_track};
+
 
 pub async fn download_track(
     db_pool: &SqlitePool,
@@ -35,7 +36,7 @@ pub async fn download_track(
         .arg("cookies.txt")
         .arg(&yt_link)
         .output()
-        .expect("Failed to execute yt-dlp");
+        .map_err(|e| format!("Failed to execute yt-dlp: {}", e))?;
 
     if !output.status.success() {
         return Err(format!(
@@ -74,34 +75,8 @@ pub async fn download_track(
 
     let origin_id =
         get_or_insert_metadata_id(db_pool, MetadataKind::Origin, &origin).await?;
-
-    sqlx::query(
-        "INSERT INTO tracks (
-            id,
-            upload_date,
-            yt_title,
-            track_title,
-            artist_id,
-            origin_id
-        )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-    )
-    .bind(video_id.as_str())
-    .bind(
-        slim.get("upload_date")
-            .and_then(Value::as_str)
-            .unwrap_or("Unknown Date"),
-    )
-    .bind(
-        slim.get("title")
-            .and_then(Value::as_str)
-            .unwrap_or("Unknown Title"),
-    )
-    .bind(&title)
-    .bind(artist_id)
-    .bind(origin_id)
-    .execute(db_pool)
-    .await?;
+    
+    insert_new_track(db_pool, &video_id, &slim, &title, artist_id, origin_id).await?;
 
     Ok(TrackInfo {
         id: video_id,
