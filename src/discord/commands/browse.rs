@@ -1,9 +1,9 @@
 use crate::definitions::{PoiseContext, Error};
 use crate::utils::format::lightweight_trim;
-use crate::db::repository::{fetch_library_all, fetch_library_by_artist, fetch_library_by_origin, fetch_library_by_tag};
+use crate::db::repository::{fetch_library_all, fetch_library_by_artist, fetch_library_by_incomplete, fetch_library_by_origin, fetch_library_by_tag};
 
 // constants for library pagination
-const ROW_MAX_WIDTH:        usize =  56; // max 56
+const ROW_MAX_WIDTH:                usize = 50; // max 56
 const MAX_RESULTS_PER_PAGE:         usize = 20;
 const LIBRARY_SEPARATOR:            &str = " ";
 const ROW_SEPARATOR:                &str = "-";
@@ -11,7 +11,7 @@ const DUPLICATE_INDICATOR:          &str = "";
 
 
 /// /library
-#[poise::command(slash_command, subcommands("all", "artist", "origin", "tags"))]
+#[poise::command(slash_command, subcommands("all", "artist", "origin", "tags", "incomplete"))]
 pub async fn library(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -40,6 +40,12 @@ async fn tags(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "tags").await
 }
 
+/// /library incomplete
+#[poise::command(slash_command)]
+async fn incomplete(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    library_dynamic(ctx, "incomplete").await
+}
+
 async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
@@ -58,6 +64,11 @@ async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error>
             vec![1.0, 4.0],
             vec!["Tag", "Title"],
             fetch_library_by_tag(db_pool).await?,
+        ),
+        "incomplete" => (
+            vec![1.0, 1.0, 1.0],
+            vec!["Title", "Artist", "Origin"],
+            fetch_library_by_incomplete(db_pool).await?,
         ),
         _ => (
             vec![2.0, 1.5, 1.5, 1.5],

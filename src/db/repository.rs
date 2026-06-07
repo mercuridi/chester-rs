@@ -151,6 +151,27 @@ pub async fn fetch_library_by_tag(db_pool: &SqlitePool) -> Result<Vec<Vec<String
     ]).collect())
 }
 
+pub async fn fetch_library_by_incomplete(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>, Error> {
+    let rows = sqlx::query(
+        "SELECT tracks.track_title, artists.artist, origins.origin
+            FROM tracks
+            LEFT JOIN artists ON tracks.artist_id = artists.id
+            LEFT JOIN origins ON tracks.origin_id = origins.id
+            WHERE artists.artist = 'No artist provided'
+            OR origins.origin = 'No origin provided'
+            ORDER BY tracks.track_title"
+    )
+    .fetch_all(db_pool)
+    .await
+    .map_err(|e| format!("Database query failed: {}", e))?;
+
+    Ok(rows.into_iter().map(|row| vec![
+        row.try_get::<String, _>(0).unwrap_or_else(|_| "No title".to_string()),
+        row.try_get::<String, _>(0).unwrap_or_else(|_| "No artist".to_string()),
+        row.try_get::<String, _>(1).unwrap_or_else(|_| "No origin".to_string()),
+    ]).collect())
+}
+
 pub async fn lookup_track(
     db_pool: &SqlitePool,
     video_id: &VideoId,
