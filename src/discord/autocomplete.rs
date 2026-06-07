@@ -1,5 +1,5 @@
 use crate::definitions::{PoiseContext, MetadataKind};
-use crate::db::repository::{search_metadata, search_tracks};
+use crate::db::repository::{search_incomplete_tracks, search_metadata, search_tracks};
 use std::collections::HashSet;
 use poise::serenity_prelude::AutocompleteChoice;
 use crate::utils::format::{lightweight_trim, build_autocomplete_display};
@@ -93,4 +93,37 @@ pub async fn autocomplete_track(
         .map(|(display, video_id)| AutocompleteChoice::new(display, video_id))
         .collect::<Vec<_>>()  // collect into Vec<AutocompleteChoice>...
         .into_iter()          // ...then re-iterate, matching the early return type
+}
+
+pub async fn autocomplete_incomplete_track(
+    ctx: PoiseContext<'_>,
+    partial: &str,
+) -> impl Iterator<Item = AutocompleteChoice> {
+    let needle = partial.to_lowercase();
+    let db_pool = &ctx.data().db_pool;
+
+    let results = match search_incomplete_tracks(db_pool, &needle, AUTOCOMPLETE_MAX_CHOICES as i64).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Incomplete track autocomplete query failed: {}", e);
+            return vec![].into_iter();
+        }
+    };
+
+    let mut choices: Vec<(String, String)> = results
+        .into_iter()
+        .map(|(id, title, artist, origin, tags)| {
+            let tags_display = tags.unwrap_or_else(|| "No tags".to_string());
+            let display = build_autocomplete_display(vec![title, artist, origin, tags_display]);
+            (display, id)
+        })
+        .collect();
+
+    choices.sort_unstable_by(|(d1, _), (d2, _)| d1.cmp(d2));
+
+    choices
+        .into_iter()
+        .map(|(display, video_id)| AutocompleteChoice::new(display, video_id))
+        .collect::<Vec<_>>()
+        .into_iter()
 }

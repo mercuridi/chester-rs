@@ -253,6 +253,34 @@ pub async fn search_tracks(
     .map_err(|e| format!("Autocomplete track query failed: {}", e).into())
 }
 
+pub async fn search_incomplete_tracks(
+    db_pool: &SqlitePool,
+    needle: &str,
+    limit: i64,
+) -> Result<Vec<(String, String, String, String, Option<String>)>, Error> {
+    sqlx::query_as(
+        "SELECT DISTINCT tracks.id, tracks.track_title, artists.artist, origins.origin,
+                GROUP_CONCAT(tags.tag, ', ') AS tags
+         FROM tracks
+         LEFT JOIN artists ON tracks.artist_id = artists.id
+         LEFT JOIN origins ON tracks.origin_id = origins.id
+         LEFT JOIN track_tags ON tracks.id = track_tags.track_id
+         LEFT JOIN tags ON track_tags.tag_id = tags.id
+         WHERE (artists.artist = 'No artist provided'
+            OR origins.origin = 'No origin provided')
+           AND (LOWER(tracks.track_title) LIKE ?1
+            OR LOWER(artists.artist) LIKE ?1
+            OR LOWER(origins.origin) LIKE ?1)
+         GROUP BY tracks.id
+         LIMIT ?2",
+    )
+    .bind(format!("%{}%", needle))
+    .bind(limit)
+    .fetch_all(db_pool)
+    .await
+    .map_err(|e| format!("Incomplete track search query failed: {}", e).into())
+}
+
 pub async fn delete_track_tags(
     db_pool: &SqlitePool,
     track_id: &VideoId,

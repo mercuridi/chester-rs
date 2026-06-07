@@ -1,5 +1,11 @@
 use crate::definitions::{Error, MetadataKind, PoiseContext, TrackInfo, VideoId};
-use crate::discord::autocomplete::{autocomplete_track, autocomplete_tag, autocomplete_origin, autocomplete_artist};
+use crate::discord::autocomplete::{
+    autocomplete_track,
+    autocomplete_tag,
+    autocomplete_origin,
+    autocomplete_artist,
+    autocomplete_incomplete_track
+};
 use crate::utils::downloader::download_track;
 use crate::db::repository::{
     get_or_insert_metadata_id, require_track,
@@ -173,5 +179,58 @@ pub async fn origin(
         info.title
     ))
     .await?;
+    Ok(())
+}
+
+/// Fix missing metadata for an incomplete track
+#[poise::command(slash_command)]
+pub async fn fix(
+    ctx: PoiseContext<'_>,
+    #[description = "The incomplete track to fix"]
+    #[autocomplete = "autocomplete_incomplete_track"]
+    track: String,
+    #[description = "New title for the track"]
+    new_title: Option<String>,
+    #[description = "New artist for the track"]
+    #[autocomplete = "autocomplete_artist"]
+    new_artist: Option<String>,
+    #[description = "New origin for the track"]
+    #[autocomplete = "autocomplete_origin"]
+    new_origin: Option<String>,
+) -> Result<(), Error> {
+    if new_title.is_none() && new_artist.is_none() && new_origin.is_none() {
+        ctx.say("Please provide at least one field to update.").await?;
+        return Ok(());
+    }
+
+    let db_pool = &ctx.data().db_pool;
+    let track_id = VideoId::from(track);
+    let info = require_track(db_pool, &track_id).await?;
+
+    let mut updated_fields: Vec<String> = Vec::new();
+
+    if let Some(ref title) = new_title {
+        update_track_title(db_pool, &info.id, title).await?;
+        updated_fields.push(format!("title → `{}`", title));
+    }
+
+    if let Some(ref artist) = new_artist {
+        let artist_id = get_or_insert_metadata_id(db_pool, MetadataKind::Artist, artist).await?;
+        update_track_artist(db_pool, &info.id, artist_id).await?;
+        updated_fields.push(format!("artist → `{}`", artist));
+    }
+
+    if let Some(ref origin) = new_origin {
+        let origin_id = get_or_insert_metadata_id(db_pool, MetadataKind::Origin, origin).await?;
+        update_track_origin(db_pool, &info.id, origin_id).await?;
+        updated_fields.push(format!("origin → `{}`", origin));
+    }
+
+    ctx.say(format!(
+        "Updated `{}`: {}",
+        info.title,
+        updated_fields.join(", ")
+    )).await?;
+
     Ok(())
 }

@@ -70,6 +70,7 @@ async fn main() -> Result<(), Error> {
         discord::commands::management::reset_tags(),
         discord::commands::management::add_tag(),
         discord::commands::management::set_metadata(),
+        discord::commands::management::fix(),
         discord::commands::browse::library(),
     ];
 
