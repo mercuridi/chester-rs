@@ -1,9 +1,8 @@
 use crate::definitions::{PoiseContext, MetadataKind};
-use crate::repository::{search_metadata, search_tracks};
+use crate::db::repository::{search_metadata, search_tracks};
 use std::collections::HashSet;
 use poise::serenity_prelude::AutocompleteChoice;
-use crate::constants::{ELLIPSIS_LEN, ELLIPSIS};
-use crate::library::lightweight_trim;
+use crate::utils::format::{lightweight_trim, build_autocomplete_display};
 
 pub const AUTOCOMPLETE_MAX_CHOICES: usize = 25;
 pub const AUTOCOMPLETE_MAX_LENGTH: usize = 100;
@@ -95,59 +94,3 @@ pub async fn autocomplete_track(
         .collect::<Vec<_>>()  // collect into Vec<AutocompleteChoice>...
         .into_iter()          // ...then re-iterate, matching the early return type
 }
-
-pub fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
-    // Build a display name
-    let content_max_length = AUTOCOMPLETE_MAX_LENGTH - (AUTOCOMPLETE_SEPARATOR_LEN * to_display.len()) + 1;
-
-    let mut lens: Vec<usize> = to_display
-        .iter()
-        .map(|n| n.len())
-        .collect();
-    let total_len: usize = lens.iter().sum();
-    let mut excess = total_len.saturating_sub(content_max_length);
-
-    // truncate each as needed
-    while excess > 0 {
-        // pick the index of the longest field
-        let (max_idx, &max_len) = lens
-            .iter()
-            .enumerate()
-            .max_by_key(|&(_, &l)| l)
-            .expect("lens vector should never be empty when truncating autocomplete display");
-
-        // decide how many bytes to chop
-        let chop = excess.min(max_len);
-        let mut new_len = max_len.saturating_sub(chop);
-
-        // reserve room for ellipsis if we're actually cutting
-        let needs_ellipsis = new_len < max_len;
-        if needs_ellipsis && new_len > ELLIPSIS_LEN {
-            new_len = new_len.saturating_sub(ELLIPSIS_LEN);
-        }
-
-        // get the mutable String reference
-        let s: &mut String = &mut to_display[max_idx];
-
-        // back up to a valid UTF-8 boundary
-        let mut adjust = new_len;
-        while adjust > 0 && !s.is_char_boundary(adjust) {
-            adjust -= 1;
-        }
-        s.truncate(adjust);
-
-        // append ellipsis if we cut something
-        if needs_ellipsis {
-            s.push_str(ELLIPSIS);
-            lens[max_idx] = adjust + ELLIPSIS_LEN;
-        } else {
-            lens[max_idx] = adjust;
-        }
-
-        excess = excess.saturating_sub(chop);
-    }
-
-    to_display.join(AUTOCOMPLETE_SEPARATOR)
-
-}
-

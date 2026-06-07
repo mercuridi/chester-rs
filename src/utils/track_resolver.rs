@@ -1,7 +1,7 @@
 use crate::definitions::{Error, TrackInfo, VideoId};
-use crate::library::get_youtube_id;
-use crate::downloader::download_track;
-use crate::repository::lookup_track;
+use crate::utils::context::get_youtube_id;
+use crate::utils::downloader::download_track;
+use crate::db::repository::lookup_track;
 use sqlx::SqlitePool;
 
 pub fn normalise_track_input(input: &str) -> VideoId {

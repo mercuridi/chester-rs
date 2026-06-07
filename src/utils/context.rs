@@ -1,4 +1,3 @@
-use crate::constants::{ELLIPSIS, ELLIPSIS_DISPLAY_WIDTH};
 use crate::definitions::{PoiseContext, Error};
 
 use songbird::Call;
@@ -33,27 +32,6 @@ pub fn process_ytdlp_json(
     fs::remove_file(&path).ok();
 
     Ok(slim)
-}
-
-pub fn lightweight_trim(mut choice: String, max_width: usize) -> String {
-    if max_width <= ELLIPSIS_DISPLAY_WIDTH {
-        return ELLIPSIS.to_string();
-    }
-
-    if choice.len() > max_width {
-        let cutoff = max_width - 1;
-        let safe_cutoff = choice
-            .char_indices()
-            .take_while(|(idx, _)| *idx <= cutoff)
-            .map(|(idx, _)| idx)
-            .last()
-            .unwrap_or(0);
-
-        choice.truncate(safe_cutoff);
-        choice.push_str(ELLIPSIS);
-    }
-
-    choice
 }
 
 pub fn get_youtube_id(link: &str) -> Option<String> {

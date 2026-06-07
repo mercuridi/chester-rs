@@ -1,7 +1,7 @@
 use crate::definitions::{Error, MetadataKind, PoiseContext, TrackInfo, VideoId};
-use crate::autocomplete::{autocomplete_track, autocomplete_tag, autocomplete_origin, autocomplete_artist};
-use crate::downloader::download_track;
-use crate::repository::{
+use crate::discord::autocomplete::{autocomplete_track, autocomplete_tag, autocomplete_origin, autocomplete_artist};
+use crate::utils::downloader::download_track;
+use crate::db::repository::{
     get_or_insert_metadata_id, require_track,
     delete_track_tags, insert_track_tag,
     update_track_title, update_track_artist, update_track_origin,

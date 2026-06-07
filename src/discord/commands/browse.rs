@@ -1,6 +1,6 @@
 use crate::definitions::{PoiseContext, Error};
-use crate::library::{lightweight_trim};
-use crate::repository::{fetch_library_all, fetch_library_by_artist, fetch_library_by_origin, fetch_library_by_tag};
+use crate::utils::format::lightweight_trim;
+use crate::db::repository::{fetch_library_all, fetch_library_by_artist, fetch_library_by_origin, fetch_library_by_tag};
 
 // constants for library pagination
 const ROW_MAX_WIDTH:        usize =  56; // max 56

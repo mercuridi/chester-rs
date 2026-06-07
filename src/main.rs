@@ -1,15 +1,9 @@
-mod cmd_controls;
-mod definitions;
-mod autocomplete;
 mod constants;
-mod library;
-mod cmd_library;
-mod cmd_admin;
-mod cmd_management;
-mod track_resolver;
-mod downloader;
-mod repository;
-mod service;
+mod definitions;
+mod db;
+mod discord;
+mod player;
+mod utils;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -64,19 +58,19 @@ async fn main() -> Result<(), Error> {
     let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN in .env");
 
     let poise_commands = vec![
-        cmd_admin::help(),
-        cmd_admin::register(),
-        cmd_controls::join(),
-        cmd_controls::play(),
-        cmd_controls::leave(),
-        cmd_controls::loop_track(),
-        cmd_controls::pause(),
-        cmd_controls::now_playing(),
-        cmd_management::download(),
-        cmd_management::reset_tags(),
-        cmd_management::add_tag(),
-        cmd_management::set_metadata(),
-        cmd_library::library(),
+        discord::commands::admin::help(),
+        discord::commands::admin::register(),
+        discord::commands::controls::join(),
+        discord::commands::controls::play(),
+        discord::commands::controls::leave(),
+        discord::commands::controls::loop_track(),
+        discord::commands::controls::pause(),
+        discord::commands::controls::now_playing(),
+        discord::commands::management::download(),
+        discord::commands::management::reset_tags(),
+        discord::commands::management::add_tag(),
+        discord::commands::management::set_metadata(),
+        discord::commands::browse::library(),
     ];
 
     let poise_options = poise::FrameworkOptions {
