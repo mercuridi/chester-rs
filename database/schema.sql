@@ -39,5 +39,10 @@ CREATE TABLE track_tags (
     FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_artists_lower ON artists(LOWER(artist));
+CREATE INDEX IF NOT EXISTS idx_origins_lower ON origins(LOWER(origin));
+CREATE INDEX IF NOT EXISTS idx_tags_lower ON tags(LOWER(tag));
+CREATE INDEX IF NOT EXISTS idx_tracks_lower_title ON tracks(LOWER(track_title));
+
 INSERT INTO artists (artist) VALUES ("No artist provided");
 INSERT INTO origins (origin) VALUES ("No origin provided");

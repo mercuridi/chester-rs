@@ -46,18 +46,10 @@ async fn autocomplete_metadata(
         }
     };
 
-    let mut choices: HashSet<String> = HashSet::with_capacity(AUTOCOMPLETE_MAX_CHOICES);
-    for raw in results {
-        let display = lightweight_trim(raw, AUTOCOMPLETE_MAX_LENGTH);
-        if needle.is_empty() || display.to_lowercase().contains(&needle) {
-            choices.insert(display);
-            if choices.len() >= AUTOCOMPLETE_MAX_CHOICES {
-                break;
-            }
-        }
-    }
-
-    let mut choices: Vec<String> = choices.into_iter().collect();
+    let mut choices: Vec<String> = results
+        .into_iter()
+        .map(|raw| lightweight_trim(raw, AUTOCOMPLETE_MAX_LENGTH))
+        .collect();
     choices.sort_unstable();
     choices.into_iter()
 }
