@@ -10,3 +10,6 @@ pre-release-hook = ["git-cliff", "-o", "CHANGELOG.md", "--tag", "{{version}}"]
 
 # The commit message for the version bump commit
 tag-message = "chore(release): v{{version}}"
+
+allow-branch = ["main"]
+pre-release-commit-message = "chore: release v{{version}}"
