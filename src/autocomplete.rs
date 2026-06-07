@@ -1,4 +1,4 @@
-use crate::definitions::Context;
+use crate::definitions::PoiseContext;
 use std::collections::HashSet;
 use poise::serenity_prelude::AutocompleteChoice;
 use crate::constants::{
@@ -13,28 +13,28 @@ pub const AUTOCOMPLETE_SEPARATOR: &str = " | ";
 pub const AUTOCOMPLETE_SEPARATOR_LEN: usize = AUTOCOMPLETE_SEPARATOR.len();
 
 pub async fn autocomplete_artist(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = String> {
     autocomplete_metadata(ctx, partial, "artist").await
 }
 
 pub async fn autocomplete_origin(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = String> {
     autocomplete_metadata(ctx, partial, "origin").await
 }
 
 pub async fn autocomplete_tag(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = String> {
     autocomplete_metadata(ctx, partial, "tag").await
 }
 
 async fn autocomplete_metadata(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     partial: &str,
     mode: &str
 ) -> impl Iterator<Item = String> {
@@ -88,7 +88,7 @@ async fn autocomplete_metadata(
 }
 
 pub async fn autocomplete_track(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = AutocompleteChoice> {
     println!("Autocomplete requested: tracks");

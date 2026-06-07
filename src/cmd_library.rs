@@ -1,4 +1,4 @@
-use crate::definitions::{Context, Error};
+use crate::definitions::{PoiseContext, Error};
 use crate::library::{lightweight_trim};
 
 use sqlx::Row;
@@ -13,35 +13,35 @@ const DUPLICATE_INDICATOR:          &str = "";
 
 /// /library
 #[poise::command(slash_command, subcommands("all", "artist", "origin", "tags"))]
-pub async fn library(_ctx: Context<'_>) -> Result<(), Error> {
+pub async fn library(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
 /// /library all
 #[poise::command(slash_command)]
-async fn all(ctx: Context<'_>) -> Result<(), Error> {
+async fn all(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "").await
 }
 
 /// /library artist
 #[poise::command(slash_command)]
-async fn artist(ctx: Context<'_>) -> Result<(), Error> {
+async fn artist(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "artist").await
 }
 
 /// /library origin
 #[poise::command(slash_command)]
-async fn origin(ctx: Context<'_>) -> Result<(), Error> {
+async fn origin(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "origin").await
 }
 
 /// /library origin
 #[poise::command(slash_command)]
-async fn tags(ctx: Context<'_>) -> Result<(), Error> {
+async fn tags(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "tags").await
 }
 
-async fn library_dynamic(ctx: Context<'_>, mode: &str) -> Result<(), Error> {
+async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
     // Define column weights and headers based on mode

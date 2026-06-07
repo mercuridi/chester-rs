@@ -3,8 +3,8 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 
 use crate::track_resolver::lookup_track;
-use crate::library::{get_youtube_id, process_ytdlp_json, get_id_or_insert};
-use crate::definitions::{Error, VideoId, TrackInfo};
+use crate::library::{get_youtube_id, process_ytdlp_json, get_or_insert_metadata_id};
+use crate::definitions::{Error, MetadataKind, TrackInfo, VideoId};
 
 pub async fn download_track(
     db_pool: &SqlitePool,
@@ -70,10 +70,10 @@ pub async fn download_track(
     });
 
     let artist_id =
-        get_id_or_insert(db_pool, "artist", &artist).await?;
+        get_or_insert_metadata_id(db_pool, MetadataKind::Artist, &artist).await?;
 
     let origin_id =
-        get_id_or_insert(db_pool, "origin", &origin).await?;
+        get_or_insert_metadata_id(db_pool, MetadataKind::Origin, &origin).await?;
 
     sqlx::query(
         "INSERT INTO tracks (

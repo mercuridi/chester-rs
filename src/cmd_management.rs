@@ -1,11 +1,11 @@
-use crate::definitions::{Context, Error, VideoId, TrackInfo};
+use crate::definitions::{Error, MetadataKind, PoiseContext, TrackInfo, VideoId};
 use crate::autocomplete::{autocomplete_track, autocomplete_tag, autocomplete_origin, autocomplete_artist};
-use crate::library::{get_id_or_insert};
+use crate::library::{get_or_insert_metadata_id};
 use crate::downloader::download_track;
 use crate::track_resolver::require_track;
 
 pub async fn download_direct(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     yt_link: String,
     track_artist: Option<String>,
     track_origin: Option<String>,
@@ -34,7 +34,7 @@ pub async fn download_direct(
 /// Download a track from a YouTube link
 #[poise::command(slash_command)]
 pub async fn download(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     #[description = "YouTube link to download from"]
     yt_link: String,
     #[description = "The actual artist of the track"]
@@ -53,7 +53,7 @@ pub async fn download(
 /// Reset a track's user-set metadata tags
 #[poise::command(slash_command)]
 pub async fn reset_tags(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     #[description = "The track to reset the tags of"]
     #[autocomplete = "autocomplete_track"]
     track: String,
@@ -76,7 +76,7 @@ pub async fn reset_tags(
 /// Add a new arbitrary tag to a track
 #[poise::command(slash_command)]
 pub async fn add_tag(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     #[description = "The track to add a tag to"]
     #[autocomplete = "autocomplete_track"]
     track: String,
@@ -88,7 +88,7 @@ pub async fn add_tag(
 
     let info = require_track(db_pool, &VideoId::from(track)).await?;
 
-    let tag_id = get_id_or_insert(db_pool, "tag", &tag).await?;
+    let tag_id = get_or_insert_metadata_id(db_pool, MetadataKind::Tag, &tag).await?;
 
     sqlx::query("INSERT OR IGNORE INTO track_tags (track_id, tag_id) VALUES (?1, ?2)")
         .bind(info.id.as_str())
@@ -109,7 +109,7 @@ pub async fn add_tag(
 /// Set a track's title, artist, or origin
 #[poise::command(slash_command, subcommands("title", "artist", "origin"), subcommand_required)]
 pub async fn set_metadata(
-    _ctx: Context<'_>,
+    _ctx: PoiseContext<'_>,
 ) -> Result<(), Error> {
     Ok(())
 }
@@ -117,7 +117,7 @@ pub async fn set_metadata(
 /// Set a track's title
 #[poise::command(slash_command)]
 pub async fn title(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     #[description = "The track to adjust"]
     #[autocomplete = "autocomplete_track"]
     track: String,
@@ -151,7 +151,7 @@ pub async fn title(
 /// Set a track's artist
 #[poise::command(slash_command)]
 pub async fn artist(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     #[description = "The track to adjust"]
     #[autocomplete = "autocomplete_track"]
     track: String,
@@ -163,7 +163,7 @@ pub async fn artist(
 
     let info = require_track(db_pool, &VideoId::from(track)).await?;
 
-    let artist_id = get_id_or_insert(db_pool, "artist", &new_artist).await?;
+    let artist_id = get_or_insert_metadata_id(db_pool, MetadataKind::Artist, &new_artist).await?;
 
     sqlx::query("UPDATE tracks SET artist_id = ?1 WHERE id = ?2")
         .bind(artist_id)
@@ -184,7 +184,7 @@ pub async fn artist(
 /// Set a track's origin (e.g., game/movie title)
 #[poise::command(slash_command)]
 pub async fn origin(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     #[description = "The track to adjust"]
     #[autocomplete = "autocomplete_track"]
     track: String,
@@ -196,7 +196,7 @@ pub async fn origin(
 
     let info = require_track(db_pool, &VideoId::from(track)).await?;
 
-    let origin_id = get_id_or_insert(db_pool, "origin", &new_origin).await?;
+    let origin_id = get_or_insert_metadata_id(db_pool, MetadataKind::Origin, &new_origin).await?;
 
     sqlx::query("UPDATE tracks SET origin_id = ?1 WHERE id = ?2")
         .bind(origin_id)

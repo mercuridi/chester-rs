@@ -1,8 +1,8 @@
-use crate::definitions::{Context, Error};
+use crate::definitions::{PoiseContext, Error};
 
 /// Force-register commands - only invokes with ">"
 #[poise::command(prefix_command)]
-pub async fn register(ctx: Context<'_>) -> Result<(), Error> {
+pub async fn register(ctx: PoiseContext<'_>) -> Result<(), Error> {
     poise::builtins::register_application_commands_buttons(ctx).await?;
     Ok(())
 }
@@ -10,7 +10,7 @@ pub async fn register(ctx: Context<'_>) -> Result<(), Error> {
 /// Shows help for commands
 #[poise::command(prefix_command, slash_command)]
 pub async fn help(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     #[description = "Specific command to show help about"]
     #[autocomplete = "poise::builtins::autocomplete_command"]
     command: Option<String>,

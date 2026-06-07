@@ -4,6 +4,29 @@ use poise::serenity_prelude::GuildId;
 use songbird::tracks::TrackHandle;
 use std::collections::HashMap;
 
+pub enum MetadataKind {
+    Artist,
+    Origin,
+    Tag,
+}
+
+impl MetadataKind {
+    pub fn select_sql(&self) -> &'static str {
+        match self {
+            MetadataKind::Artist => "SELECT id FROM artists WHERE artist = ?1",
+            MetadataKind::Origin => "SELECT id FROM origins WHERE origin = ?1",
+            MetadataKind::Tag    => "SELECT id FROM tags WHERE tag = ?1",
+        }
+    }
+
+    pub fn insert_sql(&self) -> &'static str {
+        match self {
+            MetadataKind::Artist => "INSERT INTO artists (artist) VALUES (?1)",
+            MetadataKind::Origin => "INSERT INTO origins (origin) VALUES (?1)",
+            MetadataKind::Tag    => "INSERT INTO tags (tag) VALUES (?1)",
+        }
+    }
+}
 // Track Info unified struct
 #[derive(Clone, Debug)]
 pub struct TrackInfo {
@@ -60,4 +83,4 @@ pub struct NowPlaying {
 // Defines user data; this is always available in the Serenity context of an invocation
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
-pub type Context<'a> = poise::Context<'a, Data, Error>;
+pub type PoiseContext<'a> = poise::Context<'a, Data, Error>;

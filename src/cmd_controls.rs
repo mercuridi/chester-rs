@@ -5,7 +5,7 @@ use songbird::input::File as SongbirdFile;
 use songbird::input::cached::Compressed;
 use songbird::driver::Bitrate;
 use songbird::tracks::LoopState;
-use crate::definitions::{Context, Error, Data, NowPlaying, TrackInfo};
+use crate::definitions::{PoiseContext, Error, Data, NowPlaying, TrackInfo};
 use crate::library::{get_vc_id, join_vc};
 use crate::autocomplete::*;
 use crate::track_resolver::resolve_track;
@@ -13,7 +13,7 @@ use crate::track_resolver::resolve_track;
 /// Joins your voice channel
 #[poise::command(slash_command)]
 pub async fn join(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
 ) -> Result<(), Error> {
     let guild = ctx.guild().expect("Must be in a guild to use voice").clone();
     let vc_id = get_vc_id(ctx).await?;
@@ -26,7 +26,7 @@ pub async fn join(
 
 
 pub async fn play_direct(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     track_info: TrackInfo,
 ) -> Result<(), Error> {
     let guild = ctx.guild().expect("Must be in a guild to use voice").clone();
@@ -88,7 +88,7 @@ pub async fn play_direct(
 /// Plays a selected track from the library
 #[poise::command(slash_command)]
 pub async fn play(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
     #[description = "Track to play now"]
     #[autocomplete = "autocomplete_track"]
     track: String, 
@@ -115,7 +115,7 @@ pub async fn play(
 /// Displays the currently playing track's details
 #[poise::command(slash_command)]
 pub async fn now_playing(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
 ) -> Result<(), Error> {
     // Ensure the command is used in a guild
     let guild_id = if let Some(g) = ctx.guild_id() {
@@ -147,7 +147,7 @@ pub async fn now_playing(
 /// Loop or un‐loop the currently playing track.
 #[poise::command(slash_command, prefix_command)]
 pub async fn loop_track(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
 ) -> Result<(), Error> {
     let guild_id = if let Some(g) = ctx.guild_id() {
         g
@@ -190,7 +190,7 @@ pub async fn loop_track(
 /// Leaves a joined voice channel
 #[poise::command(slash_command)]
 pub async fn leave(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
 ) -> Result<(), Error> {
 
     let guild = ctx.guild().expect("Must be in a guild to use voice").clone();
@@ -213,7 +213,7 @@ pub async fn leave(
 /// Toggles pause/unpause for the currently playing track
 #[poise::command(slash_command)]
 pub async fn pause(
-    ctx: Context<'_>,
+    ctx: PoiseContext<'_>,
 ) -> Result<(), Error> {
     let guild_id = if let Some(g) = ctx.guild_id() {
         g
