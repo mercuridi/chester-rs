@@ -113,4 +113,10 @@ impl PlayerService {
 
         Ok(())
     }
+    pub async fn require_now_playing(&self, guild_id: GuildId) -> Result<TrackInfo, Error> {
+        self.get_now_playing(guild_id)
+            .await
+            .ok_or_else(|| "No track is currently playing.".into())
+    }
 }
+

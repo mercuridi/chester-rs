@@ -3,7 +3,7 @@ use crate::definitions::{PoiseContext, Error};
 
 use songbird::Call;
 use tokio::sync::Mutex;
-use poise::serenity_prelude::{ChannelId, Guild};
+use poise::serenity_prelude::{ChannelId, Guild, GuildId};
 use url::Url;
 use std::sync::Arc;
 
@@ -91,7 +91,7 @@ pub fn get_youtube_id(link: &str) -> Option<String> {
 
 
 pub async fn get_vc_id(ctx: PoiseContext<'_>) -> Result<ChannelId, Error> {
-    let guild_id = ctx.guild_id().ok_or("Not in a guild context")?;
+    let guild_id = require_guild(ctx)?;
 
     let voice_state = ctx.serenity_context()
         .cache
@@ -104,6 +104,10 @@ pub async fn get_vc_id(ctx: PoiseContext<'_>) -> Result<ChannelId, Error> {
     };
 
     Ok(voice_channel_id)
+}
+
+pub fn require_guild(ctx: PoiseContext<'_>) -> Result<GuildId, Error> {
+    ctx.guild_id().ok_or_else(|| "This command can only be used in a server.".into())
 }
 
 pub async fn join_vc(ctx: PoiseContext<'_>, guild: Guild, vc_id: ChannelId) -> Result<Arc<Mutex<Call>>, Error>{
