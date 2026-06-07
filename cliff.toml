@@ -1,21 +1,34 @@
 [changelog]
 header = "# Changelog\n\n"
 body = """
+{% if version %}\
+## [{{ version }}] — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
 {% for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | upper_first }}
 {% for commit in commits %}
-- {{ commit.message | upper_first }}\
-{% endfor %}
+- {{ commit.message | upper_first }}
+{%- endfor %}
 {% endfor %}
 """
 trim = true
+footer = ""
 
 [git]
 conventional_commits = true
+filter_unconventional = true
+since_commit = "2a7d5851"
+
 commit_parsers = [
     { message = "^feat", group = "Features" },
     { message = "^fix", group = "Bug Fixes" },
     { message = "^refactor", group = "Refactor" },
+    { message = "^perf", group = "Performance" },
+    { message = "^docs", group = "Documentation" },
+    { message = "^chore\\(release\\)", skip = true },
     { message = "^chore", skip = true },
 ]
-since = "2026-06-07"
+
+tag_pattern = "v[0-9]*"
