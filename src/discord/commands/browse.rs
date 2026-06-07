@@ -1,14 +1,13 @@
 use crate::definitions::{PoiseContext, Error};
-use crate::db::repository::{fetch_library_all, fetch_library_by_artist, fetch_library_by_incomplete, fetch_library_by_origin, fetch_library_by_tag};
+use crate::db::repository::{
+    fetch_library_all, fetch_library_by_artist, fetch_library_by_incomplete,
+    fetch_library_by_origin, fetch_library_by_tag,
+};
 
-// constants for library pagination
-const ROW_MAX_WIDTH:        usize = 56;
-const MAX_RESULTS_PER_PAGE: usize = 20;
-const LIBRARY_SEPARATOR:    &str  = " ";
-const ROW_SEPARATOR:        &str  = "-";
-const DUPLICATE_INDICATOR:  &str  = "";
-const ELLIPSIS:             &str  = "…";
-const ELLIPSIS_DISPLAY_WIDTH: usize = 1; // display width, not byte length
+const MAX_RESULTS_PER_PAGE: usize = 15;
+const TITLE_MAX_CHARS: usize = 36;
+const META_MAX_CHARS: usize = 40;
+const ELLIPSIS: &str = "…";
 
 /// /library
 #[poise::command(slash_command, subcommands("all", "artist", "origin", "tags", "incomplete"))]
@@ -34,7 +33,7 @@ async fn origin(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "origin").await
 }
 
-/// /library origin
+/// /library tags
 #[poise::command(slash_command)]
 async fn tags(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "tags").await
@@ -46,35 +45,132 @@ async fn incomplete(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "incomplete").await
 }
 
+// ─── helpers ────────────────────────────────────────────────────────────────
+
+/// Truncate to at most `max` Unicode scalar values, appending "…" if cut.
+fn trunc(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        s.to_string()
+    } else {
+        let cut = max.saturating_sub(1); // reserve one display cell for ellipsis
+        chars[..cut].iter().collect::<String>() + ELLIPSIS
+    }
+}
+
+/// Join non-empty, non-placeholder parts with " · ".
+fn meta_line(parts: &[&str]) -> String {
+    let placeholders = ["No artist provided", "No origin provided", "No tags", ""];
+    parts
+        .iter()
+        .filter(|&&p| !placeholders.contains(&p))
+        .map(|&p| trunc(p, META_MAX_CHARS))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+// ─── format functions ────────────────────────────────────────────────────────
+
+/// Two-line entry format used by /library all and /library incomplete.
+///
+/// ```
+/// 1. Track Title
+///    Artist · Origin · tag1, tag2
+/// ```
+fn format_flat(rows: Vec<Vec<String>>) -> Vec<String> {
+    let num_width = rows.len().to_string().len();
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, cols)| {
+            // cols: [title, artist, origin, tags?]  or  [title, artist, origin]
+            let num = format!("{:>width$}.", i + 1, width = num_width);
+            let title = trunc(cols.get(0).map(String::as_str).unwrap_or("—"), TITLE_MAX_CHARS);
+            let meta_parts: Vec<&str> = cols[1..].iter().map(String::as_str).collect();
+            let meta = meta_line(&meta_parts);
+            let indent = " ".repeat(num_width + 2 + 2); // lines up under the title plus two more spaces for visual separation
+            if meta.is_empty() {
+                format!("{} {}\n", num, title)
+            } else {
+                format!("{} {}\n{}{}\n", num, title, indent, meta)
+            }
+        })
+        .collect()
+}
+
+/// Grouped format used by /library artist, /library origin, /library tags.
+///
+/// ```
+/// ── Group Name
+///  1. Track Title
+///  2. Another Title
+/// ```
+fn format_grouped(rows: Vec<Vec<String>>) -> Vec<String> {
+    // rows: [group_key, title]
+    // We number tracks globally and emit a group header whenever the key changes.
+    let total = rows.len();
+    let num_width = total.to_string().len();
+
+    let mut out: Vec<String> = Vec::with_capacity(total + 8);
+    let mut last_key = String::new();
+    let mut global_idx = 0usize;
+
+    for cols in rows {
+        let key = cols.get(0).map(String::as_str).unwrap_or("—");
+        let title = trunc(cols.get(1).map(String::as_str).unwrap_or("—"), TITLE_MAX_CHARS);
+
+        if key != last_key {
+            // Blank line before every group except the very first
+            if !last_key.is_empty() {
+                out.push(String::new());
+            }
+            out.push(format!("── {}", trunc(key, META_MAX_CHARS)));
+            last_key = key.to_string();
+        }
+
+        global_idx += 1;
+        let num = format!("{:>width$}.", global_idx, width = num_width);
+        out.push(format!("  {} {}", num, title));
+    }
+
+    out
+}
+
+// ─── pagination ──────────────────────────────────────────────────────────────
+
+/// Wrap rendered lines into Discord code-block pages of up to `max` *entries*.
+///
+/// For flat format, each entry is 2 lines; for grouped format, entries are 1
+/// line each (plus group headers). We paginate by *entry count* for flat, and
+/// by *line count* for grouped (since group headers don't count as entries).
+fn paginate(lines: Vec<String>, mode: &str) -> Vec<String> {
+    if mode == "grouped" {
+        // Split on blank separator lines to find logical page breaks.
+        // We just chunk by MAX_RESULTS_PER_PAGE raw lines.
+        lines
+            .chunks(MAX_RESULTS_PER_PAGE)
+            .map(|chunk| format!("```\n{}\n```", chunk.join("\n")))
+            .collect()
+    } else {
+        // flat: each entry occupies exactly 2 lines (title + meta).
+        // Chunk by entry pairs.
+        lines
+            .chunks(MAX_RESULTS_PER_PAGE)
+            .map(|chunk| format!("```\n{}\n```", chunk.join("\n")))
+            .collect()
+    }
+}
+
+// ─── dispatcher ──────────────────────────────────────────────────────────────
+
 async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
-    let (weights, headers, raw_data) = match mode {
-        "artist" => (
-            vec![1.0, 2.0],
-            vec!["Artist", "Title"],
-            fetch_library_by_artist(db_pool).await?,
-        ),
-        "origin" => (
-            vec![1.5, 2.0],
-            vec!["Origin", "Title"],
-            fetch_library_by_origin(db_pool).await?,
-        ),
-        "tags" => (
-            vec![1.0, 4.0],
-            vec!["Tag", "Title"],
-            fetch_library_by_tag(db_pool).await?,
-        ),
-        "incomplete" => (
-            vec![1.0, 1.0, 1.0],
-            vec!["Title", "Artist", "Origin"],
-            fetch_library_by_incomplete(db_pool).await?,
-        ),
-        _ => (
-            vec![2.0, 1.5, 1.5, 1.5],
-            vec!["Title", "Artist", "Origin", "Tags"],
-            fetch_library_all(db_pool).await?,
-        ),
+    let (raw_data, grouped) = match mode {
+        "artist"     => (fetch_library_by_artist(db_pool).await?,   true),
+        "origin"     => (fetch_library_by_origin(db_pool).await?,   true),
+        "tags"       => (fetch_library_by_tag(db_pool).await?,      true),
+        "incomplete" => (fetch_library_by_incomplete(db_pool).await?, false),
+        _            => (fetch_library_all(db_pool).await?,          false),
     };
 
     if raw_data.is_empty() {
@@ -82,188 +178,15 @@ async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error>
         return Ok(());
     }
 
-    let (data_with_rownum, rownum_width) = add_row_numbers(raw_data);
-    let col_widths = compute_column_widths(&weights, rownum_width);
+    let (lines, page_mode) = if grouped {
+        (format_grouped(raw_data), "grouped")
+    } else {
+        (format_flat(raw_data), "flat")
+    };
 
-    let mut headers_with_rownum = vec!["#"];
-    headers_with_rownum.extend(headers.clone());
-    let (header, formatted_rows) = format_table(
-        &headers_with_rownum,
-        &data_with_rownum,
-        &col_widths,
-        rownum_width,
-    );
-
-    let pages = paginate_table(&header, &formatted_rows, MAX_RESULTS_PER_PAGE);
-    let page_refs: Vec<&str> = pages.iter().map(|s| s.as_str()).collect();
+    let pages = paginate(lines, page_mode);
+    let page_refs: Vec<&str> = pages.iter().map(String::as_str).collect();
     poise::samples::paginate(ctx, &page_refs).await?;
 
     Ok(())
-}
-
-fn truncate_to_display_width(s: &str, max_display_width: usize) -> String {
-    if max_display_width == 0 {
-        return String::new();
-    }
-
-    // Count display characters, not bytes
-    let char_count = s.chars().count();
-    if char_count <= max_display_width {
-        return s.to_string();
-    }
-
-    // Need to truncate — reserve room for ellipsis
-    let truncate_at = max_display_width.saturating_sub(ELLIPSIS_DISPLAY_WIDTH);
-    let truncated: String = s.chars().take(truncate_at).collect();
-    format!("{}{}", truncated, ELLIPSIS)
-}
-
-fn pad_right(s: &str, display_width: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count >= display_width {
-        return s.to_string();
-    }
-    let padding = display_width - char_count;
-    format!("{}{}", s, " ".repeat(padding))
-}
-
-fn pad_left(s: &str, display_width: usize) -> String {
-    let char_count = s.chars().count();
-    if char_count >= display_width {
-        return s.to_string();
-    }
-    let padding = display_width - char_count;
-    format!("{}{}", " ".repeat(padding), s)
-}
-
-fn compute_column_widths(weights: &[f64], rownum_width: usize) -> Vec<usize> {
-    let num_content_cols = weights.len();
-    // total separators = one between each column including rownum col
-    let separator_count = num_content_cols; // rownum + N content cols = N separators
-    let available = ROW_MAX_WIDTH
-        .saturating_sub(rownum_width)
-        .saturating_sub(separator_count);
-
-    let total_weight: f64 = weights.iter().sum();
-
-    let mut col_widths: Vec<usize> = weights
-        .iter()
-        .map(|w| {
-            ((w / total_weight) * available as f64).floor() as usize
-        })
-        .map(|w| w.max(4))
-        .collect();
-
-    // Distribute any leftover chars left-to-right
-    let used: usize = col_widths.iter().sum::<usize>() + rownum_width + separator_count;
-    let mut leftover = ROW_MAX_WIDTH.saturating_sub(used);
-    let mut i = 0;
-    while leftover > 0 {
-        col_widths[i] += 1;
-        leftover -= 1;
-        i = (i + 1) % col_widths.len();
-    }
-
-    tracing::debug!("col_widths (excl rownum): {:?}", col_widths);
-    tracing::debug!(
-        "total check: {} + {} rownum + {} seps = {}",
-        col_widths.iter().sum::<usize>(),
-        rownum_width,
-        separator_count,
-        col_widths.iter().sum::<usize>() + rownum_width + separator_count
-    );
-
-    col_widths
-}
-
-fn format_table(
-    headers: &[&str],
-    data: &[Vec<String>],
-    col_widths: &[usize], // does NOT include rownum width — passed separately
-    rownum_width: usize,
-) -> (String, Vec<String>) {
-    // Build header row
-    // col_widths[0] corresponds to headers[1] (first content col after rownum)
-    let header = {
-        let rownum_cell = pad_left("#", rownum_width);
-        let content_cells: String = headers[1..]
-            .iter()
-            .enumerate()
-            .map(|(i, h)| {
-                let truncated = truncate_to_display_width(h, col_widths[i]);
-                pad_right(&truncated, col_widths[i])
-            })
-            .collect::<Vec<_>>()
-            .join(LIBRARY_SEPARATOR);
-        format!("{}{}{}", rownum_cell, LIBRARY_SEPARATOR, content_cells)
-    };
-
-    let mut previous_row: Vec<String> = vec![String::new(); headers.len() - 1];
-
-    let formatted_rows = data
-        .iter()
-        .enumerate()
-        .map(|(row_idx, row)| {
-            // row[0] is the row number string e.g. "1."
-            // row[1..] are the content columns
-            let rownum_cell = pad_left(&row[0], rownum_width);
-
-            let content_cells: String = row[1..]
-                .iter()
-                .enumerate()
-                .map(|(col_idx, val)| {
-                    let is_duplicate = val == &previous_row[col_idx]
-                        && !previous_row[col_idx].is_empty()
-                        && row_idx % MAX_RESULTS_PER_PAGE != 0;
-
-                    let text = if is_duplicate {
-                        DUPLICATE_INDICATOR.to_string()
-                    } else {
-                        truncate_to_display_width(val, col_widths[col_idx])
-                    };
-
-                    pad_right(&text, col_widths[col_idx])
-                })
-                .collect::<Vec<_>>()
-                .join(LIBRARY_SEPARATOR);
-
-            // Update previous row tracker (content cols only)
-            for (col_idx, val) in row[1..].iter().enumerate() {
-                previous_row[col_idx] = val.clone();
-            }
-
-            format!("{}{}{}", rownum_cell, LIBRARY_SEPARATOR, content_cells)
-        })
-        .collect();
-
-    (header, formatted_rows)
-}
-
-fn add_row_numbers(data: Vec<Vec<String>>) -> (Vec<Vec<String>>, usize) {
-    let total_rows = data.len();
-    let rownum_width = total_rows.to_string().len() + 1; // e.g. "12." = 3
-    let data_with_rownum = data
-        .into_iter()
-        .enumerate()
-        .map(|(i, mut row)| {
-            let mut new_row = vec![format!("{}.", i + 1)];
-            new_row.append(&mut row);
-            new_row
-        })
-        .collect();
-    (data_with_rownum, rownum_width)
-}
-
-fn paginate_table(header: &str, rows: &[String], max_per_page: usize) -> Vec<String> {
-    let separator = ROW_SEPARATOR.repeat(ROW_MAX_WIDTH);
-    rows.chunks(max_per_page)
-        .map(|chunk| {
-            format!(
-                "```ansi\n\u{001b}[0;39m{}\n{}\n{}\n```",
-                header,
-                separator,
-                chunk.join("\n")
-            )
-        })
-        .collect()
 }
