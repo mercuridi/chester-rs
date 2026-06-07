@@ -1,8 +1,6 @@
 use sqlx::SqlitePool;
-use tokio::sync::RwLock;
-use poise::serenity_prelude::GuildId;
 use songbird::tracks::TrackHandle;
-use std::collections::HashMap;
+use crate::service::PlayerService;
 
 pub enum MetadataKind {
     Artist,
@@ -64,17 +62,19 @@ impl From<&str> for VideoId {
 
 // Defines user data; this is always available in the Serenity context of an invocation
 pub struct Data {
-    pub db_pool: SqlitePool, // Database pool
-    pub now_playing: RwLock<HashMap<GuildId, NowPlaying>>,
+    pub db_pool: SqlitePool,
+    pub player: PlayerService,
 }
+
 impl Data {
     pub fn new(db_pool: SqlitePool) -> Self {
         Self {
             db_pool,
-            now_playing: RwLock::new(HashMap::new())
+            player: PlayerService::new(),
         }
     }
 }
+
 pub struct NowPlaying {
     pub track: TrackInfo,
     pub handle: TrackHandle,
