@@ -13,10 +13,11 @@ reqwest = "0.12.23"
 serde = "1.0.228"
 serde_json = "1.0.145"
 serenity = { version = "0.12.5", features = ["cache", "framework", "standard_framework", "voice"] }
-songbird = { version = "0.6.0", features = ["serenity"] }
+songbird = { version = "0.6.0", features = ["serenity", "receive"] }
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio-native-tls"] }
 symphonia = { version = "0.5.4", features = ["mp3"] }
 tokio = { version = "1.47.1", features = ["full", "rt-multi-thread"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 url = "2.5.7"
+rand = "0.9"
