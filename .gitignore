@@ -4,6 +4,7 @@ yt-dlp
 cookies.txt
 
 docs/rebuild-plan
+docs/chronicle/roadmap.md
 
 .env
 *.dca
