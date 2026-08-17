@@ -1,0 +1,12 @@
+[chronicle]
+enabled = true
+storage_root = "~/Documents/obsidian/interim/Chronicle"
+retain_audio = true
+retain_transcript = true
+
+[chronicle.obsidian]
+vault = "~/Documents/obsidian/interim"
+
+[chronicle.ai]
+transcriber = "whisper"
+llm = "llama.cpp"
