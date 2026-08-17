@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Path to your SQLite database
-DB_PATH="database/metadata.sqlite3"
+DB_PATH="database/jester/jester.sqlite3"
 
 # Output directory
 OUTPUT_DIR="audio"

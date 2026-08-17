@@ -2,7 +2,7 @@ mod constants;
 mod definitions;
 mod db;
 mod discord;
-mod player;
+mod jester;
 mod utils;
 mod library_sync;
 
@@ -52,7 +52,7 @@ async fn main() -> Result<(), Error> {
 
     dotenv().ok();
     // Initialize the SQLite connection pool
-    let database_url = "sqlite://database/metadata.sqlite3";
+    let database_url = "sqlite://database/jester/jester.sqlite3";
     let pool = SqlitePool::connect(database_url).await?;
 
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");

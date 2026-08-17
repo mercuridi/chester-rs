@@ -1,6 +1,6 @@
 use sqlx::SqlitePool;
 use songbird::tracks::TrackHandle;
-use crate::player::service::PlayerService;
+use crate::jester::service::PlayerService;
 
 pub enum MetadataKind {
     Artist,

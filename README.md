@@ -24,5 +24,5 @@ Developed on macOS/Linux. Windows deployments YMMV.
 - `cargo run --release` for optimised build
 
 ### download.sh
-- This script reads the database in `database/metadata.sqlite3` and downloads all relevant audio files automatically
+- This script reads the database in `database/jester/jester.sqlite3` and downloads all relevant audio files automatically
 - `-p` can be passed as a flag to enable parallel download execution - this enormously speeds up large sequential downloads
