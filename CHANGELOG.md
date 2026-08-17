@@ -1,6 +1,13 @@
 # Changelog
 
-## [0.3.0] — 2026-06-07
+## [1.0.0] — 2026-08-17
+
+### Features
+
+- New library output displays because the tables were not working
+- Chester now fulfils its purpose as a simple music bot. v.1.0.0 released.
+
+## [v0.3.0] — 2026-06-07
 
 ### Bug Fixes
 
