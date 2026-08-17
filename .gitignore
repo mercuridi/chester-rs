@@ -1,10 +1,15 @@
 .DS_Store
-yt-dlp
 
+# yt-dlp
+yt-dlp
 cookies.txt
 
+# rebuild roadmap
 docs/rebuild-plan
+
+# chronicle
 docs/chronicle/roadmap.md
+database/chronicle/chronicle.sqlite3
 
 .env
 *.dca
