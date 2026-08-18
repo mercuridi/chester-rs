@@ -39,9 +39,9 @@ pub struct TrackInfo {
 pub struct VideoId(pub String);
 
 impl VideoId {
-    pub fn new(id: String) -> Self {
-        VideoId(id)
-    }
+    // pub fn new(id: String) -> Self {
+    //     VideoId(id)
+    // }
 
     pub fn as_str(&self) -> &str {
         &self.0

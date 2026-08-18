@@ -5,6 +5,7 @@ mod discord;
 mod jester;
 mod utils;
 mod library_sync;
+mod chronicle;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -52,8 +53,10 @@ async fn main() -> Result<(), Error> {
 
     dotenv().ok();
     // Initialize the SQLite connection pool
+    tracing::debug!("Initialising jester database connection");
     let database_url = "sqlite://database/jester/jester.sqlite3";
     let pool = SqlitePool::connect(database_url).await?;
+    tracing::debug!("jester database connection successful");
 
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
 

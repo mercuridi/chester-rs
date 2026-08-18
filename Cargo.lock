@@ -268,6 +268,7 @@ name = "chester-rs"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "dotenv",
  "futures",
  "poise",
@@ -276,6 +277,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serenity",
+ "serenity-voice-model",
  "songbird",
  "sqlx",
  "symphonia",

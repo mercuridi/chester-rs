@@ -1,6 +1,7 @@
 use crate::definitions::{PoiseContext, Error};
+use crate::chronicle::recorder::Receiver;
 
-use songbird::Call;
+use songbird::{Call, CoreEvent};
 use tokio::sync::Mutex;
 use poise::serenity_prelude::{ChannelId, Guild, GuildId};
 use url::Url;
@@ -88,14 +89,42 @@ pub fn require_guild(ctx: PoiseContext<'_>) -> Result<GuildId, Error> {
     ctx.guild_id().ok_or_else(|| "This command can only be used in a server.".into())
 }
 
-pub async fn join_vc(ctx: PoiseContext<'_>, guild: Guild, vc_id: ChannelId) -> Result<Arc<Mutex<Call>>, Error>{
-    tracing::debug!("Joining user's voice chat");
+pub async fn join_vc(
+    ctx: PoiseContext<'_>,
+    guild: Guild,
+    vc_id: ChannelId,
+) -> Result<Arc<Mutex<Call>>, Error> {
+    tracing::debug!("Preparing to join voice chat");
 
     let manager = songbird::get(ctx.serenity_context())
         .await
         .expect("Error getting the Songbird client from the manager")
         .clone();
 
-    let join_result = manager.join(guild.id, vc_id).await;
-    Ok(join_result?)
+    let receiver = Receiver::new();
+
+    // Get/create the Call first, install handlers, THEN join.
+    let call = manager.get_or_insert(guild.id);
+
+    {
+        let mut call_lock = call.lock().await;
+
+        call_lock.add_global_event(
+            CoreEvent::SpeakingStateUpdate.into(),
+            receiver.clone(),
+        );
+
+        call_lock.add_global_event(
+            CoreEvent::VoiceTick.into(),
+            receiver.clone(),
+        );
+    }
+
+    tracing::debug!("Voice event handlers installed");
+
+    manager.join(guild.id, vc_id).await?;
+
+    tracing::debug!("Joined voice chat");
+
+    Ok(call)
 }

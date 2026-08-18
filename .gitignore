@@ -8,7 +8,7 @@ cookies.txt
 docs/rebuild-plan
 
 # chronicle
-docs/chronicle/roadmap.md
+docs/chronicle/
 database/chronicle/chronicle.sqlite3
 
 .env
