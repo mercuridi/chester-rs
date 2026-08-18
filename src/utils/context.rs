@@ -1,5 +1,4 @@
 use crate::definitions::{PoiseContext, Error};
-use crate::chronicle::recorder::Receiver;
 
 use songbird::{Call, CoreEvent};
 use tokio::sync::Mutex;
@@ -101,7 +100,12 @@ pub async fn join_vc(
         .expect("Error getting the Songbird client from the manager")
         .clone();
 
-    let receiver = Receiver::new();
+    let recorder = ctx.data().recorder.clone();
+
+    tracing::info!(
+        recorder_id = recorder.id,
+        "Using recorder for voice connection"
+    );
 
     // Get/create the Call first, install handlers, THEN join.
     let call = manager.get_or_insert(guild.id);
@@ -111,12 +115,12 @@ pub async fn join_vc(
 
         call_lock.add_global_event(
             CoreEvent::SpeakingStateUpdate.into(),
-            receiver.clone(),
+            recorder.clone(),
         );
 
         call_lock.add_global_event(
             CoreEvent::VoiceTick.into(),
-            receiver.clone(),
+            recorder.clone(),
         );
     }
 

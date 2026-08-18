@@ -11,7 +11,7 @@ mod chronicle;
 /// Imports
 
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
-use songbird::SerenityInit; use sqlx::SqlitePool;
+use songbird::{Config, SerenityInit, driver::{DecodeConfig, DecodeMode}}; use sqlx::SqlitePool;
 use dotenv::dotenv;
 use tracing::info;
 
@@ -86,6 +86,7 @@ async fn main() -> Result<(), Error> {
         discord::commands::management::set_metadata(),
         discord::commands::management::fix(),
         discord::commands::browse::library(),
+        discord::commands::chronicle::chronicle(),
     ];
 
     let poise_options = poise::FrameworkOptions {
@@ -134,11 +135,15 @@ async fn main() -> Result<(), Error> {
 
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
 
-    // 2) Create the Serenity client, attach Poise as the event handler…
-    // 3) And register Songbird on the same builder
+    // 2) Build the Songbird config too (required for decoding voice data)
+    let songbird_config = Config::default()
+        .decode_mode(DecodeMode::Decode(DecodeConfig::default()));
+
+    // 3) Create the Serenity client, attach Poise as the event handler…
+    // 4) And register Songbird on the same builder
     let mut client = ClientBuilder::new(token, intents)
         .framework(framework)
-        .register_songbird() // ← this injects the Songbird voice manager
+        .register_songbird_from_config(songbird_config) // ← this injects the Songbird voice manager
         .await?;
 
     // 4) Start the bot

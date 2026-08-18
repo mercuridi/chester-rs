@@ -1,6 +1,6 @@
 use sqlx::SqlitePool;
 use songbird::tracks::TrackHandle;
-use crate::jester::service::PlayerService;
+use crate::{chronicle::recorder::Recorder, jester::service::PlayerService};
 
 pub enum MetadataKind {
     Artist,
@@ -64,6 +64,7 @@ impl From<&str> for VideoId {
 pub struct Data {
     pub db_pool: SqlitePool,
     pub player: PlayerService,
+    pub recorder: Recorder,
 }
 
 impl Data {
@@ -71,6 +72,7 @@ impl Data {
         Self {
             db_pool,
             player: PlayerService::new(),
+            recorder: Recorder::new(),
         }
     }
 }

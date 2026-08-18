@@ -104,7 +104,11 @@ async fn verify_dependencies() -> Result<()> {
         .await
         .context("ffmpeg missing or not executable")?;
 
+    info!("yt-dlp and ffmpeg both available");
+
     Ok(())
+
+
 }
 
 async fn fetch_track_ids(pool: &SqlitePool) -> Result<Vec<String>> {
