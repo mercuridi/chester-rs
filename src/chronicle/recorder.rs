@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
 };
 
+use chrono::prelude::Local;
 use rtrb::{
     Producer,
     RingBuffer
@@ -28,21 +29,23 @@ use crate::{
     definitions::Error,
 };
 
-pub struct RecordingSession {
-    pub users: HashMap<UserId, UserRecording>,
-}
-
 pub struct UserRecording {
     pub producer: Producer<i16>,
     pub stop_tx: oneshot::Sender<()>,
     pub encoder: JoinHandle<Result<(), Error>>,
 }
 
+pub struct RecordingSession {
+    pub users: HashMap<UserId, UserRecording>,
+    pub start: Arc<String>,
+}
+
+
 #[derive(Clone)]
 pub struct Recorder {
     pub id: u64,
     pub ssrc_to_user: Arc<Mutex<HashMap<u32, UserId>>>,
-    pub recording: Arc<Mutex<Option<RecordingSession>>>,
+    pub recording_session: Arc<Mutex<Option<RecordingSession>>>,
 }
 
 impl Recorder {
@@ -50,14 +53,17 @@ impl Recorder {
         Self {
             id: rand::random(),
             ssrc_to_user: Arc::new(Mutex::new(HashMap::new())),
-            recording: Arc::new(Mutex::new(None)),
+            recording_session: Arc::new(Mutex::new(None)),
         }
     }
 
     pub async fn start_recording(&self) -> Result<bool, Error> {
-        ensure_recording_directory()?;
 
-        let mut recording = self.recording.lock().await;
+        let start = Local::now().format("%Y%m%d-%H%M%S").to_string();
+
+        ensure_recording_directory(&start).unwrap();
+
+        let mut recording = self.recording_session.lock().await;
 
         if recording.is_some() {
             return Ok(false);
@@ -65,6 +71,7 @@ impl Recorder {
 
         *recording = Some(RecordingSession {
             users: HashMap::new(),
+            start: Arc::new(start),
         });
 
         tracing::info!("Recording started (id: {})", self.id);
@@ -73,8 +80,13 @@ impl Recorder {
     }
 
     pub async fn stop_recording(&self) -> Result<bool, Error> {
+
+        tracing::debug!("stop_recording: waiting for recording lock");
+
         let session = {
-            let mut recording = self.recording.lock().await;
+            let mut recording = self.recording_session.lock().await;
+
+            tracing::debug!("stop_recording: acquired recording lock");
 
             let Some(session) = recording.take() else {
                 return Ok(false);
@@ -120,19 +132,20 @@ impl Recorder {
     }
 
     pub async fn is_recording(&self) -> bool {
-        self.recording.lock().await.is_some()
+        self.recording_session.lock().await.is_some()
     }
 
     async fn initiate_user_recording(
         &self,
         user_id: UserId,
+        start: Arc<String>,
     ) -> Result<UserRecording, Error> {
         let (producer, consumer) =
             RingBuffer::<i16>::new(RING_BUFFER_CAPACITY);
 
         let (stop_tx, stop_rx) = oneshot::channel();
 
-        let path = recording_path(user_id);
+        let path = recording_path(user_id, &start);
 
         let encoder = tokio::task::spawn_blocking(move || {
             run_encoder(
@@ -181,16 +194,33 @@ impl EventHandler for Recorder {
                         continue;
                     };
 
-                    let mut recording = self.recording.lock().await;
+                    tracing::debug!("VoiceTick: waiting for recording lock");
+
+                    let mut recording = self.recording_session.lock().await;
+
+                    tracing::debug!("VoiceTick: acquired recording lock");
 
                     let Some(session) = recording.as_mut() else {
-                        // Bot is receiving voice, but recording hasn't been
-                        // requested.
+                        tracing::debug!("VoiceTick: recording is inactive");
                         continue;
                     };
 
+                    tracing::debug!(
+                        ?user_id,
+                        existing_users = session.users.len(),
+                        "VoiceTick: checking user recording"
+                    );
+
                     if !session.users.contains_key(&user_id) {
-                        let user_recording = match self.initiate_user_recording(user_id).await {
+                        tracing::debug!(
+                            ?user_id,
+                            "VoiceTick: initiating user recording"
+                        );
+
+                        let user_recording = match self
+                            .initiate_user_recording(user_id, session.start.clone())
+                            .await
+                        {
                             Ok(recording) => recording,
 
                             Err(error) => {
@@ -204,6 +234,11 @@ impl EventHandler for Recorder {
                             }
                         };
 
+                        tracing::debug!(
+                            ?user_id,
+                            "VoiceTick: user recording initiated"
+                        );
+
                         session.users.insert(user_id, user_recording);
 
                         tracing::info!(
@@ -212,10 +247,22 @@ impl EventHandler for Recorder {
                         );
                     }
 
+                    tracing::debug!(
+                        ?user_id,
+                        "VoiceTick: getting user recording"
+                    );
+
                     let user_recording = session
                         .users
                         .get_mut(&user_id)
                         .expect("user recording was just inserted");
+
+                    tracing::debug!(
+                        ?user_id,
+                        samples = audio.len(),
+                        available = user_recording.producer.slots(),
+                        "VoiceTick: about to write PCM"
+                    );
 
                     if user_recording.producer.slots() < audio.len() {
                         tracing::warn!(
@@ -227,6 +274,12 @@ impl EventHandler for Recorder {
 
                         continue;
                     }
+                    
+                    tracing::debug!(
+                        ?user_id,
+                        samples = audio.len(),
+                        "VoiceTick: writing PCM"
+                    );
 
                     match user_recording.producer.write_chunk(audio.len()) {
                         Ok(mut chunk) => {
@@ -251,6 +304,11 @@ impl EventHandler for Recorder {
                             );
                         }
                     }
+
+                    tracing::debug!(
+                        ?user_id,
+                        "VoiceTick: PCM write complete"
+                    );
                 }
             }
 
@@ -261,13 +319,14 @@ impl EventHandler for Recorder {
     }
 }
 
-fn recording_path(user_id: UserId) -> PathBuf {
+fn recording_path(user_id: UserId, stamp: &str) -> PathBuf {
     PathBuf::from(format!(
-        ".chronicle/audio/recording-{}.opus",
-        user_id
+        ".chronicle/recordings/{}/recording-{}.opus",
+        stamp,
+        user_id,
     ))
 }
 
-fn ensure_recording_directory() -> Result<(), std::io::Error> {
-    std::fs::create_dir_all(".chronicle/audio")
+fn ensure_recording_directory(stamp: &str) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(format!(".chronicle/recordings/{}", stamp))
 }
