@@ -29,6 +29,7 @@ pub fn run_encoder(
     path: PathBuf,
     mut consumer: Consumer<i16>,
     mut stop_rx: oneshot::Receiver<()>,
+    initial_silence_ticks: u64,
 ) -> Result<(), Error> {
     let file = File::create(&path)?;
     let mut ogg = PacketWriter::new(file);
@@ -53,6 +54,26 @@ pub fn run_encoder(
         user_id,
         SAMPLE_RATE,
     )?;
+
+    for _ in 0..initial_silence_ticks {
+        mono_buffer.fill(0);
+
+        let encoded_len =
+            opus.encode(&mono_buffer, &mut opus_packet)?;
+
+        if encoded_len > 0 {
+            let packet = opus_packet[..encoded_len].to_vec();
+
+            granule_position += MONO_FRAME_SAMPLES as u64;
+
+            ogg.write_packet(
+                packet,
+                serial,
+                PacketWriteEndInfo::NormalPacket,
+                granule_position,
+            )?;
+        }
+    }
 
     let mut stopping = false;
 

@@ -27,9 +27,7 @@ use songbird::events::{
 };
 
 use crate::{
-    chronicle::encoder::run_encoder,
-    constants::RING_BUFFER_CAPACITY,
-    definitions::Error,
+    chronicle::encoder::run_encoder, constants::{RING_BUFFER_CAPACITY, SILENCE_FRAME}, definitions::Error,
 };
 
 pub struct UserRecording {
@@ -40,6 +38,7 @@ pub struct UserRecording {
 
 pub struct RecordingSession {
     pub started_at: DateTime<Local>,
+    pub tick: u64,
     pub users: HashMap<UserId, UserRecording>,
 }
 
@@ -74,6 +73,7 @@ impl Recorder {
 
         *recording = Some(RecordingSession {
             started_at: Local::now(),
+            tick: 0,
             users: HashMap::new(),
         });
 
@@ -142,6 +142,7 @@ impl Recorder {
         &self,
         user_id: UserId,
         started_at: DateTime<Local>,
+        initial_silence_ticks: u64,
     ) -> Result<UserRecording, Error> {
         let (producer, consumer) =
             RingBuffer::<i16>::new(RING_BUFFER_CAPACITY);
@@ -156,6 +157,7 @@ impl Recorder {
                 path,
                 consumer,
                 stop_rx,
+                initial_silence_ticks,
             )
         });
 
@@ -183,97 +185,128 @@ impl EventHandler for Recorder {
             }
 
             EventContext::VoiceTick(tick) => {
-                for (&ssrc, voice_data) in &tick.speaking {
-                    let Some(audio) = &voice_data.decoded_voice else {
-                        continue;
-                    };
+                // Build a map of users that actually have audio during this tick.
+                //
+                // We do this before locking recording_session so that we don't
+                // need to hold both locks while resolving SSRCs.
+                let mut tick_audio = HashMap::<UserId, &[i16]>::new();
 
-                    let user_id = {
-                        let mappings = self.ssrc_to_user.lock().await;
-                        mappings.get(&ssrc).copied()
-                    };
+                {
+                    let mappings = self.ssrc_to_user.lock().await;
 
-                    let Some(user_id) = user_id else {
-                        continue;
-                    };
-
-
-                    let mut recording = self.recording_session.lock().await;
-
-
-                    let Some(session) = recording.as_mut() else {
-                        continue;
-                    };
-
-                    if !session.users.contains_key(&user_id) {
-
-                        let user_recording = match self
-                            .initiate_user_recording(user_id, session.started_at.clone())
-                        {
-                            Ok(recording) => recording,
-
-                            Err(error) => {
-                                tracing::error!(
-                                    %error,
-                                    ?user_id,
-                                    "Failed to create user recording"
-                                );
-
-                                continue;
-                            }
+                    for (&ssrc, voice_data) in &tick.speaking {
+                        let Some(audio) = &voice_data.decoded_voice else {
+                            continue;
                         };
 
-                        session.users.insert(user_id, user_recording);
+                        let Some(user_id) = mappings.get(&ssrc).copied() else {
+                            continue;
+                        };
 
+                        tick_audio.insert(user_id, audio);
                     }
+                }
 
-                    let user_recording = session
-                        .users
-                        .get_mut(&user_id)
-                        .expect("user recording was just inserted");
+                let mut recording = self.recording_session.lock().await;
 
-                    if user_recording.producer.slots() < audio.len() {
-                        tracing::warn!(
-                            ?user_id,
-                            available = user_recording.producer.slots(),
-                            required = audio.len(),
-                            "Recording ring buffer full; dropping PCM frame"
-                        );
+                let Some(session) = recording.as_mut() else {
+                    return None;
+                };
 
+                // Create recordings for users who have just started speaking.
+                for &user_id in tick_audio.keys() {
+                    if session.users.contains_key(&user_id) {
                         continue;
                     }
 
-                    match user_recording.producer.write_chunk(audio.len()) {
-                        Ok(mut chunk) => {
-                            let (first, second) = chunk.as_mut_slices();
+                    let user_recording = match self
+                        .initiate_user_recording(
+                            user_id,
+                            session.started_at,
+                            session.tick,
+                        )
 
-                            let first_len = first.len();
-
-                            first.copy_from_slice(&audio[..first_len]);
-
-                            if !second.is_empty() {
-                                second.copy_from_slice(&audio[first_len..]);
-                            }
-
-                            chunk.commit_all();
-                        }
+                    {
+                        Ok(recording) => recording,
 
                         Err(error) => {
-                            tracing::warn!(
+                            tracing::error!(
+                                %error,
                                 ?user_id,
-                                ?error,
-                                "Failed to write PCM to recording ring buffer"
+                                "Failed to create user recording"
                             );
-                        }
-                    }
 
+                            continue;
+                        }
+                    };
+
+                    session.users.insert(user_id, user_recording);
                 }
+
+                // Every user gets exactly one 20 ms PCM frame per VoiceTick.
+                //
+                // If Songbird supplied audio, write that audio.
+                // Otherwise, write 20 ms of silence.
+                for (&user_id, user_recording) in &mut session.users {
+                    let audio = tick_audio
+                        .get(&user_id)
+                        .copied()
+                        .unwrap_or(&SILENCE_FRAME);
+
+                    write_pcm(
+                        &mut user_recording.producer,
+                        audio,
+                        user_id,
+                    );
+                }
+
+                // Advance our recording timeline by one 20 ms tick.
+                session.tick += 1;
             }
 
             _ => {}
         }
 
         None
+    }
+}
+
+fn write_pcm(
+    producer: &mut Producer<i16>,
+    samples: &[i16],
+    user_id: UserId,
+) {
+    if producer.slots() < samples.len() {
+        tracing::warn!(
+            ?user_id,
+            available = producer.slots(),
+            required = samples.len(),
+            "Recording ring buffer full; dropping PCM frame"
+        );
+        return;
+    }
+
+    match producer.write_chunk(samples.len()) {
+        Ok(mut chunk) => {
+            let (first, second) = chunk.as_mut_slices();
+            let first_len = first.len();
+
+            first.copy_from_slice(&samples[..first_len]);
+
+            if !second.is_empty() {
+                second.copy_from_slice(&samples[first_len..]);
+            }
+
+            chunk.commit_all();
+        }
+
+        Err(error) => {
+            tracing::warn!(
+                ?user_id,
+                ?error,
+                "Failed to write PCM to recording ring buffer"
+            );
+        }
     }
 }
 
