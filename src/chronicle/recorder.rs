@@ -191,3 +191,18 @@ pub fn write_wav(
 
     Ok(())
 }
+
+
+fn downmix_stereo_to_mono(interleaved: &[i16]) -> Vec<i16> {
+    let (chunks, remainder) = interleaved.as_chunks::<2>();
+
+    debug_assert!(
+        remainder.is_empty(),
+        "interleaved stereo buffer had an odd number of samples"
+    );
+
+    chunks
+        .iter()
+        .map(|&[l, r]| ((l as i32 + r as i32) / 2) as i16)
+        .collect()
+}
