@@ -18,6 +18,7 @@ database/chronicle/chronicle.sqlite3
 *.mp4
 *.json
 *.webm
+*.opus
 
 libs
 cache
