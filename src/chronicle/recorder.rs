@@ -197,28 +197,15 @@ impl EventHandler for Recorder {
                         continue;
                     };
 
-                    tracing::debug!("VoiceTick: waiting for recording lock");
 
                     let mut recording = self.recording_session.lock().await;
 
-                    tracing::debug!("VoiceTick: acquired recording lock");
 
                     let Some(session) = recording.as_mut() else {
-                        tracing::debug!("VoiceTick: recording is inactive");
                         continue;
                     };
 
-                    tracing::debug!(
-                        ?user_id,
-                        existing_users = session.users.len(),
-                        "VoiceTick: checking user recording"
-                    );
-
                     if !session.users.contains_key(&user_id) {
-                        tracing::debug!(
-                            ?user_id,
-                            "VoiceTick: initiating user recording"
-                        );
 
                         let user_recording = match self
                             .initiate_user_recording(user_id, session.started_at.clone())
@@ -236,35 +223,14 @@ impl EventHandler for Recorder {
                             }
                         };
 
-                        tracing::debug!(
-                            ?user_id,
-                            "VoiceTick: user recording initiated"
-                        );
-
                         session.users.insert(user_id, user_recording);
 
-                        tracing::info!(
-                            ?user_id,
-                            "Started recording user"
-                        );
                     }
-
-                    tracing::debug!(
-                        ?user_id,
-                        "VoiceTick: getting user recording"
-                    );
 
                     let user_recording = session
                         .users
                         .get_mut(&user_id)
                         .expect("user recording was just inserted");
-
-                    tracing::debug!(
-                        ?user_id,
-                        samples = audio.len(),
-                        available = user_recording.producer.slots(),
-                        "VoiceTick: about to write PCM"
-                    );
 
                     if user_recording.producer.slots() < audio.len() {
                         tracing::warn!(
@@ -276,12 +242,6 @@ impl EventHandler for Recorder {
 
                         continue;
                     }
-                    
-                    tracing::debug!(
-                        ?user_id,
-                        samples = audio.len(),
-                        "VoiceTick: writing PCM"
-                    );
 
                     match user_recording.producer.write_chunk(audio.len()) {
                         Ok(mut chunk) => {
@@ -307,10 +267,6 @@ impl EventHandler for Recorder {
                         }
                     }
 
-                    tracing::debug!(
-                        ?user_id,
-                        "VoiceTick: PCM write complete"
-                    );
                 }
             }
 
