@@ -4,7 +4,10 @@ use std::{
     sync::Arc,
 };
 
-use chrono::prelude::Local;
+use chrono::{
+    prelude::Local,
+    DateTime,
+};
 use rtrb::{
     Producer,
     RingBuffer
@@ -36,8 +39,8 @@ pub struct UserRecording {
 }
 
 pub struct RecordingSession {
+    pub started_at: DateTime<Local>,
     pub users: HashMap<UserId, UserRecording>,
-    pub start: Arc<String>,
 }
 
 
@@ -59,9 +62,9 @@ impl Recorder {
 
     pub async fn start_recording(&self) -> Result<bool, Error> {
 
-        let start = Local::now().format("%Y%m%d-%H%M%S").to_string();
+        let started_at = Local::now();
 
-        ensure_recording_directory(&start).unwrap();
+        ensure_recording_directory(started_at).unwrap();
 
         let mut recording = self.recording_session.lock().await;
 
@@ -70,8 +73,8 @@ impl Recorder {
         }
 
         *recording = Some(RecordingSession {
+            started_at: Local::now(),
             users: HashMap::new(),
-            start: Arc::new(start),
         });
 
         tracing::info!("Recording started (id: {})", self.id);
@@ -135,17 +138,17 @@ impl Recorder {
         self.recording_session.lock().await.is_some()
     }
 
-    async fn initiate_user_recording(
+    fn initiate_user_recording(
         &self,
         user_id: UserId,
-        start: Arc<String>,
+        started_at: DateTime<Local>,
     ) -> Result<UserRecording, Error> {
         let (producer, consumer) =
             RingBuffer::<i16>::new(RING_BUFFER_CAPACITY);
 
         let (stop_tx, stop_rx) = oneshot::channel();
 
-        let path = recording_path(user_id, &start);
+        let path = recording_path(user_id, started_at);
 
         let encoder = tokio::task::spawn_blocking(move || {
             run_encoder(
@@ -218,8 +221,7 @@ impl EventHandler for Recorder {
                         );
 
                         let user_recording = match self
-                            .initiate_user_recording(user_id, session.start.clone())
-                            .await
+                            .initiate_user_recording(user_id, session.started_at.clone())
                         {
                             Ok(recording) => recording,
 
@@ -319,14 +321,23 @@ impl EventHandler for Recorder {
     }
 }
 
-fn recording_path(user_id: UserId, stamp: &str) -> PathBuf {
+fn recording_directory(started_at: DateTime<Local>) -> PathBuf {
     PathBuf::from(format!(
-        ".chronicle/recordings/{}/recording-{}.opus",
-        stamp,
-        user_id,
+        ".chronicle/recordings/{}",
+        started_at.format("%Y%m%d-%H%M%S"),
     ))
 }
 
-fn ensure_recording_directory(stamp: &str) -> Result<(), std::io::Error> {
-    std::fs::create_dir_all(format!(".chronicle/recordings/{}", stamp))
+fn recording_path(
+    user_id: UserId,
+    started_at: DateTime<Local>,
+) -> PathBuf {
+    recording_directory(started_at)
+        .join(format!("recording-{}.opus", user_id))
+}
+
+fn ensure_recording_directory(
+    started_at: DateTime<Local>,
+) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(recording_directory(started_at))
 }
