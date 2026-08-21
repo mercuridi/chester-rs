@@ -247,6 +247,24 @@ impl WhisperTranscriber {
             let mel_segment =
                 mel.narrow(2, seek, segment_size)?;
 
+            {
+                let mel_min = mel.min_all()?.to_scalar::<f32>()?;
+                let mel_max = mel.max_all()?.to_scalar::<f32>()?;
+                let mel_mean = mel.mean_all()?.to_scalar::<f32>()?;
+
+                tracing::info!(
+                    mel_min,
+                    mel_max,
+                    mel_mean,
+                    "Whisper mel statistics"
+                );
+
+                tracing::info!(
+                    shape = ?mel.dims(),
+                    "Whisper mel shape"
+                );
+            }
+
             let segment_start =
                 (seek * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
 
@@ -256,11 +274,26 @@ impl WhisperTranscriber {
 
             let decoded = self.decode_segment(&mel_segment)?;
 
+            tracing::info!(
+                tokens = ?decoded.tokens,
+                text = %decoded.text,
+                no_speech_prob = decoded.no_speech_prob,
+                avg_logprob = decoded.avg_logprob,
+                "Whisper decoded segment"
+            );
+
             seek += segment_size;
+
+            tracing::info!(
+                no_speech_prob = decoded.no_speech_prob,
+                avg_logprob = decoded.avg_logprob,
+                "Whisper segment decoded"
+            );
 
             if decoded.no_speech_prob > m::NO_SPEECH_THRESHOLD
                 && decoded.avg_logprob < m::LOGPROB_THRESHOLD
             {
+                tracing::info!("Whisper rejected segment");
                 continue;
             }
 
@@ -269,6 +302,20 @@ impl WhisperTranscriber {
                     &decoded.tokens,
                     segment_start,
                 )?;
+
+            tracing::info!(
+                timestamp_segment_count = timestamp_segments.len(),
+                "Whisper timestamp extraction"
+            );
+
+            for segment in &timestamp_segments {
+                tracing::info!(
+                    start = segment.start,
+                    end = segment.end,
+                    text = %segment.text,
+                    "Whisper timestamp segment"
+                );
+            }
 
             if timestamp_segments.is_empty() {
                 let text = decoded.text.trim();
