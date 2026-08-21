@@ -37,3 +37,5 @@ candle-nn = "0.11"
 candle-transformers = { version = "0.11", features = ["cuda"] }
 hf-hub = "0.5"
 tokenizers = "0.22"
+sha2 = "0.11.0"
+hex = "0.4.3"
