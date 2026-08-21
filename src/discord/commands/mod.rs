@@ -1,5 +1,5 @@
 pub mod admin;
-pub mod browse;
+pub mod library;
 pub mod controls;
 pub mod management;
 pub mod chronicle;

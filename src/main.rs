@@ -83,7 +83,7 @@ async fn main() -> Result<(), Error> {
         discord::commands::management::add_tag(),
         discord::commands::management::set_metadata(),
         discord::commands::management::fix(),
-        discord::commands::browse::library(),
+        discord::commands::library::library(),
         discord::commands::chronicle::chronicle(),
     ];
 

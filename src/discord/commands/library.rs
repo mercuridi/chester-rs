@@ -4,6 +4,7 @@ use crate::constants::{
     META_MAX_CHARS,
     TITLE_MAX_CHARS
 };
+
 use crate::definitions::{PoiseContext, Error};
 use crate::db::repository::{
     fetch_library_all, fetch_library_by_artist, fetch_library_by_incomplete,
@@ -44,6 +45,37 @@ async fn tags(ctx: PoiseContext<'_>) -> Result<(), Error> {
 #[poise::command(slash_command)]
 async fn incomplete(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "incomplete").await
+}
+
+// ─── dispatcher ──────────────────────────────────────────────────────────────
+
+async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error> {
+    let db_pool = &ctx.data().db_pool;
+
+    let (raw_data, grouped) = match mode {
+        "artist"     => (fetch_library_by_artist(db_pool).await?,   true),
+        "origin"     => (fetch_library_by_origin(db_pool).await?,   true),
+        "tags"       => (fetch_library_by_tag(db_pool).await?,      true),
+        "incomplete" => (fetch_library_by_incomplete(db_pool).await?, false),
+        _            => (fetch_library_all(db_pool).await?,          false),
+    };
+
+    if raw_data.is_empty() {
+        poise::say_reply(ctx, "No results found.").await?;
+        return Ok(());
+    }
+
+    let (lines, page_mode) = if grouped {
+        (format_grouped(raw_data), "grouped")
+    } else {
+        (format_flat(raw_data), "flat")
+    };
+
+    let pages = paginate(lines, page_mode);
+    let page_refs: Vec<&str> = pages.iter().map(String::as_str).collect();
+    poise::samples::paginate(ctx, &page_refs).await?;
+
+    Ok(())
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -159,35 +191,4 @@ fn paginate(lines: Vec<String>, mode: &str) -> Vec<String> {
             .map(|chunk| format!("```\n{}\n```", chunk.join("\n")))
             .collect()
     }
-}
-
-// ─── dispatcher ──────────────────────────────────────────────────────────────
-
-async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error> {
-    let db_pool = &ctx.data().db_pool;
-
-    let (raw_data, grouped) = match mode {
-        "artist"     => (fetch_library_by_artist(db_pool).await?,   true),
-        "origin"     => (fetch_library_by_origin(db_pool).await?,   true),
-        "tags"       => (fetch_library_by_tag(db_pool).await?,      true),
-        "incomplete" => (fetch_library_by_incomplete(db_pool).await?, false),
-        _            => (fetch_library_all(db_pool).await?,          false),
-    };
-
-    if raw_data.is_empty() {
-        poise::say_reply(ctx, "No results found.").await?;
-        return Ok(());
-    }
-
-    let (lines, page_mode) = if grouped {
-        (format_grouped(raw_data), "grouped")
-    } else {
-        (format_flat(raw_data), "flat")
-    };
-
-    let pages = paginate(lines, page_mode);
-    let page_refs: Vec<&str> = pages.iter().map(String::as_str).collect();
-    poise::samples::paginate(ctx, &page_refs).await?;
-
-    Ok(())
 }
