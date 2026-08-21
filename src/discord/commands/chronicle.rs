@@ -109,6 +109,22 @@ pub async fn transcribe(
         for path in recordings {
             let audio = load_opus(&path)?;
 
+            tracing::debug!(
+                samples = audio.samples.len(),
+                duration_secs = audio.samples.len() as f64 / audio.sample_rate as f64,
+                sample_rate = audio.sample_rate,
+                min = audio.samples.iter().copied().fold(f32::INFINITY, f32::min),
+                max = audio.samples.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+                rms = (
+                    audio.samples
+                        .iter()
+                        .map(|x| (*x as f64) * (*x as f64))
+                        .sum::<f64>()
+                        / audio.samples.len().max(1) as f64
+                ).sqrt(),
+                "Loaded audio"
+            );
+
             let segments = transcriber.transcribe(&audio)?;
 
             let user_id = path

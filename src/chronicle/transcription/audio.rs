@@ -23,6 +23,7 @@ pub struct Audio {
 /// The returned samples are suitable for Candle Whisper.
 pub fn load_opus(path: impl AsRef<Path>) -> Result<Audio> {
     let file = File::open(path)?;
+
     decode_ogg_opus(BufReader::new(file))
 }
 
@@ -70,11 +71,14 @@ where
         };
 
         // Opus permits up to 120 ms per packet at 48 kHz.
-        let mut pcm = [0.0f32; OPUS_SAMPLE_RATE * 120 / 1000];
+        let mut pcm = [0i16; OPUS_SAMPLE_RATE * 120 / 1000];
+        let samples = decoder.decode(data, &mut pcm, false)?;
 
-        let samples = decoder.decode_float(data, &mut pcm, false)?;
-
-        decoded.extend_from_slice(&pcm[..samples]);
+        decoded.extend(
+            pcm[..samples]
+                .iter()
+                .map(|&sample| sample as f32 / 32768.0),
+        );
     }
 
     if decoder.is_none() {
@@ -92,11 +96,41 @@ where
 
     decoded.drain(..pre_skip);
 
+    tracing::debug!(
+        first = ?decoded.iter().take(10).collect::<Vec<_>>(),
+        peak = decoded
+            .iter()
+            .copied()
+            .map(f32::abs)
+            .fold(0.0, f32::max),
+        "Audio before resampling"
+    );
+
     let samples = if OPUS_SAMPLE_RATE == WHISPER_SAMPLE_RATE {
         decoded
     } else {
         resample_48k_to_16k(&decoded)?
     };
+
+    {
+        let min = samples.iter().copied().fold(f32::INFINITY, f32::min);
+        let max = samples.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        let rms = (
+            samples
+                .iter()
+                .map(|x| (*x as f64) * (*x as f64))
+                .sum::<f64>()
+                / samples.len().max(1) as f64
+        ).sqrt();
+
+        tracing::debug!(
+            samples = samples.len(),
+            min,
+            max,
+            rms,
+            "Audio after resampling"
+        );
+    }
 
     Ok(Audio {
         samples,
@@ -131,8 +165,8 @@ fn parse_opus_head(data: &[u8]) -> Result<OpusHead> {
 
 fn resample_48k_to_16k(input: &[f32]) -> Result<Vec<f32>> {
     let mut resampler = FftFixedIn::<f32>::new(
-        WHISPER_SAMPLE_RATE,
         OPUS_SAMPLE_RATE,
+        WHISPER_SAMPLE_RATE,
         1024,
         1,
         1,
