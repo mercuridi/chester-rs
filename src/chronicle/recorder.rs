@@ -1,7 +1,5 @@
 use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::Arc,
+    collections::{HashMap, hash_map::Entry}, path::PathBuf, sync::Arc,
 };
 
 use chrono::{
@@ -12,6 +10,7 @@ use rtrb::{
     Producer,
     RingBuffer
 };
+use serenity::model::id::GuildId;
 use tokio::{
     sync::{
         oneshot,
@@ -41,11 +40,48 @@ pub struct UserRecording {
 }
 
 pub struct RecordingSession {
+    pub guild_id: GuildId,
     pub started_at: DateTime<Local>,
     pub tick: u64,
     pub users: HashMap<UserId, UserRecording>,
 }
+pub struct RecorderManager {
+    recorders: Arc<Mutex<HashMap<GuildId, Recorder>>>,
+}
 
+impl RecorderManager {
+    pub fn new() -> Self {
+        Self {
+            recorders: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub async fn get(&self, guild_id: GuildId) -> Option<Recorder> {
+        self.recorders.lock().await.get(&guild_id).cloned()
+    }
+
+    pub async fn get_or_create(
+        &self,
+        guild_id: GuildId,
+    ) -> (Recorder, bool) {
+        let mut recorders = self.recorders.lock().await;
+
+        match recorders.entry(guild_id) {
+            Entry::Occupied(entry) => {
+                (entry.get().clone(), false)
+            }
+            Entry::Vacant(entry) => {
+                let recorder = Recorder::new();
+                entry.insert(recorder.clone());
+                (recorder, true)
+            }
+        }
+    }
+
+    pub async fn remove(&self, guild_id: GuildId) -> Option<Recorder> {
+        self.recorders.lock().await.remove(&guild_id)
+    }
+}
 
 #[derive(Clone)]
 pub struct Recorder {
@@ -63,11 +99,12 @@ impl Recorder {
         }
     }
 
-    pub async fn start_recording(&self) -> Result<bool, Error> {
-
+    pub async fn start_recording(
+        &self,
+        guild_id: GuildId,
+    ) -> Result<bool, Error> {
         let started_at = Local::now();
-
-        ensure_recording_directory(started_at).unwrap();
+        ensure_recording_directory(guild_id, started_at)?;
 
         let mut recording = self.recording_session.lock().await;
 
@@ -76,12 +113,17 @@ impl Recorder {
         }
 
         *recording = Some(RecordingSession {
-            started_at: Local::now(),
+            guild_id,
+            started_at,
             tick: 0,
             users: HashMap::new(),
         });
 
-        tracing::info!("Recording started (id: {})", self.id);
+        tracing::info!(
+            guild_id = %guild_id,
+            "Recording started (id: {})",
+            self.id
+        );
 
         Ok(true)
     }
@@ -144,6 +186,7 @@ impl Recorder {
 
     fn initiate_user_recording(
         &self,
+        guild_id: GuildId,
         user_id: UserId,
         started_at: DateTime<Local>,
         initial_silence_ticks: u64,
@@ -153,7 +196,7 @@ impl Recorder {
 
         let (stop_tx, stop_rx) = oneshot::channel();
 
-        let path = recording_path(user_id, started_at);
+        let path = recording_path(guild_id, user_id, started_at);
 
         let encoder = tokio::task::spawn_blocking(move || {
             run_encoder(
@@ -176,6 +219,7 @@ impl Recorder {
         &self,
         call: &Arc<Mutex<Call>>,
     ) -> Result<(), Error> {
+
         let mut call_lock = call.lock().await;
 
         call_lock.add_global_event(
@@ -244,6 +288,7 @@ impl EventHandler for Recorder {
 
                     let user_recording = match self
                         .initiate_user_recording(
+                            session.guild_id,
                             user_id,
                             session.started_at,
                             session.tick,
@@ -333,23 +378,29 @@ fn write_pcm(
     }
 }
 
-fn recording_directory(started_at: DateTime<Local>) -> PathBuf {
+fn recording_directory(
+    guild_id: GuildId,
+    started_at: DateTime<Local>,
+) -> PathBuf {
     PathBuf::from(format!(
-        ".chronicle/recordings/{}",
+        ".chronicle/recordings/{}/{}",
+        guild_id,
         started_at.format("%Y%m%d-%H%M%S"),
     ))
 }
 
 fn recording_path(
+    guild_id: GuildId,
     user_id: UserId,
     started_at: DateTime<Local>,
 ) -> PathBuf {
-    recording_directory(started_at)
+    recording_directory(guild_id, started_at)
         .join(format!("recording-{}.opus", user_id))
 }
 
 fn ensure_recording_directory(
+    guild_id: GuildId,
     started_at: DateTime<Local>,
 ) -> Result<(), std::io::Error> {
-    std::fs::create_dir_all(recording_directory(started_at))
+    std::fs::create_dir_all(recording_directory(guild_id, started_at))
 }

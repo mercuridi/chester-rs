@@ -44,7 +44,28 @@ pub async fn join_vc(
 
     let call = manager.join(guild_id, vc_id).await?;
 
-    ctx.data().recorder.attach_to_call(&call).await?;
+    let (recorder, is_new) = ctx.data().recorder.get_or_create(guild_id).await;
+
+    if is_new {
+        if let Err(error) = recorder.attach_to_call(&call).await {
+            ctx.data().recorder.remove(guild_id).await;
+
+            if let Err(remove_error) = manager.remove(guild_id).await {
+                tracing::error!(
+                    ?guild_id,
+                    %remove_error,
+                    "Failed to clean up voice connection after recorder attachment failure"
+                );
+            }
+
+            return Err(error);
+        }
+
+        tracing::debug!(
+            ?guild_id,
+            "Created and attached recorder"
+        );
+    }
 
     tracing::debug!(
         ?guild_id,
@@ -59,12 +80,30 @@ pub async fn leave_vc(
     ctx: PoiseContext<'_>,
     guild_id: GuildId,
 ) -> Result<(), Error> {
+    let recorder = ctx.data().recorder.remove(guild_id).await;
+
+    let recording_error = if let Some(recorder) = recorder {
+        recorder.stop_recording().await.err()
+    } else {
+        None
+    };
+
     let manager = songbird::get(ctx.serenity_context())
         .await
         .expect("Songbird was not initialized")
         .clone();
 
-    manager.remove(guild_id).await?;
+    let voice_result = manager.remove(guild_id).await;
+
+    if let Some(error) = recording_error {
+        tracing::error!(
+            ?guild_id,
+            %error,
+            "Failed to fully stop recording while leaving voice channel"
+        );
+    }
+
+    voice_result?;
 
     Ok(())
 }

@@ -1,12 +1,12 @@
 use sqlx::SqlitePool;
 
-use crate::{chronicle::recorder::Recorder, player::service::PlayerService};
+use crate::{chronicle::recorder::RecorderManager, player::service::PlayerService};
 
 // Defines user data; this is always available in the Serenity context of an invocation
 pub struct Data {
     pub db_pool: SqlitePool,
     pub player: PlayerService,
-    pub recorder: Recorder,
+    pub recorder: RecorderManager,
 }
 
 impl Data {
@@ -14,7 +14,7 @@ impl Data {
         Self {
             db_pool,
             player: PlayerService::new(),
-            recorder: Recorder::new(),
+            recorder: RecorderManager::new(),
         }
     }
 }
