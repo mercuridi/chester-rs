@@ -2,7 +2,7 @@ mod constants;
 mod library;
 mod db;
 mod discord;
-mod jester;
+mod player;
 mod utils;
 mod chronicle;
 mod track;
