@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use serenity::model::{guild::Guild, id::{ChannelId, GuildId}};
-use songbird::{Call, CoreEvent};
+use serenity::model::id::{ChannelId, GuildId};
+use songbird::Call;
 use tokio::sync::Mutex;
 
 use crate::discord::context::{Error, PoiseContext};
@@ -28,45 +28,37 @@ pub fn require_guild(ctx: PoiseContext<'_>) -> Result<GuildId, Error> {
 
 pub async fn join_vc(
     ctx: PoiseContext<'_>,
-    guild: Guild,
+    guild_id: GuildId,
     vc_id: ChannelId,
 ) -> Result<Arc<Mutex<Call>>, Error> {
-    tracing::debug!("Preparing to join voice chat");
+    tracing::debug!(
+        ?guild_id,
+        ?vc_id,
+        "Joining voice channel"
+    );
 
     let manager = songbird::get(ctx.serenity_context())
         .await
-        .expect("Error getting the Songbird client from the manager")
+        .expect("Songbird was not initialized")
         .clone();
 
-    let recorder = ctx.data().recorder.clone();
+    let call = manager.join(guild_id, vc_id).await?;
 
-    tracing::info!(
-        recorder_id = recorder.id,
-        "Using recorder for voice connection"
+    tracing::debug!(
+        ?guild_id,
+        ?vc_id,
+        "Joined voice channel"
     );
 
-    // Get/create the Call first, install handlers, THEN join.
-    let call = manager.get_or_insert(guild.id);
-
-    {
-        let mut call_lock = call.lock().await;
-
-        call_lock.add_global_event(
-            CoreEvent::SpeakingStateUpdate.into(),
-            recorder.clone(),
-        );
-
-        call_lock.add_global_event(
-            CoreEvent::VoiceTick.into(),
-            recorder.clone(),
-        );
-    }
-
-    tracing::debug!("Voice event handlers installed");
-
-    manager.join(guild.id, vc_id).await?;
-
-    tracing::debug!("Joined voice chat");
-
     Ok(call)
+}
+
+pub async fn ensure_vc(
+    ctx: PoiseContext<'_>,
+) -> Result<(GuildId, Arc<Mutex<Call>>), Error> {
+    let guild_id = require_guild(ctx)?;
+    let vc_id = get_vc_id(ctx).await?;
+    let call = join_vc(ctx, guild_id, vc_id).await?;
+
+    Ok((guild_id, call))
 }

@@ -1,11 +1,9 @@
-use crate::{discord::{autocomplete::autocomplete_track, context::{Error, PoiseContext}, voice::{get_vc_id, join_vc, require_guild}}, track::resolver::resolve_track};
+use crate::{discord::{autocomplete::autocomplete_track, context::{Error, PoiseContext}, voice::{ensure_vc, get_vc_id, require_guild}}, track::resolver::resolve_track};
 
 /// Joins your voice channel
 #[poise::command(slash_command)]
 pub async fn join(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    let guild = ctx.guild().ok_or("Must be in a guild")?.clone();
-    let vc_id = get_vc_id(ctx).await?;
-    join_vc(ctx, guild, vc_id).await?;
+    ensure_vc(ctx).await?;
     ctx.say("Joined your voice channel! 🎶").await?;
     Ok(())
 }
@@ -18,16 +16,13 @@ pub async fn play(
     #[autocomplete = "autocomplete_track"]
     track: String,
 ) -> Result<(), Error> {
-    let guild_id = require_guild(ctx)?;
-    let vc_id = get_vc_id(ctx).await?;
+    let (guild_id, call) = ensure_vc(ctx).await?;
     let track_info = resolve_track(&ctx.data().db_pool, track).await?;
 
-    ctx.data().player.play(
-        guild_id,
-        vc_id,
-        track_info.clone(),
-        ctx.serenity_context(),
-    ).await?;
+    ctx.data()
+        .player
+        .play(guild_id, call, track_info.clone())
+        .await?;
 
     ctx.say(format!(
         "Now playing: `{}` by `{}`, from `{}`.",

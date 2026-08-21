@@ -20,11 +20,11 @@ use tokio::{
     task::JoinHandle,
 };
 use serenity_voice_model::id::UserId;
-use songbird::events::{
+use songbird::{Call, CoreEvent, events::{
     Event,
     EventContext,
     EventHandler
-};
+}};
 
 use crate::{
     chronicle::encoder::run_encoder,
@@ -170,6 +170,23 @@ impl Recorder {
             stop_tx,
             encoder,
         })
+    }
+
+    pub async fn attach_to_call(
+        &self,
+        call: &Arc<Mutex<Call>>,
+    ) {
+        let mut call_lock = call.lock().await;
+
+        call_lock.add_global_event(
+            CoreEvent::SpeakingStateUpdate.into(),
+            self.clone(),
+        );
+
+        call_lock.add_global_event(
+            CoreEvent::VoiceTick.into(),
+            self.clone(),
+        );
     }
 
 }

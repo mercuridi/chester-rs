@@ -1,4 +1,4 @@
-use crate::discord::context::{Error, PoiseContext};
+use crate::discord::{context::{Error, PoiseContext}, voice::ensure_vc};
 
 #[poise::command(slash_command, subcommands("record"), subcommand_required)]
 pub async fn chronicle(
@@ -8,18 +8,16 @@ pub async fn chronicle(
 }
 
 #[poise::command(slash_command)]
-pub async fn record(
-    ctx: PoiseContext<'_>,
-) -> Result<(), Error> {
+pub async fn record(ctx: PoiseContext<'_>) -> Result<(), Error> {
     let recorder = ctx.data().recorder.clone();
 
     if recorder.is_recording().await {
         recorder.stop_recording().await?;
-
         ctx.say("Recording stopped.").await?;
     } else {
+        let (_, call) = ensure_vc(ctx).await?;
+        recorder.attach_to_call(&call).await;
         recorder.start_recording().await?;
-
         ctx.say("Recording started.").await?;
     }
 
