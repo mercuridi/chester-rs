@@ -4,6 +4,9 @@ version = "1.0.0"
 edition = "2024"
 publish = false
 
+[patch.crates-io]
+candle-kernels = { path = "../candle/candle-kernels" }
+
 [dependencies]
 anyhow = "1.0.99"
 dotenv = "0.15.0"
@@ -29,3 +32,8 @@ songbird = { version = "0.6.0", features = ["serenity", "receive"] }
 poise = "0.6.1"
 chrono = "0.4.45"
 rubato = "0.16.2"
+candle-core = { version = "0.11", features = ["cuda"] }
+candle-nn = "0.11"
+candle-transformers = { version = "0.11", features = ["cuda"] }
+hf-hub = "0.5"
+tokenizers = "0.22"
