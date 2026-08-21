@@ -28,3 +28,4 @@ serenity = { version = "0.12.5", features = ["cache", "framework", "standard_fra
 songbird = { version = "0.6.0", features = ["serenity", "receive"] }
 poise = "0.6.1"
 chrono = "0.4.45"
+rubato = "0.16.2"
