@@ -53,6 +53,20 @@ pub async fn join_vc(
     Ok(call)
 }
 
+pub async fn leave_vc(
+    ctx: PoiseContext<'_>,
+    guild_id: GuildId,
+) -> Result<(), Error> {
+    let manager = songbird::get(ctx.serenity_context())
+        .await
+        .expect("Songbird was not initialized")
+        .clone();
+
+    manager.remove(guild_id).await?;
+
+    Ok(())
+}
+
 pub async fn ensure_vc(
     ctx: PoiseContext<'_>,
 ) -> Result<(GuildId, Arc<Mutex<Call>>), Error> {

@@ -1,4 +1,4 @@
-use crate::{discord::{autocomplete::autocomplete_track, context::{Error, PoiseContext}, voice::{ensure_vc, get_vc_id, require_guild}}, track::resolver::resolve_track};
+use crate::{discord::{autocomplete::autocomplete_track, context::{Error, PoiseContext}, voice::{ensure_vc, leave_vc, require_guild}}, track::resolver::resolve_track};
 
 /// Joins your voice channel
 #[poise::command(slash_command)]
@@ -85,10 +85,11 @@ pub async fn pause(ctx: PoiseContext<'_>) -> Result<(), Error> {
 #[poise::command(slash_command)]
 pub async fn leave(ctx: PoiseContext<'_>) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
-    let _ = get_vc_id(ctx).await?; // verify user is in a voice channel
 
-    ctx.data().player.leave(guild_id, ctx.serenity_context()).await?;
+    leave_vc(ctx, guild_id).await?;
+    ctx.data().player.clear_now_playing(guild_id).await;
 
     ctx.say("Left the voice channel.").await?;
+
     Ok(())
 }

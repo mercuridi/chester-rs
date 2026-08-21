@@ -96,19 +96,10 @@ impl PlayerService {
             .map(|np| np.track.clone())
     }
 
-    pub async fn leave(&self, guild_id: GuildId, serenity_ctx: &poise::serenity_prelude::Context) -> Result<(), Error> {
-        let manager = songbird::get(serenity_ctx)
-            .await
-            .expect("Songbird was not initialized")
-            .clone();
-
-        manager.remove(guild_id).await?;
-
-        let mut state = self.now_playing.write().await;
-        state.remove(&guild_id);
-
-        Ok(())
+    pub async fn clear_now_playing(&self, guild_id: GuildId) {
+        self.now_playing.write().await.remove(&guild_id);
     }
+
     pub async fn require_now_playing(&self, guild_id: GuildId) -> Result<TrackInfo, Error> {
         self.get_now_playing(guild_id)
             .await
