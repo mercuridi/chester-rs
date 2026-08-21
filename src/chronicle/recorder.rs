@@ -31,7 +31,7 @@ use crate::{
     constants::{
         RING_BUFFER_CAPACITY,
         SILENCE_FRAME},
-    definitions::Error,
+    discord::context::Error,
 };
 
 pub struct UserRecording {

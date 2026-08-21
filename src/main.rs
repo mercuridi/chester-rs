@@ -1,10 +1,11 @@
 mod constants;
-mod definitions;
+mod library;
 mod db;
 mod discord;
 mod jester;
 mod utils;
 mod chronicle;
+mod track;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -14,7 +15,7 @@ use songbird::{Config, SerenityInit, driver::{DecodeConfig, DecodeMode}}; use sq
 use dotenv::dotenv;
 use tracing::info;
 
-use crate::{definitions::{Data, Error}, utils::library_sync};
+use crate::{discord::context::{Data, Error}, library::sync::sync_audio_library};
 use tracing_subscriber::EnvFilter;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -58,7 +59,7 @@ async fn main() -> Result<(), Error> {
 
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
 
-    let stats = library_sync::sync_audio_library(&pool).await?;
+    let stats = sync_audio_library(&pool).await?;
 
     info!(
         downloaded = stats.downloaded,

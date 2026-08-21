@@ -20,7 +20,8 @@ use crate::{
         PCM_CHANNELS,
         SAMPLE_RATE,
         STEREO_FRAME_SAMPLES,
-    }, definitions::Error
+    },
+    discord::context::Error,
 };
 
 

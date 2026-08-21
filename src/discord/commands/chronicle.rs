@@ -1,4 +1,4 @@
-use crate::definitions::{Error, PoiseContext};
+use crate::discord::context::{Error, PoiseContext};
 
 #[poise::command(slash_command, subcommands("record"), subcommand_required)]
 pub async fn chronicle(

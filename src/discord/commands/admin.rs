@@ -1,4 +1,4 @@
-use crate::definitions::{PoiseContext, Error};
+use crate::discord::context::{Error, PoiseContext};
 
 /// Force-register commands - only invokes with ">"
 #[poise::command(prefix_command)]

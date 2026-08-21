@@ -5,11 +5,12 @@ use crate::constants::{
     TITLE_MAX_CHARS
 };
 
-use crate::definitions::{PoiseContext, Error};
+
 use crate::db::repository::{
     fetch_library_all, fetch_library_by_artist, fetch_library_by_incomplete,
     fetch_library_by_origin, fetch_library_by_tag,
 };
+use crate::discord::context::{Error, PoiseContext};
 
 /// /library
 #[poise::command(slash_command, subcommands("all", "artist", "origin", "tags", "incomplete"))]

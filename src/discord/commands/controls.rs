@@ -1,7 +1,4 @@
-use crate::definitions::{PoiseContext, Error};
-use crate::utils::context::{get_vc_id, join_vc, require_guild};
-use crate::discord::autocomplete::autocomplete_track;
-use crate::utils::track_resolver::resolve_track;
+use crate::{discord::{autocomplete::autocomplete_track, context::{Error, PoiseContext}, voice::{get_vc_id, join_vc, require_guild}}, track::resolver::resolve_track};
 
 /// Joins your voice channel
 #[poise::command(slash_command)]

@@ -2,9 +2,7 @@ use std::process::Command;
 use serde_json::Value;
 use sqlx::SqlitePool;
 
-use crate::utils::context::{get_youtube_id, process_ytdlp_json};
-use crate::definitions::{Error, MetadataKind, TrackInfo, VideoId};
-use crate::db::repository::{get_or_insert_metadata_id, insert_new_track, lookup_track};
+use crate::{db::{metadata::MetadataKind, repository::{get_or_insert_metadata_id, insert_new_track, lookup_track}}, discord::context::Error, track::{metadata::process_ytdlp_json, types::{TrackInfo, VideoId}, youtube::get_youtube_id}};
 
 
 pub async fn download_track(

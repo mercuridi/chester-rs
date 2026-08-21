@@ -1,7 +1,9 @@
-use crate::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
-use crate::definitions::{PoiseContext, MetadataKind};
-use crate::db::repository::{search_incomplete_tracks, search_metadata, search_tracks};
 use poise::serenity_prelude::AutocompleteChoice;
+
+use crate::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
+use crate::db::metadata::MetadataKind;
+use crate::db::repository::{search_incomplete_tracks, search_metadata, search_tracks};
+use crate::discord::context::PoiseContext;
 use crate::utils::format::{lightweight_trim, build_autocomplete_display};
 
 pub async fn autocomplete_artist(

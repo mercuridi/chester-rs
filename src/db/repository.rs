@@ -1,7 +1,7 @@
 use serde_json::Value;
 use sqlx::{SqlitePool, Row};
 
-use crate::definitions::{Error, MetadataKind, TrackInfo, VideoId};
+use crate::{db::metadata::MetadataKind, discord::context::Error, track::types::{TrackInfo, VideoId}};
 
 pub async fn get_or_insert_metadata_id(
     db_pool: &SqlitePool,
