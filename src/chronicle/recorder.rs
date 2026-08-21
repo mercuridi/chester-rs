@@ -27,7 +27,11 @@ use songbird::events::{
 };
 
 use crate::{
-    chronicle::encoder::run_encoder, constants::{RING_BUFFER_CAPACITY, SILENCE_FRAME}, definitions::Error,
+    chronicle::encoder::run_encoder,
+    constants::{
+        RING_BUFFER_CAPACITY,
+        SILENCE_FRAME},
+    definitions::Error,
 };
 
 pub struct UserRecording {

@@ -4,7 +4,6 @@ mod db;
 mod discord;
 mod jester;
 mod utils;
-mod library_sync;
 mod chronicle;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -15,8 +14,7 @@ use songbird::{Config, SerenityInit, driver::{DecodeConfig, DecodeMode}}; use sq
 use dotenv::dotenv;
 use tracing::info;
 
-use crate::definitions::{Data, Error};
-
+use crate::{definitions::{Data, Error}, utils::library_sync};
 use tracing_subscriber::EnvFilter;
 
 ////////////////////////////////////////////////////////////////////////////////

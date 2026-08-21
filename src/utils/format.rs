@@ -1,7 +1,6 @@
-use crate::constants::{ELLIPSIS, ELLIPSIS_DISPLAY_WIDTH, ELLIPSIS_LEN};
-use crate::discord::autocomplete::{AUTOCOMPLETE_MAX_LENGTH, AUTOCOMPLETE_SEPARATOR, AUTOCOMPLETE_SEPARATOR_LEN};
-
-
+use crate::constants::{
+    AUTOCOMPLETE_MAX_LENGTH, AUTOCOMPLETE_SEPARATOR, AUTOCOMPLETE_SEPARATOR_LEN, ELLIPSIS, ELLIPSIS_DISPLAY_WIDTH, ELLIPSIS_LEN
+};
 
 pub fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
     // Build a display name

@@ -1,13 +1,14 @@
+use crate::constants::{
+    ELLIPSIS,
+    MAX_RESULTS_PER_PAGE,
+    META_MAX_CHARS,
+    TITLE_MAX_CHARS
+};
 use crate::definitions::{PoiseContext, Error};
 use crate::db::repository::{
     fetch_library_all, fetch_library_by_artist, fetch_library_by_incomplete,
     fetch_library_by_origin, fetch_library_by_tag,
 };
-
-const MAX_RESULTS_PER_PAGE: usize = 15;
-const TITLE_MAX_CHARS: usize = 36;
-const META_MAX_CHARS: usize = 40;
-const ELLIPSIS: &str = "…";
 
 /// /library
 #[poise::command(slash_command, subcommands("all", "artist", "origin", "tags", "incomplete"))]

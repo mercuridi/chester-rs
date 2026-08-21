@@ -1,12 +1,8 @@
+use crate::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
 use crate::definitions::{PoiseContext, MetadataKind};
 use crate::db::repository::{search_incomplete_tracks, search_metadata, search_tracks};
 use poise::serenity_prelude::AutocompleteChoice;
 use crate::utils::format::{lightweight_trim, build_autocomplete_display};
-
-pub const AUTOCOMPLETE_MAX_CHOICES: usize = 25;
-pub const AUTOCOMPLETE_MAX_LENGTH: usize = 100;
-pub const AUTOCOMPLETE_SEPARATOR: &str = " | ";
-pub const AUTOCOMPLETE_SEPARATOR_LEN: usize = AUTOCOMPLETE_SEPARATOR.len();
 
 pub async fn autocomplete_artist(
     ctx: PoiseContext<'_>,

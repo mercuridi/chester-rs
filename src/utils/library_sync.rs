@@ -5,10 +5,7 @@ use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
 use futures::stream::{self, StreamExt as FuturesStreamExt};
 
-const AUDIO_DIR: &str = "audio";
-const DOWNLOAD_CONCURRENCY: usize = 4;
-const MAX_RETRIES: usize = 3;
-const YTDLP_PATH: &str = "./yt-dlp";
+use crate::constants::{AUDIO_DIR, DOWNLOAD_CONCURRENCY, MAX_RETRIES, YTDLP_PATH};
 
 #[derive(Debug)]
 pub struct SyncStats {
