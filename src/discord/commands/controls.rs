@@ -86,10 +86,13 @@ pub async fn pause(ctx: PoiseContext<'_>) -> Result<(), Error> {
 pub async fn leave(ctx: PoiseContext<'_>) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
 
+    if ctx.data().recorder.is_recording().await {
+        ctx.data().recorder.stop_recording().await?;
+    }
+
     leave_vc(ctx, guild_id).await?;
     ctx.data().player.clear_now_playing(guild_id).await;
 
     ctx.say("Left the voice channel.").await?;
-
     Ok(())
 }

@@ -171,11 +171,11 @@ impl Recorder {
             encoder,
         })
     }
-
+    
     pub async fn attach_to_call(
         &self,
         call: &Arc<Mutex<Call>>,
-    ) {
+    ) -> Result<(), Error> {
         let mut call_lock = call.lock().await;
 
         call_lock.add_global_event(
@@ -187,6 +187,8 @@ impl Recorder {
             CoreEvent::VoiceTick.into(),
             self.clone(),
         );
+
+        Ok(())
     }
 
 }

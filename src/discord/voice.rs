@@ -44,6 +44,8 @@ pub async fn join_vc(
 
     let call = manager.join(guild_id, vc_id).await?;
 
+    ctx.data().recorder.attach_to_call(&call).await?;
+
     tracing::debug!(
         ?guild_id,
         ?vc_id,

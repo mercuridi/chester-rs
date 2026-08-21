@@ -12,11 +12,11 @@ pub async fn record(ctx: PoiseContext<'_>) -> Result<(), Error> {
     let recorder = ctx.data().recorder.clone();
 
     if recorder.is_recording().await {
+        ensure_vc(ctx).await?;
         recorder.stop_recording().await?;
         ctx.say("Recording stopped.").await?;
     } else {
-        let (_, call) = ensure_vc(ctx).await?;
-        recorder.attach_to_call(&call).await;
+        ensure_vc(ctx).await?;
         recorder.start_recording().await?;
         ctx.say("Recording started.").await?;
     }
