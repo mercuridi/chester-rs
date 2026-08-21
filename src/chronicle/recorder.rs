@@ -243,11 +243,12 @@ impl EventHandler for Recorder {
 
         match ctx {
             EventContext::SpeakingStateUpdate(state) => {
-                tracing::debug!(
-                    ssrc = state.ssrc,
-                    user_id = ?state.user_id,
-                    "Recorder received SpeakingStateUpdate"
-                );
+                tracing::debug!(?state, "RAW SpeakingStateUpdate");
+                // tracing::debug!(
+                //     ssrc = state.ssrc,
+                //     user_id = ?state.user_id,
+                //     "Recorder received SpeakingStateUpdate"
+                // );
 
                 if let Some(user_id) = state.user_id {
                     let mut mappings = self.ssrc_to_user.lock().await;
@@ -257,18 +258,19 @@ impl EventHandler for Recorder {
             }
 
             EventContext::VoiceTick(tick) => {
-                tracing::debug!(
-                    speaking_users = tick.speaking.len(),
-                    "Recorder received VoiceTick"
-                );
+                // tracing::debug!(
+                //     speaking_users = tick.speaking.len(),
+                //     "Recorder received VoiceTick"
+                // );
 
-                for (&ssrc, voice_data) in &tick.speaking {
-                    tracing::debug!(
-                        ssrc,
-                        has_decoded_voice = voice_data.decoded_voice.is_some(),
-                        "VoiceTick audio"
-                    );
-                }
+                // for (&ssrc, voice_data) in &tick.speaking {
+                //     tracing::debug!(
+                //         ssrc,
+                //         has_decoded_voice = voice_data.decoded_voice.is_some(),
+                //         "VoiceTick audio"
+                //     );
+                // }
+
                 // Build a map of users that actually have audio during this tick.
                 //
                 // We do this before locking recording_session so that we don't

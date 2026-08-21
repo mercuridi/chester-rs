@@ -49,7 +49,7 @@ pub fn run_encoder(
     let mut granule_position = 0u64;
     let serial = rand::random::<u32>();
 
-    let pre_skip = u8::try_from(opus.get_lookahead()?).expect("pre-skip was larger than u8");
+    let pre_skip = u16::try_from(opus.get_lookahead()?)?;
 
     write_opus_headers(
         &mut ogg,
@@ -179,22 +179,17 @@ fn write_opus_headers<W: std::io::Write>(
     serial: u32,
     user_id: UserId,
     sample_rate: u32,
-    pre_skip: u8,
+    pre_skip: u16,
 ) -> std::io::Result<()> {
     let mut opus_head = Vec::with_capacity(19);
 
     opus_head.extend_from_slice(b"OpusHead");
-    opus_head.push(1); // OpusHead version
-
-    opus_head.push(1); // channel count: mono
-
-    opus_head.extend_from_slice(&[pre_skip]); // pre-skip
-
+    opus_head.push(1);
+    opus_head.push(1);
+    opus_head.extend_from_slice(&pre_skip.to_le_bytes());
     opus_head.extend_from_slice(&sample_rate.to_le_bytes());
-
-    opus_head.extend_from_slice(&0i16.to_le_bytes()); // output gain
-
-    opus_head.push(0); // channel mapping family
+    opus_head.extend_from_slice(&0i16.to_le_bytes());
+    opus_head.push(0);
 
     ogg.write_packet(
         opus_head,

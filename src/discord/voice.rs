@@ -31,47 +31,33 @@ pub async fn join_vc(
     guild_id: GuildId,
     vc_id: ChannelId,
 ) -> Result<Arc<Mutex<Call>>, Error> {
-    tracing::debug!(
-        ?guild_id,
-        ?vc_id,
-        "Joining voice channel"
-    );
+    tracing::debug!(?guild_id, ?vc_id, "Joining voice channel");
 
     let manager = songbird::get(ctx.serenity_context())
         .await
         .expect("Songbird was not initialized")
         .clone();
 
-    let call = manager.join(guild_id, vc_id).await?;
+    let (recorder, is_new) =
+        ctx.data().recorder.get_or_create(guild_id).await;
 
-    let (recorder, is_new) = ctx.data().recorder.get_or_create(guild_id).await;
+    // Create the Call and attach receive handlers BEFORE joining.
+    let call = manager.get_or_insert(guild_id);
 
     if is_new {
         if let Err(error) = recorder.attach_to_call(&call).await {
             ctx.data().recorder.remove(guild_id).await;
-
-            if let Err(remove_error) = manager.remove(guild_id).await {
-                tracing::error!(
-                    ?guild_id,
-                    %remove_error,
-                    "Failed to clean up voice connection after recorder attachment failure"
-                );
-            }
-
+            manager.remove(guild_id).await?;
             return Err(error);
         }
 
-        tracing::debug!(
-            ?guild_id,
-            "Created and attached recorder"
-        );
+        tracing::debug!(?guild_id, "Created and attached recorder");
     }
 
-    tracing::debug!(
-        ?guild_id,
-        ?vc_id,
-        "Joined voice channel"
-    );
+    // Only now start the actual voice connection.
+    manager.join(guild_id, vc_id).await?;
+
+    tracing::debug!(?guild_id, ?vc_id, "Joined voice channel");
 
     Ok(call)
 }
