@@ -5,6 +5,7 @@ use crate::{
         context::{Error, PoiseContext},
         voice::{ensure_vc, require_guild},
     },
+    discord::autocomplete::{autocomplete_transcription_session, autocomplete_alias_group}
 };
 
 #[poise::command(
@@ -54,7 +55,11 @@ pub async fn record(
 #[poise::command(slash_command)]
 pub async fn transcribe(
     ctx: PoiseContext<'_>,
+    #[description = "The session to transcribe"]
+    #[autocomplete = "autocomplete_transcription_session"]
     session: String,
+    #[description = "The alias group to use for transcription"]
+    #[autocomplete = "autocomplete_alias_group"]
     alias_group_id: String,
 ) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
