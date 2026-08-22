@@ -156,7 +156,7 @@ impl WhisperTranscriber {
             device,
             suppress_tokens,
             sot_token,
-            lang_token,
+            language_token: lang_token,
             transcribe_token,
             eot_token,
             no_speech_token,

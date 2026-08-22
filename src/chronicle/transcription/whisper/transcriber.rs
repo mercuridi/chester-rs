@@ -24,7 +24,7 @@ pub struct WhisperTranscriber {
     pub suppress_tokens: Tensor,
 
     pub sot_token: u32,
-    pub lang_token: u32,
+    pub language_token: u32,
     pub transcribe_token: u32,
     pub eot_token: u32,
     pub no_speech_token: u32,
@@ -138,8 +138,8 @@ impl WhisperTranscriber {
                 self.extract_timestamp_segments(
                     &decoded.tokens,
                     segment_start,
+                    segment_duration,
                 )?;
-
             // tracing::info!(
             //     timestamp_segment_count = timestamp_segments.len(),
             //     "Whisper timestamp extraction"
@@ -170,6 +170,10 @@ impl WhisperTranscriber {
         }
 
         Ok(segments)
+    }
+
+    pub fn is_timestamp_token(&self, token: u32) -> bool {
+        token > self.no_timestamps_token
     }
 }
 

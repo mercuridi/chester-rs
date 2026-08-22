@@ -18,49 +18,47 @@ impl WhisperTranscriber {
         &self,
         tokens: &[u32],
         segment_start: f64,
+        segment_duration: f64,
     ) -> Result<Vec<TranscriptSegment>> {
         let mut output = Vec::new();
         let mut text_tokens = Vec::new();
-        let mut previous_timestamp = 0.0f64;
+        let mut start_timestamp = None;
 
         for &token in tokens {
             if token == self.sot_token
                 || token == self.eot_token
+                || token == self.language_token
+                || token == self.transcribe_token
             {
                 continue;
             }
 
-            if token > self.no_timestamps_token {
+            if self.is_timestamp_token(token) {
                 let timestamp =
-                    (token - self.no_timestamps_token + 1)
-                        as f64
-                        / 50.0;
+                    (token - self.no_timestamps_token + 1) as f64 * 0.02;
 
-                if !text_tokens.is_empty() {
-                    let text = self
-                        .tokenizer
-                        .decode(&text_tokens, true)
-                        .map_err(|error| {
-                            anyhow!(
-                                "Tokenizer decode failed: {error}"
-                            )
-                        })?
-                        .trim()
-                        .to_owned();
+                if let Some(start) = start_timestamp {
+                    if !text_tokens.is_empty() {
+                        let text = self
+                            .tokenizer
+                            .decode(&text_tokens, true)
+                            .map_err(|e| anyhow!("Tokenizer decode failed: {e}"))?
+                            .trim()
+                            .to_owned();
 
-                    if !text.is_empty() {
-                        output.push(TranscriptSegment {
-                            start: segment_start
-                                + previous_timestamp,
-                            end: segment_start + timestamp,
-                            text,
-                        });
+                        if !text.is_empty() && timestamp >= start {
+                            output.push(TranscriptSegment {
+                                start: segment_start + start,
+                                end: segment_start + timestamp,
+                                text,
+                            });
+                        }
                     }
 
                     text_tokens.clear();
                 }
 
-                previous_timestamp = timestamp;
+                start_timestamp = Some(timestamp);
             } else {
                 text_tokens.push(token);
             }
@@ -70,16 +68,14 @@ impl WhisperTranscriber {
             let text = self
                 .tokenizer
                 .decode(&text_tokens, true)
-                .map_err(|error| {
-                    anyhow!("Tokenizer decode failed: {error}")
-                })?
+                .map_err(|e| anyhow!("Tokenizer decode failed: {e}"))?
                 .trim()
                 .to_owned();
 
             if !text.is_empty() {
                 output.push(TranscriptSegment {
-                    start: segment_start + previous_timestamp,
-                    end: segment_start + m::CHUNK_LENGTH as f64,
+                    start: segment_start + start_timestamp.unwrap_or(0.0),
+                    end: segment_start + segment_duration,
                     text,
                 });
             }
