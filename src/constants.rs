@@ -1,3 +1,5 @@
+use candle_transformers::models::whisper::{self as m};
+
 // library display
 pub const ELLIPSIS: &str = "…";
 pub const ELLIPSIS_LEN: usize = ELLIPSIS.len();
@@ -14,6 +16,12 @@ pub const MAX_OPUS_PACKET_SIZE: usize = 4_000;  // max size of finalised opus pa
 pub const PCM_CHANNELS: usize = 2;              // 2 is stereo
 pub const SAMPLE_RATE: u32 = 48_000;            // sample frequency
 pub const SILENCE_FRAME: [i16; STEREO_FRAME_SAMPLES] = [0; STEREO_FRAME_SAMPLES];
+
+// transcription
+pub const MODEL_ID: &str = "distil-whisper/distil-large-v3";
+pub const MODEL_REVISION: &str = "main";
+pub const MODEL_SAMPLE_RATE: u32 = m::SAMPLE_RATE as u32;
+pub const STRIDE_SIZE_SECONDS: f64 = 25.0;
 
 // library sync
 pub const AUDIO_DIR: &str = "audio";

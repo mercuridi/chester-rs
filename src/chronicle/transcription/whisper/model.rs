@@ -1,4 +1,4 @@
-use crate::chronicle::transcription::whisper::{tokens::token_id, transcriber::{MODEL_ID, MODEL_REVISION, WhisperTranscriber}};
+use crate::{chronicle::transcription::whisper::{tokens::token_id, transcriber::WhisperTranscriber}, constants::{MODEL_ID, MODEL_REVISION}};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};

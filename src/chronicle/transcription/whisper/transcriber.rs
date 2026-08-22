@@ -5,10 +5,9 @@ use tokenizers::Tokenizer;
 
 use crate::chronicle::transcription::audio::Audio;
 use crate::chronicle::transcription::whisper::model::Model;
+use crate::constants::{MODEL_SAMPLE_RATE, STRIDE_SIZE_SECONDS};
 
-pub const MODEL_ID: &str = "distil-whisper/distil-large-v3";
-pub const MODEL_REVISION: &str = "main";
-pub const MODEL_SAMPLE_RATE: u32 = m::SAMPLE_RATE as u32;
+
 
 pub struct TranscriptSegment {
     pub start: f64,
@@ -82,6 +81,10 @@ impl WhisperTranscriber {
     }
 
     fn decode_mel(&mut self, mel: &Tensor) -> Result<Vec<TranscriptSegment>> {
+        let window_frames = m::N_FRAMES;
+        let stride_frames =
+            (STRIDE_SIZE_SECONDS * m::SAMPLE_RATE as f64 / m::HOP_LENGTH as f64) as usize;
+
         let (_, _, content_frames) = mel.dims3()?;
 
         let mut seek = 0;
@@ -94,20 +97,6 @@ impl WhisperTranscriber {
             let mel_segment =
                 mel.narrow(2, seek, segment_size)?;
 
-            // {
-            //     let mel_min = mel.min_all()?.to_scalar::<f32>()?;
-            //     let mel_max = mel.max_all()?.to_scalar::<f32>()?;
-            //     let mel_mean = mel.mean_all()?.to_scalar::<f32>()?;
-
-            //     tracing::info!(
-            //         mel_min,
-            //         mel_max,
-            //         mel_mean,
-            //         shape = ?mel.dims(),
-            //         "Whisper mel statistics"
-            //     );
-            // }
-
             let segment_start =
                 (seek * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
 
@@ -116,16 +105,6 @@ impl WhisperTranscriber {
                     / m::SAMPLE_RATE as f64;
 
             let decoded = self.decode_segment(&mel_segment)?;
-
-            // tracing::info!(
-            //     tokens = ?decoded.tokens,
-            //     text = %decoded.text,
-            //     no_speech_prob = decoded.no_speech_prob,
-            //     avg_logprob = decoded.avg_logprob,
-            //     "Whisper decoded segment"
-            // );
-
-            seek += segment_size;
 
             if decoded.no_speech_prob > m::NO_SPEECH_THRESHOLD
                 && decoded.avg_logprob < m::LOGPROB_THRESHOLD
@@ -167,6 +146,13 @@ impl WhisperTranscriber {
             } else {
                 segments.extend(timestamp_segments);
             }
+
+            
+            if segment_size == content_frames - seek {
+                break;
+            }
+
+            seek += stride_frames;
         }
 
         Ok(segments)

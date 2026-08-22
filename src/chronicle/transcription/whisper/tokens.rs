@@ -1,7 +1,6 @@
 use crate::chronicle::transcription::whisper::transcriber::{TranscriptSegment, WhisperTranscriber};
 
 use anyhow::{anyhow, Result};
-use candle_transformers::models::whisper::{self as m};
 use tokenizers::Tokenizer;
 
 pub fn token_id(
