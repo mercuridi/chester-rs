@@ -95,7 +95,7 @@ impl WhisperTranscriber {
                 usize::min(content_frames - seek, m::N_FRAMES);
 
             let mel_segment =
-                mel.narrow(2, seek, segment_size)?;
+                self.pad_mel_segment(mel, segment_size, seek)?;
 
             let segment_start =
                 (seek * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
@@ -147,7 +147,7 @@ impl WhisperTranscriber {
                 segments.extend(timestamp_segments);
             }
 
-            
+
             if segment_size == content_frames - seek {
                 break;
             }
@@ -160,6 +160,32 @@ impl WhisperTranscriber {
 
     pub fn is_timestamp_token(&self, token: u32) -> bool {
         token > self.no_timestamps_token
+    }
+
+    fn pad_mel_segment(
+        &self,
+        mel: &Tensor,
+        segment_size: usize,
+        seek: usize,
+    ) -> Result<Tensor> {
+        let mel_segment = mel.narrow(2, seek, segment_size)?;
+
+        if segment_size >= m::N_FRAMES {
+            return Ok(mel_segment);
+        }
+
+        let padding = Tensor::zeros(
+            (
+                1,
+                self.model.config().num_mel_bins,
+                m::N_FRAMES - segment_size,
+            ),
+            mel.dtype(),
+            mel.device(),
+        )?;
+
+        Tensor::cat(&[&mel_segment, &padding], 2)
+            .map_err(Into::into)
     }
 }
 
