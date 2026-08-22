@@ -23,7 +23,7 @@ impl WhisperTranscriber {
         let sample_len =
             self.model.config().max_target_positions / 2;
 
-        let mut tokens = vec![self.sot_token, self.transcribe_token];
+        let mut tokens = vec![self.sot_token, self.lang_token, self.transcribe_token];
 
         let mut sum_logprob = 0.0f64;
         let mut no_speech_prob = f64::NAN;

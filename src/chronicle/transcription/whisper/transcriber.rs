@@ -24,6 +24,7 @@ pub struct WhisperTranscriber {
     pub suppress_tokens: Tensor,
 
     pub sot_token: u32,
+    pub lang_token: u32,
     pub transcribe_token: u32,
     pub eot_token: u32,
     pub no_speech_token: u32,

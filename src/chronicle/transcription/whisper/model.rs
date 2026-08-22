@@ -136,10 +136,14 @@ impl WhisperTranscriber {
         let suppress_tokens =
             Tensor::new(suppress_tokens.as_slice(), &device)?;
 
-        let sot_token = token_id(&tokenizer, m::SOT_TOKEN)?;
-        let transcribe_token =
+        let sot_token = 
+            token_id(&tokenizer, m::SOT_TOKEN)?;
+        let lang_token = 
+            token_id(&tokenizer, "<|en|>")?;
+        let transcribe_token = 
             token_id(&tokenizer, m::TRANSCRIBE_TOKEN)?;
-        let eot_token = token_id(&tokenizer, m::EOT_TOKEN)?;
+        let eot_token = 
+            token_id(&tokenizer, m::EOT_TOKEN)?;
 
         let no_speech_token = m::NO_SPEECH_TOKENS
             .iter()
@@ -152,6 +156,7 @@ impl WhisperTranscriber {
             device,
             suppress_tokens,
             sot_token,
+            lang_token,
             transcribe_token,
             eot_token,
             no_speech_token,
