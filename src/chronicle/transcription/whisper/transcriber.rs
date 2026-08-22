@@ -81,7 +81,7 @@ impl WhisperTranscriber {
     }
 
     fn decode_mel(&mut self, mel: &Tensor) -> Result<Vec<TranscriptSegment>> {
-        let window_frames = m::N_FRAMES;
+
         let stride_frames =
             (STRIDE_SIZE_SECONDS * m::SAMPLE_RATE as f64 / m::HOP_LENGTH as f64) as usize;
 
@@ -155,6 +155,13 @@ impl WhisperTranscriber {
             seek += stride_frames;
         }
 
+        let mut segments = deduplicate_segments(segments);
+        segments.sort_by(|a, b| {
+            a.start
+                .total_cmp(&b.start)
+                .then_with(|| a.end.total_cmp(&b.end))
+        });
+
         Ok(segments)
     }
 
@@ -212,4 +219,52 @@ fn load_mel_filters() -> Result<Vec<f32>> {
     }
 
     Ok(filters)
+}
+
+fn normalize_text(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+pub fn deduplicate_segments(
+    mut segments: Vec<TranscriptSegment>,
+) -> Vec<TranscriptSegment> {
+    segments.sort_by(|a, b| {
+        a.start
+            .total_cmp(&b.start)
+            .then_with(|| a.end.total_cmp(&b.end))
+    });
+
+    let mut output: Vec<TranscriptSegment> = Vec::new();
+
+    for segment in segments {
+        let Some(previous) = output.last_mut() else {
+            output.push(segment);
+            continue;
+        };
+
+        let overlaps = segment.start < previous.end;
+        let same_text =
+            normalize_text(&segment.text) == normalize_text(&previous.text);
+
+        if overlaps && same_text {
+            // Keep the shorter version.
+            if (segment.end - segment.start)
+                < (previous.end - previous.start)
+            {
+                *previous = segment;
+            }
+
+            continue;
+        }
+
+        output.push(segment);
+    }
+
+    output
 }
