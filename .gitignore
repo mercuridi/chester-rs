@@ -12,6 +12,7 @@ docs/chronicle/
 database/chronicle/chronicle.sqlite3
 
 config.toml
+manifest.toml
 .env
 *.dca
 *.m4a

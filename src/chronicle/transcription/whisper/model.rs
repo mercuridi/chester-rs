@@ -95,12 +95,12 @@ impl WhisperTranscriber {
         )
         .context("Failed to parse Whisper config")?;
 
-        if config.num_mel_bins != 128 {
-            return Err(anyhow!(
-                "Expected 128 mel bins for whisper, got {}",
-                config.num_mel_bins
-            ));
-        }
+        // if config.num_mel_bins != 128 {
+        //     return Err(anyhow!(
+        //         "Expected 128 mel bins for whisper, got {}",
+        //         config.num_mel_bins
+        //     ));
+        // }
 
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|error| anyhow!("Failed to load tokenizer: {error}"))?;

@@ -20,6 +20,10 @@ pub const SILENCE_FRAME: [i16; STEREO_FRAME_SAMPLES] = [0; STEREO_FRAME_SAMPLES]
 // transcription
 pub const MODEL_ID: &str = "distil-whisper/distil-large-v3";
 pub const MODEL_REVISION: &str = "main";
+// pub const MODEL_ID: &str = "distil-whisper/distil-medium.en";
+// pub const MODEL_REVISION: &str = "main";
+// pub const MODEL_ID: &str = "openai/whisper-small.en";
+// pub const MODEL_REVISION: &str = "refs/pr/10";
 pub const MODEL_SAMPLE_RATE: u32 = m::SAMPLE_RATE as u32;
 pub const STRIDE_SIZE_SECONDS: f64 = 25.0;
 
