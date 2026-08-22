@@ -96,15 +96,15 @@ where
 
     decoded.drain(..pre_skip);
 
-    tracing::debug!(
-        first = ?decoded.iter().take(10).collect::<Vec<_>>(),
-        peak = decoded
-            .iter()
-            .copied()
-            .map(f32::abs)
-            .fold(0.0, f32::max),
-        "Audio before resampling"
-    );
+    // tracing::debug!(
+    //     first = ?decoded.iter().take(10).collect::<Vec<_>>(),
+    //     peak = decoded
+    //         .iter()
+    //         .copied()
+    //         .map(f32::abs)
+    //         .fold(0.0, f32::max),
+    //     "Audio before resampling"
+    // );
 
     let samples = if OPUS_SAMPLE_RATE == WHISPER_SAMPLE_RATE {
         decoded
@@ -112,25 +112,25 @@ where
         resample_48k_to_16k(&decoded)?
     };
 
-    {
-        let min = samples.iter().copied().fold(f32::INFINITY, f32::min);
-        let max = samples.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let rms = (
-            samples
-                .iter()
-                .map(|x| (*x as f64) * (*x as f64))
-                .sum::<f64>()
-                / samples.len().max(1) as f64
-        ).sqrt();
+    // {
+    //     let min = samples.iter().copied().fold(f32::INFINITY, f32::min);
+    //     let max = samples.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    //     let rms = (
+    //         samples
+    //             .iter()
+    //             .map(|x| (*x as f64) * (*x as f64))
+    //             .sum::<f64>()
+    //             / samples.len().max(1) as f64
+    //     ).sqrt();
 
-        tracing::debug!(
-            samples = samples.len(),
-            min,
-            max,
-            rms,
-            "Audio after resampling"
-        );
-    }
+    //     tracing::debug!(
+    //         samples = samples.len(),
+    //         min,
+    //         max,
+    //         rms,
+    //         "Audio after resampling"
+    //     );
+    // }
 
     Ok(Audio {
         samples,
