@@ -11,11 +11,11 @@ mod track;
 /// Imports
 
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
-use songbird::{Config, SerenityInit, driver::{DecodeConfig, DecodeMode}}; use sqlx::SqlitePool;
+use songbird::{Config as SongbirdConfig, SerenityInit, driver::{DecodeConfig, DecodeMode}}; use sqlx::SqlitePool;
 use dotenv::dotenv;
 use tracing::info;
 
-use crate::{discord::context::{Data, Error}, library::sync::sync_audio_library};
+use crate::{chronicle::config::Config, discord::context::{Data, Error}, library::sync::sync_audio_library};
 use tracing_subscriber::EnvFilter;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -58,6 +58,8 @@ async fn main() -> Result<(), Error> {
     tracing::debug!("jester database connection successful");
 
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
+
+    let config = Config::load(".chronicle/config.toml")?;
 
     let stats = sync_audio_library(&pool).await?;
 
@@ -127,7 +129,7 @@ async fn main() -> Result<(), Error> {
         .setup(|_ctx, _ready, _framework| {
             Box::pin(async move {
                 // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data::new(pool))
+                Ok(Data::new(pool, config))
             })
         })
         .build();
@@ -135,7 +137,7 @@ async fn main() -> Result<(), Error> {
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
 
     // 2) Build the Songbird config too (required for decoding voice data)
-    let songbird_config = Config::default()
+    let songbird_config = SongbirdConfig::default()
         .decode_mode(DecodeMode::Decode(DecodeConfig::default()));
 
     // 3) Create the Serenity client, attach Poise as the event handler…

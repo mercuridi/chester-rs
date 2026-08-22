@@ -7,8 +7,6 @@ use crate::chronicle::transcription::audio::Audio;
 use crate::chronicle::transcription::whisper::model::Model;
 use crate::constants::{MODEL_SAMPLE_RATE, STRIDE_SIZE_SECONDS};
 
-
-
 pub struct TranscriptSegment {
     pub start: f64,
     pub end: f64,

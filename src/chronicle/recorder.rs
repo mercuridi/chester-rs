@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, hash_map::Entry}, path::PathBuf, sync::Arc,
+    collections::{HashMap, hash_map::Entry}, path::{Path, PathBuf}, sync::Arc,
 };
 
 use chrono::{
@@ -10,6 +10,7 @@ use rtrb::{
     Producer,
     RingBuffer
 };
+use serde::{Deserialize, Serialize};
 use serenity::model::id::GuildId;
 use tokio::{
     sync::{
@@ -18,7 +19,7 @@ use tokio::{
     },
     task::JoinHandle,
 };
-use serenity_voice_model::id::UserId;
+use serenity::all::UserId;
 use songbird::{Call, CoreEvent, events::{
     Event,
     EventContext,
@@ -32,6 +33,20 @@ use crate::{
         SILENCE_FRAME},
     discord::context::Error,
 };
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RecordingManifest {
+    pub guild_id: GuildId,
+    pub started_at: DateTime<Local>,
+    pub ended_at: DateTime<Local>,
+    pub participants: Vec<UserId>,
+}
+impl RecordingManifest {
+    pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let contents = std::fs::read_to_string(path)?;
+        Ok(toml::from_str(&contents)?)
+    }
+}
 
 pub struct UserRecording {
     pub producer: Producer<i16>,
@@ -130,12 +145,8 @@ impl Recorder {
 
     pub async fn stop_recording(&self) -> Result<bool, Error> {
 
-        tracing::debug!("stop_recording: waiting for recording lock");
-
         let session = {
             let mut recording = self.recording_session.lock().await;
-
-            tracing::debug!("stop_recording: acquired recording lock");
 
             let Some(session) = recording.take() else {
                 return Ok(false);
@@ -144,10 +155,7 @@ impl Recorder {
             session
         };
 
-        tracing::info!(
-            users = session.users.len(),
-            "Stopping recording (id: {})", self.id
-        );
+        let participants: Vec<UserId> = session.users.keys().copied().collect();
 
         for (_, user_recording) in session.users {
             let UserRecording {
@@ -175,7 +183,27 @@ impl Recorder {
             }
         }
 
-        tracing::info!("Recording stopped");
+        let manifest: RecordingManifest = RecordingManifest { 
+            guild_id: session.guild_id,
+            started_at: session.started_at,
+            ended_at: Local::now(),
+            participants 
+        };
+
+        let manifest_path = recording_directory(
+            session.guild_id,
+            session.started_at,
+        )
+        .join("manifest.toml");
+
+        let manifest_toml = toml::to_string_pretty(&manifest)?;
+
+        std::fs::write(&manifest_path, manifest_toml)?;
+
+        tracing::info!(
+            path = %manifest_path.display(),
+            "Recording manifest written"
+        );
 
         Ok(true)
     }
@@ -250,10 +278,10 @@ impl EventHandler for Recorder {
                 //     "Recorder received SpeakingStateUpdate"
                 // );
 
-                if let Some(user_id) = state.user_id {
+                if let Some(user_id_svm) = state.user_id {
                     let mut mappings = self.ssrc_to_user.lock().await;
 
-                    mappings.insert(state.ssrc, user_id);
+                    mappings.insert(state.ssrc, UserId::new(user_id_svm.0));
                 }
             }
 

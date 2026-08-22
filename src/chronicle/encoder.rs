@@ -10,7 +10,7 @@ use opus::{
     Encoder as OpusEncoder
 };
 use rtrb::Consumer;
-use serenity_voice_model::id::UserId;
+use serenity::all::UserId;
 use tokio::sync::oneshot;
 
 use crate::{

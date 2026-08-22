@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::{
-    chronicle::transcription::{audio::load_opus, whisper::transcriber::{WhisperTranscriber}}, discord::{
+    chronicle::{recorder::RecordingManifest, transcription::{audio::load_opus, whisper::transcriber::WhisperTranscriber}}, discord::{
         context::{Error, PoiseContext},
         voice::{ensure_vc, require_guild},
     },
@@ -55,6 +55,7 @@ pub async fn record(
 pub async fn transcribe(
     ctx: PoiseContext<'_>,
     session: String,
+    alias_group_id: String,
 ) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
 
@@ -70,6 +71,25 @@ pub async fn transcribe(
         ))
         .await?;
 
+        return Ok(());
+    }
+
+    let manifest_path = recording_dir.join("manifest.toml");
+
+    let manifest = match RecordingManifest::load(&manifest_path) {
+        Ok(manifest) => manifest,
+        Err(error) => {
+            ctx.say(format!(
+                "Failed to load recording manifest: {error}"
+            ))
+            .await?;
+            return Ok(());
+        }
+    };
+
+    if manifest.guild_id != guild_id {
+        ctx.say("Recording manifest belongs to a different guild.")
+            .await?;
         return Ok(());
     }
 
@@ -91,6 +111,26 @@ pub async fn transcribe(
         return Ok(());
     }
 
+    let config = &ctx.data().config;
+
+    if !config.guild_has_alias_group(guild_id, &alias_group_id) {
+        ctx.say(format!(
+            "Alias group `{alias_group_id}` is not available in this guild."
+        ))
+        .await?;
+
+        return Ok(());
+    }
+
+    config.validate_participants(
+        &alias_group_id,
+        manifest.participants,
+    )?;
+
+    let alias_group = config
+        .alias_group(&alias_group_id)
+        .expect("alias group was validated");
+
     ctx.say(format!(
         "Transcribing {} recording(s)...",
         recordings.len()
@@ -99,41 +139,36 @@ pub async fn transcribe(
 
     let result = tokio::task::spawn_blocking(move || {
         let mut transcriber = WhisperTranscriber::new_cuda()?;
-
         let mut output = Vec::new();
 
         for path in recordings {
             let audio = load_opus(&path)?;
-
-            // tracing::debug!(
-            //     samples = audio.samples.len(),
-            //     duration_secs = audio.samples.len() as f64 / audio.sample_rate as f64,
-            //     sample_rate = audio.sample_rate,
-            //     min = audio.samples.iter().copied().fold(f32::INFINITY, f32::min),
-            //     max = audio.samples.iter().copied().fold(f32::NEG_INFINITY, f32::max),
-            //     rms = (
-            //         audio.samples
-            //             .iter()
-            //             .map(|x| (*x as f64) * (*x as f64))
-            //             .sum::<f64>()
-            //             / audio.samples.len().max(1) as f64
-            //     ).sqrt(),
-            //     "Loaded audio"
-            // );
-
             let segments = transcriber.transcribe(&audio)?;
 
             let user_id = path
                 .file_stem()
                 .and_then(|name| name.to_str())
                 .and_then(|name| name.strip_prefix("recording-"))
-                .unwrap_or("unknown");
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Invalid recording filename: {}",
+                        path.display()
+                    )
+                })?
+                .parse::<u64>()
+                .map(serenity::all::UserId::new)
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "Invalid user ID in recording filename {}: {error}",
+                        path.display()
+                    )
+                })?;
 
             for segment in segments {
                 output.push((
                     segment.start,
                     segment.end,
-                    user_id.to_owned(),
+                    user_id,
                     segment.text,
                 ));
             }
@@ -162,8 +197,13 @@ pub async fn transcribe(
     let mut response = String::new();
 
     for (start, end, user_id, text) in result {
+        let alias = alias_group
+            .aliases
+            .get(&user_id)
+            .expect("participant aliases were validated");
+
         response.push_str(&format!(
-            "[{start:.1}s–{end:.1}s] `{user_id}`: {text}\n"
+            "[{start:.1}s–{end:.1}s] `{alias}`: {text}\n"
         ));
     }
 
@@ -174,6 +214,5 @@ pub async fn transcribe(
     }
 
     ctx.say(format!("```text\n{response}```")).await?;
-
     Ok(())
 }

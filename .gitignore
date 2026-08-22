@@ -11,6 +11,7 @@ docs/rebuild-plan
 docs/chronicle/
 database/chronicle/chronicle.sqlite3
 
+config.toml
 .env
 *.dca
 *.m4a

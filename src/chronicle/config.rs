@@ -1,0 +1,259 @@
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+use anyhow::{bail, Context, Result};
+use serde::Deserialize;
+use serenity::all::{GuildId, UserId};
+
+pub type AliasGroupId = String;
+
+#[derive(Debug, Deserialize)]
+struct RawConfig {
+    #[serde(default)]
+    alias_groups: HashMap<String, RawAliasGroup>,
+
+    #[serde(default)]
+    guilds: HashMap<String, RawGuildConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawAliasGroup {
+    name: String,
+
+    #[serde(default)]
+    aliases: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawGuildConfig {
+    #[serde(default)]
+    alias_groups: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct Config {
+    alias_groups: HashMap<AliasGroupId, AliasGroup>,
+    guilds: HashMap<GuildId, GuildConfig>,
+}
+
+#[derive(Debug)]
+pub struct AliasGroup {
+    pub name: String,
+    pub aliases: HashMap<UserId, String>,
+}
+
+#[derive(Debug)]
+pub struct GuildConfig {
+    pub alias_groups: Vec<AliasGroupId>,
+}
+
+impl Config {
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+
+        let contents = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config file {}", path.display()))?;
+
+        let raw: RawConfig = toml::from_str(&contents)
+            .with_context(|| format!("Failed to parse config file {}", path.display()))?;
+
+        Self::from_raw(raw)
+    }
+
+    fn from_raw(raw: RawConfig) -> Result<Self> {
+        let mut alias_groups = HashMap::new();
+
+        for (group_id, raw_group) in raw.alias_groups {
+            if group_id.trim().is_empty() {
+                bail!("Alias group ID cannot be empty");
+            }
+
+            if raw_group.name.trim().is_empty() {
+                bail!("Alias group `{group_id}` has an empty name");
+            }
+
+            let mut aliases = HashMap::new();
+
+            for (raw_user_id, alias) in raw_group.aliases {
+                let user_id = parse_user_id(&raw_user_id)
+                    .with_context(|| {
+                        format!(
+                            "Invalid user ID `{raw_user_id}` in alias group `{group_id}`"
+                        )
+                    })?;
+
+                if alias.trim().is_empty() {
+                    bail!(
+                        "Alias for user `{raw_user_id}` in alias group `{group_id}` \
+                         cannot be empty"
+                    );
+                }
+
+                aliases.insert(user_id, alias);
+            }
+
+            alias_groups.insert(
+                group_id,
+                AliasGroup {
+                    name: raw_group.name,
+                    aliases,
+                },
+            );
+        }
+
+        let mut guilds = HashMap::new();
+
+        for (raw_guild_id, raw_guild) in raw.guilds {
+            let guild_id = parse_guild_id(&raw_guild_id)
+                .with_context(|| format!("Invalid guild ID `{raw_guild_id}`"))?;
+
+            for group_id in &raw_guild.alias_groups {
+                if !alias_groups.contains_key(group_id) {
+                    bail!(
+                        "Guild `{raw_guild_id}` references unknown alias group `{group_id}`"
+                    );
+                }
+            }
+
+            guilds.insert(
+                guild_id,
+                GuildConfig {
+                    alias_groups: raw_guild.alias_groups,
+                },
+            );
+        }
+
+        Ok(Self {
+            alias_groups,
+            guilds,
+        })
+    }
+
+    pub fn alias_group(&self, group_id: &str) -> Option<&AliasGroup> {
+        self.alias_groups.get(group_id)
+    }
+
+    pub fn alias_groups_for_guild(
+        &self,
+        guild_id: GuildId,
+    ) -> Option<Vec<(&str, &AliasGroup)>> {
+        let guild = self.guilds.get(&guild_id)?;
+
+        Some(
+            guild
+                .alias_groups
+                .iter()
+                .filter_map(|group_id| {
+                    self.alias_groups
+                        .get(group_id)
+                        .map(|group| (group_id.as_str(), group))
+                })
+                .collect(),
+        )
+    }
+
+    pub fn validate_participants(
+        &self,
+        group_id: &str,
+        participants: impl IntoIterator<Item = UserId>,
+    ) -> Result<(), AliasValidationError> {
+        let group = self
+            .alias_groups
+            .get(group_id)
+            .ok_or_else(|| AliasValidationError::UnknownAliasGroup {
+                group_id: group_id.to_owned(),
+            })?;
+
+        let missing = participants
+            .into_iter()
+            .filter(|user_id| !group.aliases.contains_key(user_id))
+            .collect::<Vec<_>>();
+
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(AliasValidationError::MissingAliases {
+                group_id: group_id.to_owned(),
+                user_ids: missing,
+            })
+        }
+    }
+
+    pub fn guild_has_alias_group(
+        &self,
+        guild_id: GuildId,
+        group_id: &str,
+    ) -> bool {
+        self.guilds
+            .get(&guild_id)
+            .is_some_and(|guild| guild.alias_groups.iter().any(|id| id == group_id))
+    }
+}
+
+#[derive(Debug)]
+pub enum AliasValidationError {
+    UnknownAliasGroup {
+        group_id: String,
+    },
+    MissingAliases {
+        group_id: String,
+        user_ids: Vec<UserId>,
+    },
+}
+
+impl std::fmt::Display for AliasValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownAliasGroup { group_id } => {
+                write!(f, "unknown alias group `{group_id}`")
+            }
+
+            Self::MissingAliases {
+                group_id,
+                user_ids,
+            } => {
+                write!(
+                    f,
+                    "alias group `{group_id}` is missing aliases for users: "
+                )?;
+
+                for (index, user_id) in user_ids.iter().enumerate() {
+                    if index > 0 {
+                        write!(f, ", ")?;
+                    }
+
+                    write!(f, "{}", user_id.get())?;
+                }
+
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for AliasValidationError {}
+
+fn parse_user_id(value: &str) -> Result<UserId> {
+    let id = value
+        .parse::<u64>()
+        .with_context(|| format!("`{value}` is not a valid Discord user ID"))?;
+
+    if id == 0 {
+        bail!("Discord user ID cannot be zero");
+    }
+
+    Ok(UserId::new(id))
+}
+
+fn parse_guild_id(value: &str) -> Result<GuildId> {
+    let id = value
+        .parse::<u64>()
+        .with_context(|| format!("`{value}` is not a valid Discord guild ID"))?;
+
+    if id == 0 {
+        bail!("Discord guild ID cannot be zero");
+    }
+
+    Ok(GuildId::new(id))
+}
