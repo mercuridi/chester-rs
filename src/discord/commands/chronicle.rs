@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use crate::{
+    chronicle::transcription::whisper::transcriber::WhisperTranscriber,
     chronicle::transcription::{
         audio::load_opus,
-        whisper::WhisperTranscriber,
     },
     discord::{
         context::{Error, PoiseContext},
