@@ -428,14 +428,25 @@ fn build_transcript_entries(
         .collect()
 }
 
+fn format_timestamp(seconds: f64) -> String {
+    let total_tenths = (seconds * 10.0).round() as u64;
+
+    let hours = total_tenths / 36_000;
+    let minutes = (total_tenths % 36_000) / 600;
+    let seconds = (total_tenths % 600) / 10;
+    let tenths = total_tenths % 10;
+
+    format!("{:02}:{:02}:{:02}.{}", hours, minutes, seconds, tenths)
+}
+
 fn format_transcript(entries: &[TranscriptEntry]) -> Vec<String> {
     entries
         .iter()
         .map(|entry| {
             format!(
-                "[{:.1}s–{:.1}s] `{}`: {}",
-                entry.start,
-                entry.end,
+                "`[{:.1}s–{:.1}s]` `{}`: {}",
+                format_timestamp(entry.start),
+                format_timestamp(entry.end),
                 entry.alias,
                 entry.text
             )
