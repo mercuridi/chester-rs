@@ -57,6 +57,7 @@ pub struct UserRecording {
 pub struct RecordingSession {
     pub guild_id: GuildId,
     pub started_at: DateTime<Local>,
+    pub session_name: String,
     pub tick: u64,
     pub users: HashMap<UserId, UserRecording>,
 }
@@ -117,9 +118,10 @@ impl Recorder {
     pub async fn start_recording(
         &self,
         guild_id: GuildId,
+        session_name: String,
     ) -> Result<bool, Error> {
         let started_at = Local::now();
-        ensure_recording_directory(guild_id, started_at)?;
+        ensure_recording_directory(guild_id, session_name.clone(), started_at)?;
 
         let mut recording = self.recording_session.lock().await;
 
@@ -130,6 +132,7 @@ impl Recorder {
         *recording = Some(RecordingSession {
             guild_id,
             started_at,
+            session_name,
             tick: 0,
             users: HashMap::new(),
         });
@@ -192,6 +195,7 @@ impl Recorder {
 
         let manifest_path = recording_directory(
             session.guild_id,
+            session.session_name,
             session.started_at,
         )
         .join("manifest.toml");
@@ -217,6 +221,7 @@ impl Recorder {
         guild_id: GuildId,
         user_id: UserId,
         started_at: DateTime<Local>,
+        session_name: String,
         initial_silence_ticks: u64,
     ) -> Result<UserRecording, Error> {
         let (producer, consumer) =
@@ -224,7 +229,7 @@ impl Recorder {
 
         let (stop_tx, stop_rx) = oneshot::channel();
 
-        let path = recording_path(guild_id, user_id, started_at);
+        let path = recording_path(guild_id, user_id, session_name, started_at);
 
         let encoder = tokio::task::spawn_blocking(move || {
             run_encoder(
@@ -338,6 +343,7 @@ impl EventHandler for Recorder {
                             session.guild_id,
                             user_id,
                             session.started_at,
+                            session.session_name.clone(),
                             session.tick,
                         )
 
@@ -427,27 +433,31 @@ fn write_pcm(
 
 fn recording_directory(
     guild_id: GuildId,
+    session_name: String,
     started_at: DateTime<Local>,
 ) -> PathBuf {
     PathBuf::from(format!(
-        ".chronicle/recordings/{}/{}",
+        ".chronicle/recordings/{}/{}-{}",
         guild_id,
         started_at.format("%Y%m%d-%H%M%S"),
+        session_name,
     ))
 }
 
 fn recording_path(
     guild_id: GuildId,
     user_id: UserId,
+    session_name: String,
     started_at: DateTime<Local>,
 ) -> PathBuf {
-    recording_directory(guild_id, started_at)
+    recording_directory(guild_id, session_name, started_at)
         .join(format!("recording-{}.opus", user_id))
 }
 
 fn ensure_recording_directory(
     guild_id: GuildId,
+    session_name: String,
     started_at: DateTime<Local>,
 ) -> Result<(), std::io::Error> {
-    std::fs::create_dir_all(recording_directory(guild_id, started_at))
+    std::fs::create_dir_all(recording_directory(guild_id, session_name, started_at))
 }

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
+use chrono::NaiveDateTime;
 use poise::serenity_prelude::AutocompleteChoice;
+use titlecase::Titlecase;
 
 use crate::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
 use crate::db::metadata::MetadataKind;
@@ -152,7 +154,7 @@ pub async fn autocomplete_transcription_session(
         }
     };
 
-    let mut sessions = Vec::new();
+    let mut sessions: Vec<(String, String)> = Vec::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -174,7 +176,35 @@ pub async fn autocomplete_transcription_session(
             continue;
         }
 
-        sessions.push(session.to_owned());
+        // Construct pretty-printed displays
+        // first 15 chars are always the timestamp due to consistent formatting
+        // anything after that is the session name
+        let display = match session.split_once('-') {
+            Some((date, rest)) if date.len() == 8 => {
+                match rest.split_once('-') {
+                    Some((time, name)) if time.len() == 6 => {
+                        match NaiveDateTime::parse_from_str(
+                            &format!("{date}-{time}"),
+                            "%Y%m%d-%H%M%S",
+                        ) {
+                            Ok(datetime) => {
+                                let display_date =
+                                    datetime.format("%d %b %Y, %H:%M").to_string();
+                                let display_name = name.replace('-', " ").titlecase();
+
+                                format!("{display_name} ({display_date})")
+                            }
+                            Err(_) => session.to_uppercase(),
+                        }
+                    }
+                    _ => session.to_uppercase(),
+                }
+            }
+            _ => session.to_uppercase(),
+        };
+
+        // Push the raw session path and the display to the vec
+        sessions.push((session.to_owned(), display));
     }
 
     sessions.sort_unstable();
@@ -182,7 +212,7 @@ pub async fn autocomplete_transcription_session(
 
     sessions
         .into_iter()
-        .map(|session| AutocompleteChoice::new(session.clone(), session))
+        .map(|(session, display)| AutocompleteChoice::new(display, session))
         .collect::<Vec<_>>()
         .into_iter()
 }

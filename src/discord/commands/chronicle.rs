@@ -10,29 +10,19 @@ use crate::{
 
 #[poise::command(
     slash_command,
-    subcommands("record", "transcribe"),
-    subcommand_required
+    subcommands("start", "stop"),
+    subcommand_required,
 )]
-pub async fn chronicle(
-    _ctx: PoiseContext<'_>,
-) -> Result<(), Error> {
+pub async fn recording(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
 #[poise::command(slash_command)]
-pub async fn record(
+pub async fn start(
     ctx: PoiseContext<'_>,
+    #[description = "The session name"] session_name: String,
 ) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
-
-    if let Some(recorder) = ctx.data().recorder.get(guild_id).await {
-        if recorder.is_recording().await {
-            recorder.stop_recording().await?;
-
-            ctx.say("Recording stopped.").await?;
-            return Ok(());
-        }
-    }
 
     ensure_vc(ctx).await?;
 
@@ -45,13 +35,51 @@ pub async fn record(
             "Failed to initialize the guild recorder.".into()
         })?;
 
-    recorder.start_recording(guild_id).await?;
+    if recorder.is_recording().await {
+        ctx.say("A recording is already in progress.").await?;
+        return Ok(());
+    }
+
+    let session_name = session_name
+        .replace(' ', "-")
+        .to_lowercase();
+
+    recorder
+        .start_recording(guild_id, session_name)
+        .await?;
 
     ctx.say("Recording started.").await?;
-
     Ok(())
 }
 
+#[poise::command(slash_command)]
+pub async fn stop(
+    ctx: PoiseContext<'_>,
+) -> Result<(), Error> {
+    let guild_id = require_guild(ctx)?;
+
+    let recorder = ctx
+        .data()
+        .recorder
+        .get(guild_id)
+        .await
+        .ok_or_else(|| -> Error {
+            "Failed to initialize the guild recorder.".into()
+        })?;
+
+    if !recorder.is_recording().await {
+        ctx.say("There is no recording in progress.").await?;
+        return Ok(());
+    }
+
+    recorder.stop_recording().await?;
+
+    ctx.say("Recording stopped.").await?;
+    Ok(())
+}
+
+
+/// Transcribe a previously recorded session.
 #[poise::command(slash_command)]
 pub async fn transcribe(
     ctx: PoiseContext<'_>,

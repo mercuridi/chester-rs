@@ -87,7 +87,8 @@ async fn main() -> Result<(), Error> {
         discord::commands::management::set_metadata(),
         discord::commands::management::fix(),
         discord::commands::library::library(),
-        discord::commands::chronicle::chronicle(),
+        discord::commands::chronicle::recording(),
+        discord::commands::chronicle::transcribe(),
     ];
 
     let poise_options = poise::FrameworkOptions {
