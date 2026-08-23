@@ -52,10 +52,10 @@ async fn main() -> Result<(), Error> {
 
     dotenv().ok();
     // Initialize the SQLite connection pool
-    tracing::debug!("Initialising jester database connection");
+    tracing::debug!("Initialising player database connection");
     let database_url = "sqlite://database/jester/jester.sqlite3";
     let pool = SqlitePool::connect(database_url).await?;
-    tracing::debug!("jester database connection successful");
+    tracing::debug!("player database connection successful");
 
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
 
@@ -108,16 +108,16 @@ async fn main() -> Result<(), Error> {
         // This code is run after a command if it was successful (returned Ok)
         post_command: |ctx| {
             Box::pin(async move {
-                tracing::debug!("Executed command {}!", ctx.command().qualified_name);
+                tracing::debug!("Successfully executed command {}", ctx.command().qualified_name);
             })
         },
         skip_checks_for_owners: true,
-        event_handler: |_ctx, event, _framework, _data| {
+        event_handler: |_ctx, _event, _framework, _data| {
             Box::pin(async move {
-                tracing::debug!(
-                    "Got an event in event handler: {:?}",
-                    event.snake_case_name()
-                );
+                // tracing::debug!(
+                //     "Got an event in event handler: {:?}",
+                //     event.snake_case_name()
+                // );
                 Ok(())
             })
         },
