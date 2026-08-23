@@ -153,10 +153,10 @@ impl Config {
         )
     }
 
-    pub fn validate_participants(
+    pub fn validate_participants<'a>(
         &self,
         group_id: &str,
-        participants: impl IntoIterator<Item = UserId>,
+        participants: impl IntoIterator<Item = &'a UserId>,
     ) -> Result<(), AliasValidationError> {
         let group = self
             .alias_groups
@@ -168,6 +168,7 @@ impl Config {
         let missing = participants
             .into_iter()
             .filter(|user_id| !group.aliases.contains_key(user_id))
+            .copied()
             .collect::<Vec<_>>();
 
         if missing.is_empty() {

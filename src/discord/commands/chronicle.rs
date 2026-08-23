@@ -1,10 +1,11 @@
 use std::path::{Path, PathBuf};
 
+use chrono::Local;
 use serenity::model::id::{GuildId, UserId};
 use titlecase::Titlecase;
 
 use crate::{
-    chronicle::{config::{AliasGroup, Config}, recorder::RecordingManifest, transcription::{audio::load_opus, whisper::transcriber::WhisperTranscriber}}, constants::TRANSCRIPT_PAGE_LIMIT, discord::{autocomplete::{autocomplete_alias_group, autocomplete_transcription_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
+    chronicle::{config::{AliasGroup, Config}, recorder::RecordingManifest, transcription::{audio::load_opus, transcript::{TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant}, whisper::transcriber::WhisperTranscriber}}, constants::TRANSCRIPT_PAGE_LIMIT, discord::{autocomplete::{autocomplete_alias_group, autocomplete_transcription_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
 };
 
 #[poise::command(
@@ -78,7 +79,7 @@ pub async fn stop(
 }
 
 
-/// Transcribe a previously recorded session./// Transcribe a previously recorded session.
+/// Transcribe a previously recorded session.
 #[poise::command(slash_command)]
 pub async fn transcribe(
     ctx: PoiseContext<'_>,
@@ -90,9 +91,10 @@ pub async fn transcribe(
     #[description = "The alias group to use for transcription"]
     #[autocomplete = "autocomplete_alias_group"]
     alias_group_id: String,
-) -> Result<(), Error> {
 
-    // gather information
+    #[description = "Force a complete re-transcription"]
+    force: bool,
+) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
 
     let recording_dir = PathBuf::from(format!(
@@ -101,7 +103,6 @@ pub async fn transcribe(
         session,
     ));
 
-    // get manifest
     let manifest = match load_recording_manifest(
         &recording_dir,
         guild_id,
@@ -114,23 +115,53 @@ pub async fn transcribe(
         }
     };
 
-    // get available recordings
+    let transcript_path = recording_dir.join("transcript.md");
+
+    // Cached transcript.
+    if !force && transcript_path.is_file() {
+        match TranscriptDocument::load(&transcript_path) {
+            Ok(transcript) => {
+                ctx.say("Displaying cached transcript.").await?;
+
+                let pages = paginate_transcript(
+                    transcript
+                        .body
+                        .lines()
+                        .map(str::to_owned)
+                        .collect(),
+                );
+
+                let page_refs: Vec<&str> =
+                    pages.iter().map(String::as_str).collect();
+
+                poise::samples::paginate(ctx, &page_refs).await?;
+                return Ok(());
+            }
+
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    path = %transcript_path.display(),
+                    "Failed to load cached transcript; reprocessing"
+                );
+            }
+        }
+    }
+
     let recordings = find_recordings(&recording_dir)?;
 
     if recordings.is_empty() {
-        ctx.say("No Opus recordings found in that session.")
-            .await?;
+        ctx.say("No Opus recordings found in that session.").await?;
         return Ok(());
     }
 
-    // get alias config and validate
     let config = &ctx.data().config;
 
     let alias_group = match validate_alias_group(
         config,
         guild_id,
         &alias_group_id,
-        manifest.participants,
+        &manifest.participants,
     ) {
         Ok(alias_group) => alias_group,
         Err(error) => {
@@ -139,28 +170,49 @@ pub async fn transcribe(
         }
     };
 
-    ctx.say(format!(
-        "Transcribing {} recording(s)...",
-        recordings.len()
-    ))
-    .await?;
+    if force {
+        ctx.say(format!(
+            "Force reprocessing {} recording(s)...",
+            recordings.len()
+        ))
+        .await?;
+    } else {
+        ctx.say(format!(
+            "Transcribing {} recording(s)...",
+            recordings.len()
+        ))
+        .await?;
+    }
 
-    // call transcription
-    let result = transcribe_recordings(recordings).await?;
+    let result = transcribe_recordings(recordings.clone()).await?;
 
     if result.is_empty() {
         ctx.say("No speech detected.").await?;
         return Ok(());
     }
 
-    let lines = format_transcript(result, alias_group);
+    let entries = build_transcript_entries(result, alias_group);
 
-    if lines.is_empty() {
+    if entries.is_empty() {
         ctx.say("No transcription results.").await?;
         return Ok(());
     }
 
+    let transcript =
+        build_transcript_document(&manifest, &recordings, &entries);
+
+    transcript
+        .save(&transcript_path)
+        .map_err(|error| -> Error {
+            format!(
+                "Transcription succeeded, but failed to save transcript: {error}"
+            )
+            .into()
+        })?;
+
+    let lines = format_transcript(&entries);
     let pages = paginate_transcript(lines);
+
     let page_refs: Vec<&str> =
         pages.iter().map(String::as_str).collect();
 
@@ -269,7 +321,7 @@ fn validate_alias_group<'a>(
     config: &'a Config,
     guild_id: GuildId,
     alias_group_id: &str,
-    participants: Vec<UserId>,
+    participants: &Vec<UserId>,
 ) -> anyhow::Result<&'a AliasGroup> {
     if !config.guild_has_alias_group(guild_id, alias_group_id) {
         anyhow::bail!(
@@ -346,21 +398,85 @@ async fn transcribe_recordings(
     })
 }
 
-fn format_transcript(
-    result: Vec<(f64, f64, serenity::all::UserId, String)>,
+fn build_transcript_entries(
+    result: Vec<(f64, f64, UserId, String)>,
     alias_group: &AliasGroup,
-) -> Vec<String> {
+) -> Vec<TranscriptEntry> {
     result
         .into_iter()
         .map(|(start, end, user_id, text)| {
             let alias = alias_group
                 .aliases
                 .get(&user_id)
-                .expect("participant aliases were validated");
+                .expect("participant aliases were validated")
+                .clone();
 
+            TranscriptEntry {
+                start,
+                end,
+                user_id,
+                alias,
+                text,
+            }
+        })
+        .collect()
+}
+
+fn format_transcript(entries: &[TranscriptEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| {
             format!(
-                "[{start:.1}s–{end:.1}s] `{alias}`: {text}"
+                "[{:.1}s–{:.1}s] `{}`: {}",
+                entry.start,
+                entry.end,
+                entry.alias,
+                entry.text
             )
         })
         .collect()
+}
+
+fn build_transcript_document(
+    manifest: &RecordingManifest,
+    recordings: &[PathBuf],
+    entries: &[TranscriptEntry],
+) -> TranscriptDocument {
+    let body = format_transcript(entries).join("\n");
+
+    let word_count = body.split_whitespace().count();
+    let character_count = body.chars().count();
+
+    let participants = entries
+        .iter()
+        .map(|entry| TranscriptParticipant {
+            user_id: entry.user_id.get().to_string(),
+            alias: entry.alias.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    let participants = {
+        let mut participants = participants;
+        participants.sort_by(|a, b| a.user_id.cmp(&b.user_id));
+        participants.dedup_by(|a, b| a.user_id == b.user_id);
+        participants
+    };
+
+    TranscriptDocument {
+        frontmatter: TranscriptFrontmatter {
+            schema_version: 1,
+            recording_date: manifest.started_at,
+            ended_at: manifest.ended_at,
+            duration_seconds: (manifest.ended_at - manifest.started_at)
+                .num_milliseconds() as f64
+                / 1000.0,
+            participants,
+            recording_count: recordings.len(),
+            entry_count: entries.len(),
+            word_count,
+            character_count,
+            transcribed_at: Local::now(),
+        },
+        body,
+    }
 }
