@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use serenity::model::id::{GuildId, UserId};
 use titlecase::Titlecase;
 
 use crate::{
-    chronicle::{recorder::RecordingManifest, transcription::{audio::load_opus, whisper::transcriber::WhisperTranscriber}}, constants::TRANSCRIPT_PAGE_LIMIT, discord::{autocomplete::{autocomplete_alias_group, autocomplete_transcription_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
+    chronicle::{config::{AliasGroup, Config}, recorder::RecordingManifest, transcription::{audio::load_opus, whisper::transcriber::WhisperTranscriber}}, constants::TRANSCRIPT_PAGE_LIMIT, discord::{autocomplete::{autocomplete_alias_group, autocomplete_transcription_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
 };
 
 #[poise::command(
@@ -77,90 +78,66 @@ pub async fn stop(
 }
 
 
-/// Transcribe a previously recorded session.
+/// Transcribe a previously recorded session./// Transcribe a previously recorded session.
 #[poise::command(slash_command)]
 pub async fn transcribe(
     ctx: PoiseContext<'_>,
+
     #[description = "The session to transcribe"]
     #[autocomplete = "autocomplete_transcription_session"]
     session: String,
+
     #[description = "The alias group to use for transcription"]
     #[autocomplete = "autocomplete_alias_group"]
     alias_group_id: String,
 ) -> Result<(), Error> {
+
+    // gather information
     let guild_id = require_guild(ctx)?;
 
     let recording_dir = PathBuf::from(format!(
         ".chronicle/recordings/{}/{}",
         guild_id,
-        session
+        session,
     ));
 
-    if !recording_dir.is_dir() {
-        ctx.say(format!(
-            "Recording session not found: `{session}`"
-        ))
-        .await?;
-
-        return Ok(());
-    }
-
-    let manifest_path = recording_dir.join("manifest.toml");
-
-    let manifest = match RecordingManifest::load(&manifest_path) {
+    // get manifest
+    let manifest = match load_recording_manifest(
+        &recording_dir,
+        guild_id,
+        &session,
+    ) {
         Ok(manifest) => manifest,
-        Err(error) => {
-            ctx.say(format!(
-                "Failed to load recording manifest: {error}"
-            ))
-            .await?;
+        Err(message) => {
+            ctx.say(message).await?;
             return Ok(());
         }
     };
 
-    if manifest.guild_id != guild_id {
-        ctx.say("Recording manifest belongs to a different guild.")
-            .await?;
-        return Ok(());
-    }
-
-    let mut recordings = Vec::new();
-
-    for entry in std::fs::read_dir(&recording_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.extension().and_then(|ext| ext.to_str()) == Some("opus") {
-            recordings.push(path);
-        }
-    }
+    // get available recordings
+    let recordings = find_recordings(&recording_dir)?;
 
     if recordings.is_empty() {
         ctx.say("No Opus recordings found in that session.")
             .await?;
-
         return Ok(());
     }
 
+    // get alias config and validate
     let config = &ctx.data().config;
 
-    if !config.guild_has_alias_group(guild_id, &alias_group_id) {
-        ctx.say(format!(
-            "Alias group `{alias_group_id}` is not available in this guild."
-        ))
-        .await?;
-
-        return Ok(());
-    }
-
-    config.validate_participants(
+    let alias_group = match validate_alias_group(
+        config,
+        guild_id,
         &alias_group_id,
         manifest.participants,
-    )?;
-
-    let alias_group = config
-        .alias_group(&alias_group_id)
-        .expect("alias group was validated");
+    ) {
+        Ok(alias_group) => alias_group,
+        Err(error) => {
+            ctx.say(error.to_string()).await?;
+            return Ok(());
+        }
+    };
 
     ctx.say(format!(
         "Transcribing {} recording(s)...",
@@ -168,74 +145,15 @@ pub async fn transcribe(
     ))
     .await?;
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut transcriber = WhisperTranscriber::new_cuda()?;
-        let mut output = Vec::new();
-
-        for path in recordings {
-            let audio = load_opus(&path)?;
-            let segments = transcriber.transcribe(&audio)?;
-
-            let user_id = path
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .and_then(|name| name.strip_prefix("recording-"))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Invalid recording filename: {}",
-                        path.display()
-                    )
-                })?
-                .parse::<u64>()
-                .map(serenity::all::UserId::new)
-                .map_err(|error| {
-                    anyhow::anyhow!(
-                        "Invalid user ID in recording filename {}: {error}",
-                        path.display()
-                    )
-                })?;
-
-            for segment in segments {
-                output.push((
-                    segment.start,
-                    segment.end,
-                    user_id,
-                    segment.text,
-                ));
-            }
-        }
-
-        output.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        Ok::<_, anyhow::Error>(output)
-    })
-    .await
-    .map_err(|error| -> Error {
-        format!("Transcription task failed: {error}").into()
-    })?
-    .map_err(|error| -> Error {
-        format!("Transcription failed: {error}").into()
-    })?;
+    // call transcription
+    let result = transcribe_recordings(recordings).await?;
 
     if result.is_empty() {
         ctx.say("No speech detected.").await?;
         return Ok(());
     }
 
-    let lines: Vec<String> = result
-        .into_iter()
-        .map(|(start, end, user_id, text)| {
-            let alias = alias_group
-                .aliases
-                .get(&user_id)
-                .expect("participant aliases were validated");
-
-            format!("[{start:.1}s–{end:.1}s] `{alias}`: {text}")
-        })
-        .collect();
+    let lines = format_transcript(result, alias_group);
 
     if lines.is_empty() {
         ctx.say("No transcription results.").await?;
@@ -243,7 +161,8 @@ pub async fn transcribe(
     }
 
     let pages = paginate_transcript(lines);
-    let page_refs: Vec<&str> = pages.iter().map(String::as_str).collect();
+    let page_refs: Vec<&str> =
+        pages.iter().map(String::as_str).collect();
 
     poise::samples::paginate(ctx, &page_refs).await?;
 
@@ -301,4 +220,147 @@ fn paginate_transcript(lines: Vec<String>) -> Vec<String> {
     }
 
     pages
+}
+
+fn load_recording_manifest(
+    recording_dir: &Path,
+    guild_id: GuildId,
+    session: &str,
+) -> Result<RecordingManifest, String> {
+    if !recording_dir.is_dir() {
+        return Err(format!(
+            "Recording session not found: `{session}`"
+        ));
+    }
+
+    let manifest_path = recording_dir.join("manifest.toml");
+
+    let manifest = RecordingManifest::load(&manifest_path)
+        .map_err(|error| {
+            format!("Failed to load recording manifest: {error}")
+        })?;
+
+    if manifest.guild_id != guild_id {
+        return Err(
+            "Recording manifest belongs to a different guild.".to_string()
+        );
+    }
+
+    Ok(manifest)
+}
+
+fn find_recordings(
+    recording_dir: &Path,
+) -> std::io::Result<Vec<PathBuf>> {
+    let mut recordings = Vec::new();
+
+    for entry in std::fs::read_dir(recording_dir)? {
+        let path = entry?.path();
+
+        if path.extension().and_then(|ext| ext.to_str()) == Some("opus") {
+            recordings.push(path);
+        }
+    }
+
+    Ok(recordings)
+}
+
+fn validate_alias_group<'a>(
+    config: &'a Config,
+    guild_id: GuildId,
+    alias_group_id: &str,
+    participants: Vec<UserId>,
+) -> anyhow::Result<&'a AliasGroup> {
+    if !config.guild_has_alias_group(guild_id, alias_group_id) {
+        anyhow::bail!(
+            "Alias group `{alias_group_id}` is not available in this guild."
+        );
+    }
+
+    config.validate_participants(
+        alias_group_id,
+        participants,
+    )?;
+
+    Ok(config
+        .alias_group(alias_group_id)
+        .expect("alias group was validated"))
+}
+
+async fn transcribe_recordings(
+    recordings: Vec<PathBuf>,
+) -> Result<
+    Vec<(f64, f64, UserId, String)>,
+    Error,
+> {
+    tokio::task::spawn_blocking(move || {
+        let mut transcriber = WhisperTranscriber::new_cuda()?;
+        let mut output: Vec<(f64, f64, UserId, String)> = Vec::new();
+
+        for path in recordings {
+            let audio = load_opus(&path)?;
+            let segments = transcriber.transcribe(&audio)?;
+
+            let user_id = path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.strip_prefix("recording-"))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Invalid recording filename: {}",
+                        path.display()
+                    )
+                })?
+                .parse::<u64>()
+                .map(UserId::new)
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "Invalid user ID in recording filename {}: {error}",
+                        path.display()
+                    )
+                })?;
+
+            for segment in segments {
+                output.push((
+                    segment.start,
+                    segment.end,
+                    user_id,
+                    segment.text,
+                ));
+            }
+        }
+
+        output.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok::<_, anyhow::Error>(output)
+    })
+    .await
+    .map_err(|error| -> Error {
+        format!("Transcription task failed: {error}").into()
+    })?
+    .map_err(|error| -> Error {
+        format!("Transcription failed: {error}").into()
+    })
+}
+
+fn format_transcript(
+    result: Vec<(f64, f64, serenity::all::UserId, String)>,
+    alias_group: &AliasGroup,
+) -> Vec<String> {
+    result
+        .into_iter()
+        .map(|(start, end, user_id, text)| {
+            let alias = alias_group
+                .aliases
+                .get(&user_id)
+                .expect("participant aliases were validated");
+
+            format!(
+                "[{start:.1}s–{end:.1}s] `{alias}`: {text}"
+            )
+        })
+        .collect()
 }

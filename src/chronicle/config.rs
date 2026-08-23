@@ -17,7 +17,7 @@ struct RawConfig {
     guilds: HashMap<String, RawGuildConfig>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct RawAliasGroup {
     name: String,
 

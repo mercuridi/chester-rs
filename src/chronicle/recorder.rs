@@ -121,7 +121,7 @@ impl Recorder {
         session_name: String,
     ) -> Result<bool, Error> {
         let started_at = Local::now();
-        ensure_recording_directory(guild_id, session_name.clone(), started_at)?;
+        ensure_recording_directory(guild_id, &session_name, started_at)?;
 
         let mut recording = self.recording_session.lock().await;
 
@@ -195,7 +195,7 @@ impl Recorder {
 
         let manifest_path = recording_directory(
             session.guild_id,
-            session.session_name,
+            &session.session_name,
             session.started_at,
         )
         .join("manifest.toml");
@@ -229,7 +229,7 @@ impl Recorder {
 
         let (stop_tx, stop_rx) = oneshot::channel();
 
-        let path = recording_path(guild_id, user_id, session_name, started_at);
+        let path = recording_path(guild_id, user_id, &session_name, started_at);
 
         let encoder = tokio::task::spawn_blocking(move || {
             run_encoder(
@@ -433,7 +433,7 @@ fn write_pcm(
 
 fn recording_directory(
     guild_id: GuildId,
-    session_name: String,
+    session_name: &str,
     started_at: DateTime<Local>,
 ) -> PathBuf {
     PathBuf::from(format!(
@@ -447,7 +447,7 @@ fn recording_directory(
 fn recording_path(
     guild_id: GuildId,
     user_id: UserId,
-    session_name: String,
+    session_name: &str,
     started_at: DateTime<Local>,
 ) -> PathBuf {
     recording_directory(guild_id, session_name, started_at)
@@ -456,8 +456,10 @@ fn recording_path(
 
 fn ensure_recording_directory(
     guild_id: GuildId,
-    session_name: String,
+    session_name: &str,
     started_at: DateTime<Local>,
 ) -> Result<(), std::io::Error> {
-    std::fs::create_dir_all(recording_directory(guild_id, session_name, started_at))
+    std::fs::create_dir_all(
+        recording_directory(guild_id, session_name, started_at),
+    )
 }
