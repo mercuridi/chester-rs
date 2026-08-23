@@ -88,7 +88,7 @@ async fn main() -> Result<(), Error> {
         discord::commands::management::fix(),
         discord::commands::library::library(),
         discord::commands::chronicle::recording(),
-        discord::commands::chronicle::transcribe(),
+        discord::commands::chronicle::transcript(),
     ];
 
     let poise_options = poise::FrameworkOptions {

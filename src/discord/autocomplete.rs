@@ -122,7 +122,72 @@ pub async fn autocomplete_incomplete_track(
         .into_iter()
 }
 
-pub async fn autocomplete_transcription_session(
+pub async fn autocomplete_existing_transcript(
+    ctx: PoiseContext<'_>,
+    partial: &str,
+) -> impl Iterator<Item = AutocompleteChoice> {
+    let guild_id = match require_guild(ctx) {
+        Ok(guild_id) => guild_id,
+        Err(error) => {
+            tracing::error!(
+                "Failed to get guild for transcript autocomplete: {error}"
+            );
+            return Vec::new().into_iter();
+        }
+    };
+
+    let needle = partial.to_lowercase();
+
+    let recording_dir = PathBuf::from(format!(
+        ".chronicle/recordings/{}",
+        guild_id
+    ));
+
+    let entries = match std::fs::read_dir(&recording_dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::error!(
+                ?error,
+                path = %recording_dir.display(),
+                "Failed to read recording directory for transcript autocomplete"
+            );
+            return Vec::new().into_iter();
+        }
+    };
+
+    let mut sessions = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        if !path.is_dir() || !path.join("transcript.md").is_file() {
+            continue;
+        }
+
+        let Some(session) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+
+        if !session.to_lowercase().contains(&needle) {
+            continue;
+        }
+
+        let display = format_session_display_name(session);
+
+        sessions.push((session.to_owned(), display));
+    }
+
+    sessions.sort_unstable();
+    sessions.truncate(AUTOCOMPLETE_MAX_CHOICES);
+
+    sessions
+        .into_iter()
+        .map(|(session, display)| AutocompleteChoice::new(display, session))
+        .collect::<Vec<_>>()
+        .into_iter()
+}
+
+pub async fn autocomplete_recording_session(
     ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = AutocompleteChoice> {
@@ -176,32 +241,7 @@ pub async fn autocomplete_transcription_session(
             continue;
         }
 
-        // Construct pretty-printed displays
-        // first 15 chars are always the timestamp due to consistent formatting
-        // anything after that is the session name
-        let display = match session.split_once('-') {
-            Some((date, rest)) if date.len() == 8 => {
-                match rest.split_once('-') {
-                    Some((time, name)) if time.len() == 6 => {
-                        match NaiveDateTime::parse_from_str(
-                            &format!("{date}-{time}"),
-                            "%Y%m%d-%H%M%S",
-                        ) {
-                            Ok(datetime) => {
-                                let display_date =
-                                    datetime.format("%d %b %Y, %H:%M").to_string();
-                                let display_name = name.replace('-', " ").titlecase();
-
-                                format!("{display_name} ({display_date})")
-                            }
-                            Err(_) => session.to_uppercase(),
-                        }
-                    }
-                    _ => session.to_uppercase(),
-                }
-            }
-            _ => session.to_uppercase(),
-        };
+        let display = format_session_display_name(session);
 
         // Push the raw session path and the display to the vec
         sessions.push((session.to_owned(), display));
@@ -260,4 +300,33 @@ pub async fn autocomplete_alias_group(
         .map(|(display, group_id)| AutocompleteChoice::new(display, group_id))
         .collect::<Vec<_>>()
         .into_iter()
+}
+
+fn format_session_display_name(session: &str) -> String {
+    // Construct pretty-printed displays
+    // first 15 chars are always the timestamp due to consistent formatting
+    // anything after that is the session name
+    match session.split_once('-') {
+        Some((date, rest)) if date.len() == 8 => {
+            match rest.split_once('-') {
+                Some((time, name)) if time.len() == 6 => {
+                    match NaiveDateTime::parse_from_str(
+                        &format!("{date}-{time}"),
+                        "%Y%m%d-%H%M%S",
+                    ) {
+                        Ok(datetime) => {
+                            let display_date =
+                                datetime.format("%d %b %Y, %H:%M").to_string();
+                            let display_name = name.replace('-', " ").titlecase();
+
+                            format!("{display_name} ({display_date})")
+                        }
+                        Err(_) => session.to_uppercase(),
+                    }
+                }
+                _ => session.to_uppercase(),
+            }
+        }
+        _ => session.to_uppercase(),
+    }
 }

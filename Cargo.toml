@@ -37,7 +37,7 @@ toml = "1.1.4"
 anyhow = "1.0.99"
 serenity = { version = "0.12.5", features = ["cache", "framework", "standard_framework", "voice"] }
 songbird = { version = "0.6.0", features = ["serenity", "receive"] }
-poise = "0.6.1"
+poise = "0.6.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 titlecase = "3.6.0"

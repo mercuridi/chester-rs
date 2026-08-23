@@ -5,7 +5,7 @@ use serenity::model::id::{GuildId, UserId};
 use titlecase::Titlecase;
 
 use crate::{
-    chronicle::{config::{AliasGroup, Config}, recorder::RecordingManifest, transcription::{audio::load_opus, transcript::{TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant}, whisper::transcriber::WhisperTranscriber}}, constants::TRANSCRIPT_PAGE_LIMIT, discord::{autocomplete::{autocomplete_alias_group, autocomplete_transcription_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
+    chronicle::{config::{AliasGroup, Config}, recorder::RecordingManifest, transcription::{audio::load_opus, transcript::{TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant}, whisper::transcriber::WhisperTranscriber}}, constants::TRANSCRIPT_PAGE_LIMIT, discord::{autocomplete::{autocomplete_alias_group, autocomplete_recording_session, autocomplete_existing_transcript}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
 };
 
 #[poise::command(
@@ -78,22 +78,64 @@ pub async fn stop(
     Ok(())
 }
 
+#[poise::command(
+    slash_command,
+    subcommands("show", "generate")
+)]
+pub async fn transcript(
+    _ctx: PoiseContext<'_>,
+) -> Result<(), Error> {
+    Ok(())
+}
 
-/// Transcribe a previously recorded session.
+/// Display an existing transcript.
 #[poise::command(slash_command)]
-pub async fn transcribe(
+pub async fn show(
+    ctx: PoiseContext<'_>,
+
+    #[description = "The session whose transcript to display"]
+    #[autocomplete = "autocomplete_existing_transcript"]
+    session: String,
+) -> Result<(), Error> {
+    let guild_id = require_guild(ctx)?;
+
+    let recording_dir = PathBuf::from(format!(
+        ".chronicle/recordings/{}/{}",
+        guild_id,
+        session,
+    ));
+
+    let transcript_path = transcript_path(&recording_dir);
+
+    let transcript = match TranscriptDocument::load(&transcript_path) {
+        Ok(transcript) => transcript,
+        Err(error) => {
+            ctx.say(format!(
+                "No readable transcript exists for `{session}`: {error}"
+            ))
+            .await?;
+
+            return Ok(());
+        }
+    };
+
+    display_transcript(ctx, &transcript).await?;
+
+    Ok(())
+}
+
+/// Generate a transcript from a recorded session.
+#[poise::command(slash_command)]
+pub async fn generate(
     ctx: PoiseContext<'_>,
 
     #[description = "The session to transcribe"]
-    #[autocomplete = "autocomplete_transcription_session"]
+    #[autocomplete = "autocomplete_recording_session"]
     session: String,
 
     #[description = "The alias group to use for transcription"]
     #[autocomplete = "autocomplete_alias_group"]
     alias_group_id: String,
-
-    #[description = "Force a complete re-transcription"]
-    force: bool,
 ) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
 
@@ -115,43 +157,11 @@ pub async fn transcribe(
         }
     };
 
-    let transcript_path = recording_dir.join("transcript.md");
-
-    // Cached transcript.
-    if !force && transcript_path.is_file() {
-        match TranscriptDocument::load(&transcript_path) {
-            Ok(transcript) => {
-                ctx.say("Displaying cached transcript.").await?;
-
-                let pages = paginate_transcript(
-                    transcript
-                        .body
-                        .lines()
-                        .map(str::to_owned)
-                        .collect(),
-                );
-
-                let page_refs: Vec<&str> =
-                    pages.iter().map(String::as_str).collect();
-
-                poise::samples::paginate(ctx, &page_refs).await?;
-                return Ok(());
-            }
-
-            Err(error) => {
-                tracing::warn!(
-                    ?error,
-                    path = %transcript_path.display(),
-                    "Failed to load cached transcript; reprocessing"
-                );
-            }
-        }
-    }
-
     let recordings = find_recordings(&recording_dir)?;
 
     if recordings.is_empty() {
-        ctx.say("No Opus recordings found in that session.").await?;
+        ctx.say("No Opus recordings found in that session.")
+            .await?;
         return Ok(());
     }
 
@@ -170,48 +180,44 @@ pub async fn transcribe(
         }
     };
 
-    if force {
-        ctx.say(format!(
-            "Force reprocessing {} recording(s)...",
-            recordings.len()
-        ))
-        .await?;
-    } else {
-        ctx.say(format!(
-            "Transcribing {} recording(s)...",
-            recordings.len()
-        ))
-        .await?;
+    let transcript_path = transcript_path(&recording_dir);
+
+    if transcript_path.is_file() {
+        if !confirm_transcript_regeneration(ctx).await? {
+            return Ok(());
+        }
     }
 
-    let result = transcribe_recordings(recordings.clone()).await?;
+    ctx.say(format!(
+        "Transcribing {} recording(s)...",
+        recordings.len()
+    ))
+    .await?;
 
-    if result.is_empty() {
-        ctx.say("No speech detected.").await?;
-        return Ok(());
-    }
+    let transcript = generate_transcript(
+        &manifest,
+        recordings,
+        alias_group,
+        &transcript_path,
+    )
+    .await?;
 
-    let entries = build_transcript_entries(result, alias_group);
+    display_transcript(ctx, &transcript).await?;
 
-    if entries.is_empty() {
-        ctx.say("No transcription results.").await?;
-        return Ok(());
-    }
+    Ok(())
+}
 
-    let transcript =
-        build_transcript_document(&manifest, &recordings, &entries);
-
-    transcript
-        .save(&transcript_path)
-        .map_err(|error| -> Error {
-            format!(
-                "Transcription succeeded, but failed to save transcript: {error}"
-            )
-            .into()
-        })?;
-
-    let lines = format_transcript(&entries);
-    let pages = paginate_transcript(lines);
+async fn display_transcript(
+    ctx: PoiseContext<'_>,
+    transcript: &TranscriptDocument,
+) -> Result<(), Error> {
+    let pages = paginate_transcript(
+        transcript
+            .body
+            .lines()
+            .map(str::to_owned)
+            .collect(),
+    );
 
     let page_refs: Vec<&str> =
         pages.iter().map(String::as_str).collect();
@@ -479,4 +485,101 @@ fn build_transcript_document(
         },
         body,
     }
+}
+
+fn transcript_path(recording_dir: &Path) -> PathBuf {
+    recording_dir.join("transcript.md")
+}
+
+async fn generate_transcript(
+    manifest: &RecordingManifest,
+    recordings: Vec<PathBuf>,
+    alias_group: &AliasGroup,
+    transcript_path: &Path,
+) -> Result<TranscriptDocument, Error> {
+    let result = transcribe_recordings(recordings.clone()).await?;
+
+    if result.is_empty() {
+        return Err("No speech detected.".into());
+    }
+
+    let entries = build_transcript_entries(result, alias_group);
+
+    if entries.is_empty() {
+        return Err("No transcription results.".into());
+    }
+
+    let transcript = build_transcript_document(
+        manifest,
+        &recordings,
+        &entries,
+    );
+
+    transcript
+        .save(transcript_path)
+        .map_err(|error| -> Error {
+            format!(
+                "Transcription succeeded, but failed to save transcript: {error}"
+            )
+            .into()
+        })?;
+
+    Ok(transcript)
+}
+
+async fn confirm_transcript_regeneration(
+    ctx: PoiseContext<'_>,
+) -> Result<bool, Error> {
+    let reply = ctx
+        .send(
+            poise::CreateReply::default()
+                .content(
+                    "A transcript already exists for this session. \
+                     Regenerating it will replace the existing transcript. \
+                     Continue?",
+                )
+                .components(vec![
+                    serenity::all::CreateActionRow::Buttons(vec![
+                        serenity::all::CreateButton::new("transcript:regenerate")
+                            .label("Regenerate")
+                            .style(serenity::all::ButtonStyle::Danger),
+                        serenity::all::CreateButton::new("transcript:cancel")
+                            .label("Cancel")
+                            .style(serenity::all::ButtonStyle::Secondary),
+                    ]),
+                ])
+                .ephemeral(true),
+        )
+        .await?;
+
+    let interaction = reply
+        .message()
+        .await?
+        .await_component_interaction(ctx)
+        .author_id(ctx.author().id)
+        .timeout(std::time::Duration::from_secs(30))
+        .await;
+
+    let Some(interaction) = interaction else {
+        return Ok(false);
+    };
+
+    let regenerate = interaction.data.custom_id == "transcript:regenerate";
+
+    interaction
+        .create_response(
+            ctx.serenity_context(),
+            serenity::all::CreateInteractionResponse::UpdateMessage(
+                serenity::all::CreateInteractionResponseMessage::new()
+                    .content(if regenerate {
+                        "Regenerating transcript..."
+                    } else {
+                        "Transcript regeneration cancelled."
+                    })
+                    .components(Vec::new()),
+            ),
+        )
+        .await?;
+
+    Ok(regenerate)
 }
