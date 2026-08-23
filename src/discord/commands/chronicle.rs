@@ -1,11 +1,9 @@
 use std::path::PathBuf;
 
+use titlecase::Titlecase;
+
 use crate::{
-    chronicle::{recorder::RecordingManifest, transcription::{audio::load_opus, whisper::transcriber::WhisperTranscriber}}, discord::{
-        context::{Error, PoiseContext},
-        voice::{ensure_vc, require_guild},
-    },
-    discord::autocomplete::{autocomplete_transcription_session, autocomplete_alias_group}
+    chronicle::{recorder::RecordingManifest, transcription::{audio::load_opus, whisper::transcriber::WhisperTranscriber}}, constants::TRANSCRIPT_PAGE_LIMIT, discord::{autocomplete::{autocomplete_alias_group, autocomplete_transcription_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
 };
 
 #[poise::command(
@@ -42,7 +40,7 @@ pub async fn start(
 
     let session_name = session_name
         .replace(' ', "-")
-        .to_lowercase();
+        .titlecase();
 
     recorder
         .start_recording(guild_id, session_name)
@@ -227,25 +225,80 @@ pub async fn transcribe(
         return Ok(());
     }
 
-    let mut response = String::new();
+    let lines: Vec<String> = result
+        .into_iter()
+        .map(|(start, end, user_id, text)| {
+            let alias = alias_group
+                .aliases
+                .get(&user_id)
+                .expect("participant aliases were validated");
 
-    for (start, end, user_id, text) in result {
-        let alias = alias_group
-            .aliases
-            .get(&user_id)
-            .expect("participant aliases were validated");
+            format!("[{start:.1}s–{end:.1}s] `{alias}`: {text}")
+        })
+        .collect();
 
-        response.push_str(&format!(
-            "[{start:.1}s–{end:.1}s] `{alias}`: {text}\n"
-        ));
+    if lines.is_empty() {
+        ctx.say("No transcription results.").await?;
+        return Ok(());
     }
 
-    // Discord messages have a 2000-character limit.
-    if response.len() > 1900 {
-        response.truncate(1900);
-        response.push_str("\n…");
-    }
+    let pages = paginate_transcript(lines);
+    let page_refs: Vec<&str> = pages.iter().map(String::as_str).collect();
 
-    ctx.say(format!("```text\n{response}```")).await?;
+    poise::samples::paginate(ctx, &page_refs).await?;
+
     Ok(())
+}
+
+fn paginate_transcript(lines: Vec<String>) -> Vec<String> {
+    let mut pages = Vec::new();
+    let mut current = String::new();
+
+    for line in lines {
+        let line_len = line.chars().count();
+        let separator_len = usize::from(!current.is_empty());
+
+        if current.chars().count() + separator_len + line_len <= TRANSCRIPT_PAGE_LIMIT {
+            if !current.is_empty() {
+                current.push('\n');
+            }
+
+            current.push_str(&line);
+            continue;
+        }
+
+        // Store the current page before starting the next one.
+        if !current.is_empty() {
+            pages.push(std::mem::take(&mut current));
+        }
+
+        // A single transcript entry is larger than one page.
+        // Split it at a valid UTF-8 boundary.
+        if line_len > TRANSCRIPT_PAGE_LIMIT {
+            let mut remaining = line.as_str();
+
+            while remaining.chars().count() > TRANSCRIPT_PAGE_LIMIT {
+                let split_at = remaining
+                    .char_indices()
+                    .nth(TRANSCRIPT_PAGE_LIMIT)
+                    .map(|(idx, _)| idx)
+                    .unwrap();
+
+                pages.push(remaining[..split_at].to_owned());
+                remaining = &remaining[split_at..];
+            }
+
+            if !remaining.is_empty() {
+                current.push_str(remaining);
+            }
+        } else {
+            current.push_str(&line);
+        }
+    }
+
+    if !current.is_empty() {
+        pages.push(current);
+    }
+
+    pages
 }

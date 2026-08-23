@@ -26,6 +26,7 @@ pub const MODEL_REVISION: &str = "main";
 // pub const MODEL_REVISION: &str = "refs/pr/10";
 pub const MODEL_SAMPLE_RATE: u32 = m::SAMPLE_RATE as u32;
 pub const STRIDE_SIZE_SECONDS: f64 = 25.0;
+pub const TRANSCRIPT_PAGE_LIMIT: usize = 1900;
 
 // library sync
 pub const AUDIO_DIR: &str = "audio";
