@@ -228,11 +228,7 @@ pub async fn generate(
         }
     }
 
-    ctx.say(format!(
-        "Transcribing {} recording(s)...",
-        recordings.len()
-    ))
-    .await?;
+    ctx.defer().await?;
 
     let transcript = generate_transcript(
         &manifest,
