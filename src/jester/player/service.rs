@@ -6,8 +6,7 @@ use songbird::input::cached::Compressed;
 use songbird::driver::Bitrate;
 use poise::serenity_prelude::GuildId;
 
-use crate::{discord::context::Error, track::types::{NowPlaying, TrackInfo}};
-
+use crate::{discord::context::Error, jester::track::types::{NowPlaying, TrackInfo}};
 
 pub struct PlayerService {
     now_playing: RwLock<HashMap<GuildId, NowPlaying>>,

@@ -1,4 +1,4 @@
-use crate::{discord::{autocomplete::autocomplete_track, context::{Error, PoiseContext}, voice::{ensure_vc, leave_vc, require_guild}}, track::resolver::resolve_track};
+use crate::{discord::{autocomplete::autocomplete_track, context::{Error, PoiseContext}, voice::{ensure_vc, leave_vc, require_guild}}, jester::track::resolver::resolve_track};
 
 /// Joins your voice channel
 #[poise::command(slash_command)]

@@ -1,4 +1,4 @@
-pub mod recorder;
-pub mod encoder;
+pub mod recording;
 pub mod transcription;
+pub mod indexer;
 pub mod config;

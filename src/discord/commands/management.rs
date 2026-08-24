@@ -1,4 +1,4 @@
-use crate::db::metadata::MetadataKind;
+use crate::jester::db::metadata::MetadataKind;
 use crate::discord::autocomplete::{
     autocomplete_track,
     autocomplete_tag,
@@ -7,13 +7,13 @@ use crate::discord::autocomplete::{
     autocomplete_incomplete_track
 };
 use crate::discord::context::{Error, PoiseContext};
-use crate::track::download::download_track;
-use crate::db::repository::{
+use crate::jester::track::download::download_track;
+use crate::jester::db::repository::{
     get_or_insert_metadata_id, require_track,
     delete_track_tags, insert_track_tag,
     update_track_title, update_track_artist, update_track_origin,
 };
-use crate::track::types::{TrackInfo, VideoId};
+use crate::jester::track::types::{TrackInfo, VideoId};
 
 pub async fn download_direct(
     ctx: PoiseContext<'_>,

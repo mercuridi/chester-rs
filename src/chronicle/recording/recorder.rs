@@ -27,7 +27,7 @@ use songbird::{Call, CoreEvent, events::{
 }};
 
 use crate::{
-    chronicle::encoder::run_encoder, constants::{
+    chronicle::recording::encoder::run_encoder, constants::{
         RING_BUFFER_CAPACITY,
         SILENCE_FRAME}, discord::context::Error,
 };

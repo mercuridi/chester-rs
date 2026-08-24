@@ -6,7 +6,7 @@ use crate::constants::{
 };
 
 
-use crate::db::repository::{
+use crate::jester::db::repository::{
     fetch_library_all, fetch_library_by_artist, fetch_library_by_incomplete,
     fetch_library_by_origin, fetch_library_by_tag,
 };

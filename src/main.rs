@@ -1,11 +1,8 @@
 mod constants;
-mod library;
-mod db;
-mod discord;
-mod player;
 mod utils;
+mod discord;
+mod jester;
 mod chronicle;
-mod track;
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
@@ -16,7 +13,7 @@ use songbird::{Config as SongbirdConfig, SerenityInit, driver::{DecodeConfig, De
 use dotenv::dotenv;
 use tracing::info;
 
-use crate::{chronicle::{config::Config, recorder::notify_recording_user}, discord::context::{Data, Error}, library::sync::sync_audio_library};
+use crate::{chronicle::{config::Config, recording::recorder::notify_recording_user}, discord::context::{Data, Error}, jester::library::sync::sync_audio_library};
 use tracing_subscriber::EnvFilter;
 
 ////////////////////////////////////////////////////////////////////////////////

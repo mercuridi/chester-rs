@@ -1,6 +1,6 @@
 use sqlx::SqlitePool;
 
-use crate::{chronicle::{config::Config, recorder::RecorderManager}, player::service::PlayerService};
+use crate::{chronicle::{config::Config, recording::recorder::RecorderManager}, jester::player::service::PlayerService};
 
 // Defines user data; this is always available in the Serenity context of an invocation
 pub struct Data {

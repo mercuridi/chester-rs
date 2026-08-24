@@ -5,7 +5,7 @@ use serenity::model::id::{GuildId, UserId};
 use titlecase::Titlecase;
 
 use crate::{
-    chronicle::{config::{AliasGroup, Config}, recorder::{RecordingManifest, notify_recording_user}, transcription::{audio::load_opus, transcript::{TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant}, whisper::transcriber::WhisperTranscriber}}, constants::{CHESTER_USER_ID, TRANSCRIPT_PAGE_LIMIT}, discord::{autocomplete::{autocomplete_alias_group, autocomplete_existing_transcript, autocomplete_recording_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
+    chronicle::{config::{AliasGroup, Config}, recording::recorder::{RecordingManifest, notify_recording_user}, transcription::{audio::load_opus, transcript::{TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant}, whisper::transcriber::WhisperTranscriber}}, constants::{CHESTER_USER_ID, TRANSCRIPT_PAGE_LIMIT}, discord::{autocomplete::{autocomplete_alias_group, autocomplete_existing_transcript, autocomplete_recording_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
 };
 
 #[poise::command(
@@ -222,13 +222,13 @@ pub async fn generate(
 
     let transcript_path = transcript_path(&recording_dir);
 
+    ctx.defer().await?;
+
     if transcript_path.is_file() {
         if !confirm_transcript_regeneration(ctx).await? {
             return Ok(());
         }
     }
-
-    ctx.defer().await?;
 
     let transcript = generate_transcript(
         &manifest,
