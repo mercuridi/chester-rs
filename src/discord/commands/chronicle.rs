@@ -5,7 +5,7 @@ use serenity::model::id::{GuildId, UserId};
 use titlecase::Titlecase;
 
 use crate::{
-    chronicle::{config::{AliasGroup, Config}, recorder::RecordingManifest, transcription::{audio::load_opus, transcript::{TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant}, whisper::transcriber::WhisperTranscriber}}, constants::TRANSCRIPT_PAGE_LIMIT, discord::{autocomplete::{autocomplete_alias_group, autocomplete_recording_session, autocomplete_existing_transcript}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
+    chronicle::{config::{AliasGroup, Config}, recorder::{RecordingManifest, notify_recording_user}, transcription::{audio::load_opus, transcript::{TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant}, whisper::transcriber::WhisperTranscriber}}, constants::{CHESTER_USER_ID, TRANSCRIPT_PAGE_LIMIT}, discord::{autocomplete::{autocomplete_alias_group, autocomplete_existing_transcript, autocomplete_recording_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
 };
 
 #[poise::command(
@@ -22,9 +22,9 @@ pub async fn start(
     ctx: PoiseContext<'_>,
     #[description = "The session name"] session_name: String,
 ) -> Result<(), Error> {
-    let guild_id = require_guild(ctx)?;
 
-    ensure_vc(ctx).await?;
+    let (guild_id, voice_channel_id, _call) = ensure_vc(ctx).await?;
+    let notification_channel_id = ctx.channel_id();
 
     let recorder = ctx
         .data()
@@ -44,11 +44,51 @@ pub async fn start(
         .replace(' ', "-")
         .titlecase();
 
-    recorder
-        .start_recording(guild_id, session_name)
+    let started = recorder
+        .start_recording(
+            guild_id,
+            voice_channel_id,
+            notification_channel_id,
+            ctx.author().id,
+            session_name.clone(),
+        )
         .await?;
 
-    ctx.say("Recording started.").await?;
+    if !started {
+        ctx.say("A recording is already in progress.").await?;
+        return Ok(());
+    }
+
+    ctx.say(format!("Recording session `{}` started by <@{}>.", session_name, ctx.author().id)).await?;
+
+    let voice_states = ctx
+        .serenity_context()
+        .cache
+        .guild(guild_id)
+        .map(|guild| guild.voice_states.clone())
+        .unwrap_or_default();
+
+    for (user_id, voice_state) in voice_states {
+        if user_id == CHESTER_USER_ID {
+            continue;
+        }
+
+        if user_id == ctx.author().id {
+            continue;
+        }
+
+        if voice_state.channel_id != Some(voice_channel_id) {
+            continue;
+        }
+
+        notify_recording_user(
+            &ctx.serenity_context().http,
+            notification_channel_id,
+            user_id,
+        )
+        .await?;
+    }
+
     Ok(())
 }
 
@@ -444,7 +484,7 @@ fn format_transcript(entries: &[TranscriptEntry]) -> Vec<String> {
         .iter()
         .map(|entry| {
             format!(
-                "`[{:.1}s–{:.1}s]` `{}`: {}",
+                "`[{}–{}]` `{}`: {}",
                 format_timestamp(entry.start),
                 format_timestamp(entry.end),
                 entry.alias,
@@ -509,6 +549,10 @@ async fn generate_transcript(
     transcript_path: &Path,
 ) -> Result<TranscriptDocument, Error> {
     let result = transcribe_recordings(recordings.clone()).await?;
+
+    for (start, end, _, _) in &result {
+        println!("TRANSCRIPTION: start={start}, end={end}");
+    }
 
     if result.is_empty() {
         return Err("No speech detected.".into());

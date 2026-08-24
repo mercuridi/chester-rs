@@ -16,7 +16,7 @@ pub async fn play(
     #[autocomplete = "autocomplete_track"]
     track: String,
 ) -> Result<(), Error> {
-    let (guild_id, call) = ensure_vc(ctx).await?;
+    let (guild_id, _, call) = ensure_vc(ctx).await?;
     let track_info = resolve_track(&ctx.data().db_pool, track).await?;
 
     ctx.data()

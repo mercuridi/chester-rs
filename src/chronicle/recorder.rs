@@ -11,7 +11,7 @@ use rtrb::{
     RingBuffer
 };
 use serde::{Deserialize, Serialize};
-use serenity::model::id::GuildId;
+use serenity::{http::Http, model::id::{ChannelId, GuildId}};
 use tokio::{
     sync::{
         oneshot,
@@ -27,11 +27,9 @@ use songbird::{Call, CoreEvent, events::{
 }};
 
 use crate::{
-    chronicle::encoder::run_encoder,
-    constants::{
+    chronicle::encoder::run_encoder, constants::{
         RING_BUFFER_CAPACITY,
-        SILENCE_FRAME},
-    discord::context::Error,
+        SILENCE_FRAME}, discord::context::Error,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,6 +54,9 @@ pub struct UserRecording {
 
 pub struct RecordingSession {
     pub guild_id: GuildId,
+    pub voice_channel_id: ChannelId,
+    pub notification_channel_id: ChannelId,
+    pub initiator: UserId,
     pub started_at: DateTime<Local>,
     pub session_name: String,
     pub tick: u64,
@@ -118,9 +119,13 @@ impl Recorder {
     pub async fn start_recording(
         &self,
         guild_id: GuildId,
+        voice_channel_id: ChannelId,
+        notification_channel_id: ChannelId,
+        initiator: UserId,
         session_name: String,
     ) -> Result<bool, Error> {
         let started_at = Local::now();
+
         ensure_recording_directory(guild_id, &session_name, started_at)?;
 
         let mut recording = self.recording_session.lock().await;
@@ -131,6 +136,9 @@ impl Recorder {
 
         *recording = Some(RecordingSession {
             guild_id,
+            voice_channel_id,
+            notification_channel_id,
+            initiator,
             started_at,
             session_name,
             tick: 0,
@@ -139,6 +147,9 @@ impl Recorder {
 
         tracing::info!(
             guild_id = %guild_id,
+            voice_channel_id = %voice_channel_id,
+            notification_channel_id = %notification_channel_id,
+            initiator = %initiator,
             "Recording started (id: {})",
             self.id
         );
@@ -266,6 +277,18 @@ impl Recorder {
         );
 
         Ok(())
+    }
+
+    pub async fn recording_info(&self) -> Option<(ChannelId, ChannelId, UserId)> {
+        let recording = self.recording_session.lock().await;
+
+        recording.as_ref().map(|session| {
+            (
+                session.voice_channel_id,
+                session.notification_channel_id,
+                session.initiator,
+            )
+        })
     }
 
 }
@@ -462,4 +485,22 @@ fn ensure_recording_directory(
     std::fs::create_dir_all(
         recording_directory(guild_id, session_name, started_at),
     )
+}
+
+pub async fn notify_recording_user(
+    http: &Http,
+    channel_id: ChannelId,
+    user_id: UserId,
+) -> Result<(), Error> {
+    channel_id
+        .say(
+            http,
+            format!(
+                "Recording notice: <@{}>, this voice channel is currently being recorded. Your voice will be included in the recording.",
+                user_id
+            ),
+        )
+        .await?;
+
+    Ok(())
 }

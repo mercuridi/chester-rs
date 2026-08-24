@@ -96,10 +96,10 @@ pub async fn leave_vc(
 
 pub async fn ensure_vc(
     ctx: PoiseContext<'_>,
-) -> Result<(GuildId, Arc<Mutex<Call>>), Error> {
+) -> Result<(GuildId, ChannelId, Arc<Mutex<Call>>), Error> {
     let guild_id = require_guild(ctx)?;
     let vc_id = get_vc_id(ctx).await?;
     let call = join_vc(ctx, guild_id, vc_id).await?;
 
-    Ok((guild_id, call))
+    Ok((guild_id, vc_id, call))
 }

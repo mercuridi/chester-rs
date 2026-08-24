@@ -11,11 +11,12 @@ mod track;
 /// Imports
 
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
+use serenity::client::FullEvent;
 use songbird::{Config as SongbirdConfig, SerenityInit, driver::{DecodeConfig, DecodeMode}}; use sqlx::SqlitePool;
 use dotenv::dotenv;
 use tracing::info;
 
-use crate::{chronicle::config::Config, discord::context::{Data, Error}, library::sync::sync_audio_library};
+use crate::{chronicle::{config::Config, recorder::notify_recording_user}, discord::context::{Data, Error}, library::sync::sync_audio_library};
 use tracing_subscriber::EnvFilter;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -112,12 +113,57 @@ async fn main() -> Result<(), Error> {
             })
         },
         skip_checks_for_owners: true,
-        event_handler: |_ctx, _event, _framework, _data| {
+        event_handler: |ctx, event, _framework, data| {
             Box::pin(async move {
-                // tracing::debug!(
-                //     "Got an event in event handler: {:?}",
-                //     event.snake_case_name()
-                // );
+                if let FullEvent::VoiceStateUpdate { old, new } = event {
+                    let Some(guild_id) = new.guild_id else {
+                        return Ok(());
+                    };
+
+                    let Some(recorder) = data.recorder.get(guild_id).await else {
+                        return Ok(());
+                    };
+
+                    let Some((voice_channel_id, notification_channel_id, initiator)) =
+                        recorder.recording_info().await
+                    else {
+                        return Ok(());
+                    };
+
+                    let user_id = new.user_id;
+
+                    // The initiator is deliberately excluded from notifications.
+                    if user_id == initiator {
+                        return Ok(());
+                    }
+
+                    // Only notify when the user enters the recording channel.
+                    //
+                    // This covers:
+                    //   None -> recording channel
+                    //   other VC -> recording channel
+                    //
+                    // It excludes:
+                    //   recording channel -> same channel
+                    //   recording channel -> other VC
+                    //   recording channel -> None
+                    if new.channel_id != Some(voice_channel_id) {
+                        return Ok(());
+                    }
+
+                    if old.as_ref().and_then(|state| state.channel_id) == Some(voice_channel_id) {
+                        return Ok(());
+                    }
+
+                    notify_recording_user(
+                        &ctx.http,
+                        notification_channel_id,
+                        user_id,
+                    )
+                    .await?;
+
+                }
+
                 Ok(())
             })
         },

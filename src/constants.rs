@@ -1,4 +1,7 @@
 use candle_transformers::models::whisper::{self as m};
+use serenity::model::id::UserId;
+
+pub const CHESTER_USER_ID: UserId = UserId::new(1407798091934863360);
 
 // library display
 pub const ELLIPSIS: &str = "…";
