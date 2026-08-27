@@ -8,6 +8,18 @@ use serenity::all::{GuildId, UserId};
 
 pub type AliasGroupId = String;
 
+fn default_index_db() -> String {
+    "sqlite://src/chronicle/indexer/db/chronicle.sqlite3".to_owned()
+}
+
+fn default_llm_url() -> String {
+    "http://127.0.0.1:8080".to_owned()
+}
+
+fn default_llm_model() -> String {
+    "Qwen2.5-7B-Instruct".to_owned()
+}
+
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     #[serde(default)]
@@ -15,6 +27,21 @@ struct RawConfig {
 
     #[serde(default)]
     guilds: HashMap<String, RawGuildConfig>,
+
+    #[serde(default)]
+    chronicle: RawChronicleConfig,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct RawChronicleConfig {
+    #[serde(default = "default_index_db")]
+    index_db: String,
+
+    #[serde(default = "default_llm_url")]
+    llm_url: String,
+
+    #[serde(default = "default_llm_model")]
+    llm_model: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -35,6 +62,14 @@ struct RawGuildConfig {
 pub struct Config {
     alias_groups: HashMap<AliasGroupId, AliasGroup>,
     guilds: HashMap<GuildId, GuildConfig>,
+    pub chronicle: ChronicleConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChronicleConfig {
+    pub index_db: String,
+    pub llm_url: String,
+    pub llm_model: String,
 }
 
 #[derive(Debug)]
@@ -86,7 +121,7 @@ impl Config {
                 if alias.trim().is_empty() {
                     bail!(
                         "Alias for user `{raw_user_id}` in alias group `{group_id}` \
-                         cannot be empty"
+                        cannot be empty"
                     );
                 }
 
@@ -124,9 +159,16 @@ impl Config {
             );
         }
 
+        let chronicle = ChronicleConfig {
+            index_db: raw.chronicle.index_db,
+            llm_url: raw.chronicle.llm_url,
+            llm_model: raw.chronicle.llm_model,
+        };
+
         Ok(Self {
             alias_groups,
             guilds,
+            chronicle,
         })
     }
 
@@ -258,3 +300,4 @@ fn parse_guild_id(value: &str) -> Result<GuildId> {
 
     Ok(GuildId::new(id))
 }
+

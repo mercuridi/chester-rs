@@ -243,6 +243,20 @@ pub async fn generate(
     Ok(())
 }
 
+#[poise::command(slash_command)]
+pub async fn ask(
+    ctx: PoiseContext<'_>,
+    #[description = "Question to ask Chronicle"] question: String,
+) -> Result<(), Error> {
+    ctx.defer().await?;
+
+    let answer = ctx.data().chronicle.ask(&question).await?;
+
+    ctx.say(answer).await?;
+
+    Ok(())
+}
+
 async fn display_transcript(
     ctx: PoiseContext<'_>,
     transcript: &TranscriptDocument,

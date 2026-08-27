@@ -4,6 +4,8 @@ mod discord;
 mod jester;
 mod chronicle;
 
+use std::path::PathBuf;
+
 ////////////////////////////////////////////////////////////////////////////////
 /// Imports
 
@@ -13,7 +15,7 @@ use songbird::{Config as SongbirdConfig, SerenityInit, driver::{DecodeConfig, De
 use dotenv::dotenv;
 use tracing::info;
 
-use crate::{chronicle::{config::Config, recording::recorder::notify_recording_user}, discord::context::{Data, Error}, jester::library::sync::sync_audio_library};
+use crate::{chronicle::{config::Config, indexer::{db::repository::IndexerDb, embedder::Embedder, indexer::Indexer}, llm::Llm, recording::recorder::notify_recording_user, service::Chronicle}, discord::context::{Data, Error}, jester::library::sync::sync_audio_library};
 use tracing_subscriber::EnvFilter;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -59,12 +61,52 @@ async fn main() -> Result<(), Error> {
 
     let config = Config::load(".chronicle/config.toml")?;
 
-    let stats = sync_audio_library(&pool).await?;
+    tracing::info!(
+        index_db = %config.chronicle.index_db,
+        "Opening Chronicle index database"
+    );
+
+    let index_db = IndexerDb::open(&config.chronicle.index_db).await?;
+
+    let embedder = Embedder::load(candle_core::Device::cuda_if_available(0)?)?;
+
+    let indexer = Indexer::new(
+        PathBuf::from("corpus/"),
+        index_db,
+        embedder,
+    );
+
+    let indexing_stats = indexer.index().await?;
+
+    tracing::info!(
+        added = indexing_stats.added,
+        updated = indexing_stats.updated,
+        unchanged = indexing_stats.unchanged,
+        removed = indexing_stats.removed,
+        "Chronicle index complete"
+    );
+
+    let index_db = IndexerDb::open(&config.chronicle.index_db).await?;
+
+    let embedder = Embedder::load(candle_core::Device::cuda_if_available(0)?)?;
+
+    let llm = Llm::new(
+        &config.chronicle.llm_url,
+        &config.chronicle.llm_model,
+    );
+
+    let chronicle = Chronicle::new(
+        index_db,
+        embedder,
+        llm,
+    );
+
+    let sync_stats = sync_audio_library(&pool).await?;
 
     info!(
-        downloaded = stats.downloaded,
-        failed = stats.failed,
-        skipped = stats.skipped,
+        downloaded = sync_stats.downloaded,
+        failed = sync_stats.failed,
+        skipped = sync_stats.skipped,
         "Library sync complete"
     );
 
@@ -87,6 +129,7 @@ async fn main() -> Result<(), Error> {
         discord::commands::library::library(),
         discord::commands::chronicle::recording(),
         discord::commands::chronicle::transcript(),
+        discord::commands::chronicle::ask(),
     ];
 
     let poise_options = poise::FrameworkOptions {
@@ -173,7 +216,7 @@ async fn main() -> Result<(), Error> {
         .setup(|_ctx, _ready, _framework| {
             Box::pin(async move {
                 // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data::new(pool, config))
+                Ok(Data::new(pool, config, chronicle))
             })
         })
         .build();
