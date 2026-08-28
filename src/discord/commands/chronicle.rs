@@ -235,6 +235,7 @@ pub async fn generate(
         recordings,
         alias_group,
         &transcript_path,
+        ctx.data().chronicle.runtime(),
     )
     .await?;
 
@@ -397,10 +398,15 @@ fn validate_alias_group<'a>(
 
 async fn transcribe_recordings(
     recordings: Vec<PathBuf>,
+    runtime: crate::chronicle::runtime::GpuRuntime,
 ) -> Result<
     Vec<(f64, f64, UserId, String)>,
     Error,
 > {
+    let _gpu_lease = runtime.acquire_transcription().map_err(|error| -> Error {
+        error.to_string().into()
+    })?;
+
     tokio::task::spawn_blocking(move || {
         let mut transcriber = WhisperTranscriber::new_cuda()?;
         let mut output: Vec<(f64, f64, UserId, String)> = Vec::new();
@@ -557,8 +563,9 @@ async fn generate_transcript(
     recordings: Vec<PathBuf>,
     alias_group: &AliasGroup,
     transcript_path: &Path,
+    runtime: crate::chronicle::runtime::GpuRuntime,
 ) -> Result<TranscriptDocument, Error> {
-    let result = transcribe_recordings(recordings.clone()).await?;
+    let result = transcribe_recordings(recordings.clone(), runtime).await?;
 
     for (start, end, _, _) in &result {
         println!("TRANSCRIPTION: start={start}, end={end}");

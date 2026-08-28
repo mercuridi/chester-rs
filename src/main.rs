@@ -15,7 +15,7 @@ use songbird::{Config as SongbirdConfig, SerenityInit, driver::{DecodeConfig, De
 use dotenv::dotenv;
 use tracing::info;
 
-use crate::{chronicle::{config::Config, indexer::{db::repository::IndexerDb, embedder::Embedder, indexer::Indexer}, llm::Llm, recording::recorder::notify_recording_user, service::Chronicle}, discord::context::{Data, Error}, jester::library::sync::sync_audio_library};
+use crate::{chronicle::{config::Config, indexer::{db::repository::IndexerDb, embedder::Embedder, indexer::Indexer}, llm::Llm, recording::recorder::notify_recording_user, runtime::GpuRuntime, service::Chronicle}, discord::context::{Data, Error}, jester::library::sync::sync_audio_library};
 use tracing_subscriber::EnvFilter;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -96,10 +96,13 @@ async fn main() -> Result<(), Error> {
         config.chronicle.llm_temperature,
     );
 
+    let runtime = GpuRuntime::new();
+
     let chronicle = Chronicle::new(
         index_db,
         embedder,
         llm,
+        runtime.clone(),
         config.chronicle.retrieval_limit,
     );
 
