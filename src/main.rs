@@ -86,9 +86,7 @@ async fn main() -> Result<(), Error> {
         "Chronicle index complete"
     );
 
-    let index_db = IndexerDb::open(&config.chronicle.index_db).await?;
-
-    let embedder = Embedder::load(candle_core::Device::cuda_if_available(0)?)?;
+    let (index_db, embedder) = indexer.into_parts();
 
     let llm = Llm::new(
         &config.chronicle.llm_url,

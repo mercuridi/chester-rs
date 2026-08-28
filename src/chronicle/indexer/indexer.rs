@@ -103,6 +103,10 @@ impl Indexer {
         Ok(stats)
     }
 
+    pub fn into_parts(self) -> (IndexerDb, Embedder) {
+        (self.db, self.embedder)
+    }
+
     async fn index_document(
         &self,
         document: &Document,
