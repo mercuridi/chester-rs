@@ -1,6 +1,13 @@
 # Changelog
 
-## [2.1.0] — 2026-08-28
+## [2.2.0] — 2026-08-28
+
+### Features
+
+- System prompt for chronicle
+- Embedder now runs on cpu for chronicle to allow more gpu headroom
+
+## [v2.1.0] — 2026-08-28
 
 ### Bug Fixes
 
