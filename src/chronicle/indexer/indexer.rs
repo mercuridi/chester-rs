@@ -24,6 +24,7 @@ pub struct Indexer {
     root: PathBuf,
     db: IndexerDb,
     embedder: Embedder,
+    max_chunk_length: usize,
 }
 
 impl Indexer {
@@ -31,11 +32,13 @@ impl Indexer {
         root: PathBuf,
         db: IndexerDb,
         embedder: Embedder,
+        max_chunk_length: usize,
     ) -> Self {
         Self {
             root,
             db,
             embedder,
+            max_chunk_length,
         }
     }
 
@@ -112,7 +115,7 @@ impl Indexer {
         document: &Document,
         path: &str,
     ) -> Result<()> {
-        let chunks = chunker::chunk(document)
+        let chunks = chunker::chunk(document, self.max_chunk_length)
             .with_context(|| {
                 format!("Failed to chunk document: {path}")
             })?;

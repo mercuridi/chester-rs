@@ -2,10 +2,8 @@ use anyhow::Result;
 
 use super::document::{Chunk, Document};
 
-const DEFAULT_MAX_CHUNK_LENGTH: usize = 2_000;
-
-pub fn chunk(document: &Document) -> Result<Vec<Chunk>> {
-    chunk_text(document, DEFAULT_MAX_CHUNK_LENGTH)
+pub fn chunk(document: &Document, max_length: usize) -> Result<Vec<Chunk>> {
+    chunk_text(document, max_length)
 }
 
 fn chunk_text(document: &Document, max_length: usize) -> Result<Vec<Chunk>> {
@@ -110,21 +108,21 @@ use super::*;
 
     #[test]
     fn empty_document_produces_no_chunks() {
-        let chunks = chunk(&document("")).unwrap();
+        let chunks = chunk(&document(""), 2_000).unwrap();
 
         assert!(chunks.is_empty());
     }
 
     #[test]
     fn whitespace_only_document_produces_no_chunks() {
-        let chunks = chunk(&document("  \n\n  ")).unwrap();
+        let chunks = chunk(&document("  \n\n  "), 2_000).unwrap();
 
         assert!(chunks.is_empty());
     }
 
     #[test]
     fn short_document_produces_one_chunk() {
-        let chunks = chunk(&document("Hello world.")).unwrap();
+        let chunks = chunk(&document("Hello world."), 2_000).unwrap();
 
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].index, 0);
@@ -182,7 +180,7 @@ use super::*;
             content_hash: "hash".to_owned(),
         };
 
-        let chunks = chunk(&document).unwrap();
+        let chunks = chunk(&document, 2_000).unwrap();
 
         assert_eq!(
             chunks[0].document_path,

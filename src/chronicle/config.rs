@@ -8,16 +8,25 @@ use serenity::all::{GuildId, UserId};
 
 pub type AliasGroupId = String;
 
+const DEFAULT_INDEX_DB: &str = "sqlite://database/chronicle/chronicle.sqlite3";
+const DEFAULT_CORPUS_DIR: &str = "corpus";
+const DEFAULT_LLM_URL: &str = "http://127.0.0.1:8080";
+const DEFAULT_LLM_MODEL: &str = "Qwen2.5-7B-Instruct";
+const DEFAULT_LLM_MAX_TOKENS: u32 = 512;
+const DEFAULT_LLM_TEMPERATURE: f32 = 0.2;
+const DEFAULT_RETRIEVAL_LIMIT: usize = 5;
+const DEFAULT_MAX_CHUNK_LENGTH: usize = 2_000;
+
 fn default_index_db() -> String {
-    "sqlite://src/chronicle/indexer/db/chronicle.sqlite3".to_owned()
+    DEFAULT_INDEX_DB.to_owned()
 }
 
 fn default_llm_url() -> String {
-    "http://127.0.0.1:8080".to_owned()
+    DEFAULT_LLM_URL.to_owned()
 }
 
 fn default_llm_model() -> String {
-    "Qwen2.5-7B-Instruct".to_owned()
+    DEFAULT_LLM_MODEL.to_owned()
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,7 +51,28 @@ pub struct RawChronicleConfig {
 
     #[serde(default = "default_llm_model")]
     llm_model: String,
+
+    #[serde(default = "default_corpus_dir")]
+    corpus_dir: String,
+
+    #[serde(default = "default_llm_max_tokens")]
+    llm_max_tokens: u32,
+
+    #[serde(default = "default_llm_temperature")]
+    llm_temperature: f32,
+
+    #[serde(default = "default_retrieval_limit")]
+    retrieval_limit: usize,
+
+    #[serde(default = "default_max_chunk_length")]
+    max_chunk_length: usize,
 }
+
+fn default_corpus_dir() -> String { DEFAULT_CORPUS_DIR.to_owned() }
+fn default_llm_max_tokens() -> u32 { DEFAULT_LLM_MAX_TOKENS }
+fn default_llm_temperature() -> f32 { DEFAULT_LLM_TEMPERATURE }
+fn default_retrieval_limit() -> usize { DEFAULT_RETRIEVAL_LIMIT }
+fn default_max_chunk_length() -> usize { DEFAULT_MAX_CHUNK_LENGTH }
 
 #[derive(Debug, Deserialize, Clone)]
 struct RawAliasGroup {
@@ -70,6 +100,11 @@ pub struct ChronicleConfig {
     pub index_db: String,
     pub llm_url: String,
     pub llm_model: String,
+    pub corpus_dir: String,
+    pub llm_max_tokens: u32,
+    pub llm_temperature: f32,
+    pub retrieval_limit: usize,
+    pub max_chunk_length: usize,
 }
 
 #[derive(Debug)]
@@ -163,7 +198,14 @@ impl Config {
             index_db: raw.chronicle.index_db,
             llm_url: raw.chronicle.llm_url,
             llm_model: raw.chronicle.llm_model,
+            corpus_dir: raw.chronicle.corpus_dir,
+            llm_max_tokens: raw.chronicle.llm_max_tokens,
+            llm_temperature: raw.chronicle.llm_temperature,
+            retrieval_limit: raw.chronicle.retrieval_limit,
+            max_chunk_length: raw.chronicle.max_chunk_length,
         };
+
+        chronicle.validate()?;
 
         Ok(Self {
             alias_groups,
@@ -231,6 +273,36 @@ impl Config {
         self.guilds
             .get(&guild_id)
             .is_some_and(|guild| guild.alias_groups.iter().any(|id| id == group_id))
+    }
+
+}
+
+impl ChronicleConfig {
+    fn validate(&self) -> Result<()> {
+        if self.index_db.trim().is_empty() || self.corpus_dir.trim().is_empty() {
+            bail!("Chronicle index_db and corpus_dir cannot be empty");
+        }
+        if self.llm_model.trim().is_empty() {
+            bail!("Chronicle llm_model cannot be empty");
+        }
+        let url = url::Url::parse(&self.llm_url)
+            .with_context(|| format!("Invalid Chronicle llm_url `{}`", self.llm_url))?;
+        if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+            bail!("Chronicle llm_url must be an HTTP(S) URL with a host");
+        }
+        if self.llm_max_tokens == 0 || self.llm_max_tokens > 32_768 {
+            bail!("Chronicle llm_max_tokens must be between 1 and 32768");
+        }
+        if !self.llm_temperature.is_finite() || !(0.0..=2.0).contains(&self.llm_temperature) {
+            bail!("Chronicle llm_temperature must be finite and between 0.0 and 2.0");
+        }
+        if self.retrieval_limit == 0 || self.retrieval_limit > 100 {
+            bail!("Chronicle retrieval_limit must be between 1 and 100");
+        }
+        if self.max_chunk_length == 0 {
+            bail!("Chronicle max_chunk_length must be greater than zero");
+        }
+        Ok(())
     }
 }
 
@@ -300,4 +372,3 @@ fn parse_guild_id(value: &str) -> Result<GuildId> {
 
     Ok(GuildId::new(id))
 }
-

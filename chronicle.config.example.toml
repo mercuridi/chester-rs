@@ -1,0 +1,22 @@
+# Copy this file to .chronicle/config.toml and adjust it for the deployment.
+
+[chronicle]
+index_db = "sqlite://database/chronicle/chronicle.sqlite3"
+corpus_dir = "corpus"
+
+llm_url = "http://127.0.0.1:8080"
+llm_model = "Qwen2.5-7B-Instruct"
+
+# Must be between 1 and 32768.
+llm_max_tokens = 512
+
+# Must be finite and between 0.0 and 2.0.
+llm_temperature = 0.2
+
+# Must be between 1 and 100. Larger values increase prompt size and latency.
+retrieval_limit = 5
+
+# Must be greater than zero. This is a character/byte-oriented chunk limit;
+# the embedding tokenizer still truncates each chunk at 512 tokens.
+max_chunk_length = 2000
+

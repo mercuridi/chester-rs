@@ -71,9 +71,10 @@ async fn main() -> Result<(), Error> {
     let embedder = Embedder::load(candle_core::Device::cuda_if_available(0)?)?;
 
     let indexer = Indexer::new(
-        PathBuf::from("corpus/"),
+        PathBuf::from(&config.chronicle.corpus_dir),
         index_db,
         embedder,
+        config.chronicle.max_chunk_length,
     );
 
     let indexing_stats = indexer.index().await?;
@@ -91,12 +92,15 @@ async fn main() -> Result<(), Error> {
     let llm = Llm::new(
         &config.chronicle.llm_url,
         &config.chronicle.llm_model,
+        config.chronicle.llm_max_tokens,
+        config.chronicle.llm_temperature,
     );
 
     let chronicle = Chronicle::new(
         index_db,
         embedder,
         llm,
+        config.chronicle.retrieval_limit,
     );
 
     let sync_stats = sync_audio_library(&pool).await?;

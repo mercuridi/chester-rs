@@ -15,13 +15,15 @@ impl Llm {
     pub fn new(
         base_url: impl Into<String>,
         model: impl Into<String>,
+        max_tokens: u32,
+        temperature: f32,
     ) -> Self {
         Self {
             client: Client::new(),
             base_url: base_url.into(),
             model: model.into(),
-            max_tokens: 512,
-            temperature: 0.2,
+            max_tokens,
+            temperature,
         }
     }
 
