@@ -6,10 +6,12 @@ use crate::{
     },
     jester::track::resolver::resolve_track,
 };
+use tracing::info;
 
 /// Joins your voice channel
 #[poise::command(slash_command)]
 pub async fn join(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    info!(user = %ctx.author().id, "Join command requested");
     ensure_vc(ctx).await?;
     ctx.say("Joined your voice channel! 🎶").await?;
     Ok(())
@@ -23,6 +25,7 @@ pub async fn play(
     #[autocomplete = "autocomplete_track"]
     track: String,
 ) -> Result<(), Error> {
+    info!(user = %ctx.author().id, "Play command requested");
     let (guild_id, _, call) = ensure_vc(ctx).await?;
     let track_info = resolve_track(&ctx.data().db_pool, track).await?;
 
@@ -43,6 +46,7 @@ pub async fn play(
 /// Displays the currently playing track's details
 #[poise::command(slash_command)]
 pub async fn now_playing(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    info!(user = %ctx.author().id, "Now-playing command requested");
     let guild_id = require_guild(ctx)?;
 
     match ctx.data().player.get_now_playing(guild_id).await {
@@ -64,6 +68,7 @@ pub async fn now_playing(ctx: PoiseContext<'_>) -> Result<(), Error> {
 /// Loop or un-loop the currently playing track
 #[poise::command(slash_command, prefix_command)]
 pub async fn loop_track(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    info!(user = %ctx.author().id, "Loop command requested");
     let guild_id = require_guild(ctx)?;
     let _track = ctx.data().player.require_now_playing(guild_id).await?;
     let looping = ctx.data().player.toggle_loop(guild_id).await?;
@@ -78,6 +83,7 @@ pub async fn loop_track(ctx: PoiseContext<'_>) -> Result<(), Error> {
 /// Toggles pause/unpause for the currently playing track
 #[poise::command(slash_command)]
 pub async fn pause(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    info!(user = %ctx.author().id, "Pause command requested");
     let guild_id = require_guild(ctx)?;
     let _track = ctx.data().player.require_now_playing(guild_id).await?;
     let playing = ctx.data().player.pause(guild_id).await?;
@@ -93,6 +99,7 @@ pub async fn pause(ctx: PoiseContext<'_>) -> Result<(), Error> {
 /// Leaves the voice channel
 #[poise::command(slash_command)]
 pub async fn leave(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    info!(user = %ctx.author().id, "Leave command requested");
     let guild_id = require_guild(ctx)?;
 
     leave_vc(ctx, guild_id).await?;

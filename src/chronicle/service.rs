@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::{debug, info, instrument};
 
 use super::{
     indexer::{db::repository::IndexerDb, prompt, retriever::Retriever},
@@ -28,7 +29,9 @@ impl Chronicle {
         }
     }
 
+    #[instrument(skip(self, question), fields(question_len = question.len()))]
     pub async fn ask(&self, question: &str) -> Result<String> {
+        info!("Starting Chronicle question");
         let _lifecycle = self.lifecycle.lock().await;
         let _gpu_lease = self.runtime.acquire_inference()?;
 
@@ -38,28 +41,42 @@ impl Chronicle {
             .await?;
 
         let prompt = prompt::build_prompt(question, &results);
+        debug!(
+            result_count = results.len(),
+            prompt_len = prompt.len(),
+            "Built Chronicle prompt"
+        );
 
-        self.llm.generate(&prompt).await
+        let answer = self.llm.generate(&prompt).await?;
+        info!(answer_len = answer.len(), "Completed Chronicle question");
+        Ok(answer)
     }
 
+    #[instrument(skip(self))]
     pub async fn start_llm(&self) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
+        info!("Starting Chronicle models");
 
         self.retriever.load_embedder().await?;
 
         if let Err(error) = self.llm.load().await {
+            tracing::warn!(%error, "Chronicle LLM failed to load; releasing embedder");
             self.retriever.unload_embedder()?;
             return Err(error);
         }
 
+        info!("Chronicle models ready");
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn stop_llm(&self) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
+        info!("Stopping Chronicle models");
 
         self.llm.unload().await?;
         self.retriever.unload_embedder()?;
+        info!("Chronicle models stopped");
         Ok(())
     }
 

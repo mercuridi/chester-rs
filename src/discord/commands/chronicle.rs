@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use chrono::Local;
 use serenity::model::id::{GuildId, UserId};
 use titlecase::Titlecase;
+use tracing::{debug, info};
 
 use crate::{
     chronicle::{
@@ -38,6 +39,7 @@ pub async fn chronicle(_ctx: PoiseContext<'_>) -> Result<(), Error> {
 
 #[poise::command(slash_command, rename = "start")]
 pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    info!(user = %ctx.author().id, "Chronicle start command requested");
     ctx.defer().await?;
     match ctx.data().chronicle.start_llm().await {
         Ok(()) => {
@@ -54,6 +56,7 @@ pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
 
 #[poise::command(slash_command, rename = "stop")]
 pub async fn chronicle_stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    info!(user = %ctx.author().id, "Chronicle stop command requested");
     match ctx.data().chronicle.stop_llm().await {
         Ok(()) => {
             ctx.say("Chronicle stopped.").await?;
@@ -79,6 +82,7 @@ pub async fn start(
     ctx: PoiseContext<'_>,
     #[description = "The session name"] session_name: String,
 ) -> Result<(), Error> {
+    info!(user = %ctx.author().id, session = %session_name, "Recording start command requested");
     let (guild_id, voice_channel_id, _call) = ensure_vc(ctx).await?;
     let notification_channel_id = ctx.channel_id();
 
@@ -151,6 +155,7 @@ pub async fn start(
 
 #[poise::command(slash_command)]
 pub async fn stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    info!(user = %ctx.author().id, "Recording stop command requested");
     let guild_id = require_guild(ctx)?;
 
     let recorder = ctx
@@ -186,6 +191,7 @@ pub async fn show(
     #[autocomplete = "autocomplete_existing_transcript"]
     session: String,
 ) -> Result<(), Error> {
+    info!(user = %ctx.author().id, session = %session, "Transcript display requested");
     let guild_id = require_guild(ctx)?;
 
     let recording_dir = PathBuf::from(format!(".chronicle/recordings/{guild_id}/{session}"));
@@ -222,6 +228,7 @@ pub async fn generate(
     #[autocomplete = "autocomplete_alias_group"]
     alias_group_id: String,
 ) -> Result<(), Error> {
+    info!(user = %ctx.author().id, session = %session, alias_group = %alias_group_id, "Transcript generation requested");
     let guild_id = require_guild(ctx)?;
 
     let recording_dir = PathBuf::from(format!(".chronicle/recordings/{guild_id}/{session}"));
@@ -235,6 +242,10 @@ pub async fn generate(
     };
 
     let recordings = find_recordings(&recording_dir)?;
+    debug!(
+        recording_count = recordings.len(),
+        "Located session recordings"
+    );
 
     if recordings.is_empty() {
         ctx.say("No Opus recordings found in that session.").await?;
@@ -279,6 +290,7 @@ pub async fn ask(
     ctx: PoiseContext<'_>,
     #[description = "Question to ask Chronicle"] question: String,
 ) -> Result<(), Error> {
+    info!(user = %ctx.author().id, question_len = question.len(), "Chronicle ask command requested");
     ctx.defer().await?;
 
     let answer = ctx.data().chronicle.ask(&question).await?;

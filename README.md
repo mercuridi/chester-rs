@@ -23,6 +23,13 @@ Developed on macOS/Linux. Windows deployments YMMV.
 - `cargo run` for debug build
 - `cargo run --release` for optimised build
 
+Logging defaults to useful `info` messages for Chester and `warn` messages for dependencies.
+Use `RUST_LOG` to change the filter while developing:
+
+- `RUST_LOG=chester_rs=debug cargo run` enables detailed project tracing.
+- `RUST_LOG=chester_rs=info,chester_rs::chronicle=debug cargo run` enables debug output only for Chronicle.
+- `RUST_LOG=warn cargo run` shows warnings and errors only.
+
 ### download.sh
 - This script reads the database in `database/jester/jester.sqlite3` and downloads all relevant audio files automatically
 - `-p` can be passed as a flag to enable parallel download execution - this enormously speeds up large sequential downloads

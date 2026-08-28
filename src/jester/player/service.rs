@@ -10,6 +10,7 @@ use crate::{
     discord::context::Error,
     jester::track::types::{NowPlaying, TrackInfo},
 };
+use tracing::{debug, info, instrument};
 
 pub struct PlayerService {
     now_playing: RwLock<HashMap<GuildId, NowPlaying>>,
@@ -22,6 +23,7 @@ impl PlayerService {
         }
     }
 
+    #[instrument(skip(self, call), fields(track_id = ?track_info.id, title = %track_info.title))]
     pub async fn play(
         &self,
         guild_id: GuildId,
@@ -50,9 +52,12 @@ impl PlayerService {
             },
         );
 
+        info!(?guild_id, "Started playback");
+
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn pause(&self, guild_id: GuildId) -> Result<bool, Error> {
         let state = self.now_playing.read().await;
         let now = state
@@ -62,13 +67,16 @@ impl PlayerService {
         let info = now.handle.get_info().await?;
         if info.playing == songbird::tracks::PlayMode::Play {
             now.handle.pause()?;
+            info!(?guild_id, "Paused playback");
             Ok(false) // is now paused
         } else {
             now.handle.play()?;
+            info!(?guild_id, "Resumed playback");
             Ok(true) // is now playing
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn toggle_loop(&self, guild_id: GuildId) -> Result<bool, Error> {
         let state = self.now_playing.read().await;
         let now = state
@@ -79,10 +87,12 @@ impl PlayerService {
         match info.loops {
             LoopState::Infinite => {
                 now.handle.disable_loop()?;
+                info!(?guild_id, enabled = false, "Updated playback loop");
                 Ok(false) // looping now disabled
             }
             LoopState::Finite(_) => {
                 now.handle.enable_loop()?;
+                info!(?guild_id, enabled = true, "Updated playback loop");
                 Ok(true) // looping now enabled
             }
         }
@@ -97,6 +107,7 @@ impl PlayerService {
     }
 
     pub async fn clear_now_playing(&self, guild_id: GuildId) {
+        debug!(?guild_id, "Clearing now-playing state");
         self.now_playing.write().await.remove(&guild_id);
     }
 

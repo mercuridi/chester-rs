@@ -2,6 +2,7 @@ use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use serenity::all::UserId;
 use std::path::Path;
+use tracing::{debug, info, instrument};
 
 #[derive(Debug)]
 pub struct TranscriptEntry {
@@ -39,6 +40,7 @@ pub struct TranscriptDocument {
 }
 
 impl TranscriptDocument {
+    #[instrument(skip(self, path))]
     pub fn save(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         let path = path.as_ref();
 
@@ -52,9 +54,15 @@ impl TranscriptDocument {
         std::fs::write(&tmp_path, contents)?;
         std::fs::rename(&tmp_path, path)?;
 
+        info!(
+            entry_count = self.frontmatter.entry_count,
+            "Saved transcript"
+        );
+
         Ok(())
     }
 
+    #[instrument(skip(path))]
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string(path)?;
 
@@ -68,9 +76,14 @@ impl TranscriptDocument {
 
         let frontmatter = serde_yaml::from_str(yaml)?;
 
-        Ok(Self {
+        let document = Self {
             frontmatter,
             body: body.trim_start().to_owned(),
-        })
+        };
+        debug!(
+            entry_count = document.frontmatter.entry_count,
+            "Loaded transcript"
+        );
+        Ok(document)
     }
 }

@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 use anyhow::{Context, Result, anyhow};
 use candle_core::Device;
+use tracing::{debug, info, instrument};
 
 use super::{
     db::repository::{IndexerDb, SearchResult},
@@ -21,6 +22,7 @@ impl Retriever {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn load_embedder(&self) -> Result<()> {
         let embedder = tokio::task::spawn_blocking(|| Embedder::load(Device::Cpu))
             .await
@@ -32,10 +34,12 @@ impl Retriever {
             .map_err(|_| anyhow!("Retriever embedder state is poisoned"))?;
 
         if slot.is_some() {
+            debug!("Retriever embedder already loaded");
             return Ok(());
         }
 
         *slot = Some(embedder);
+        info!("Retriever embedder loaded");
         Ok(())
     }
 
@@ -45,9 +49,11 @@ impl Retriever {
             .lock()
             .map_err(|_| anyhow!("Retriever embedder state is poisoned"))?;
         slot.take();
+        info!("Retriever embedder unloaded");
         Ok(())
     }
 
+    #[instrument(skip(self, query), fields(query_len = query.len(), limit))]
     pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let query = query.trim();
 
@@ -73,5 +79,12 @@ impl Retriever {
             .search_similar(&embedding, limit)
             .await
             .context("Failed to search index")
+            .map(|results| {
+                debug!(
+                    result_count = results.len(),
+                    "Completed Chronicle retrieval"
+                );
+                results
+            })
     }
 }

@@ -11,6 +11,7 @@ use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::Tokenizer;
 
 use super::{config::ChronicleConfig, runtime::GpuRuntime};
+use tracing::{debug, info, instrument};
 
 #[derive(Clone)]
 pub struct Llm {
@@ -51,7 +52,9 @@ impl Llm {
         }
     }
 
+    #[instrument(skip(self))]
     pub async fn load(&self) -> Result<()> {
+        info!(repo = %self.repo, revision = %self.revision, "Loading Chronicle LLM");
         let lease = self.runtime.begin_llm_load()?;
         let repo = self.repo.clone();
         let revision = self.revision.clone();
@@ -84,10 +87,14 @@ impl Llm {
         drop(model);
         lease.commit_to_loaded()?;
 
+        info!("Chronicle LLM loaded");
+
         Ok(())
     }
 
+    #[instrument(skip(self))]
     pub async fn unload(&self) -> Result<()> {
+        info!("Unloading Chronicle LLM");
         let lease = self.runtime.begin_llm_unload()?;
 
         let model = {
@@ -103,10 +110,17 @@ impl Llm {
             .context("Native LLM unload task failed")?;
 
         lease.commit_to_idle()?;
+        info!("Chronicle LLM unloaded");
         Ok(())
     }
 
+    #[instrument(skip(self, prompt), fields(prompt_len = prompt.len()))]
     pub async fn generate(&self, prompt: &str) -> Result<String> {
+        debug!(
+            max_tokens = self.max_tokens,
+            temperature = self.temperature,
+            "Starting LLM inference"
+        );
         let model = Arc::clone(&self.model);
         let system_prompt = self.system_prompt.clone();
         let user_prompt = format!(
@@ -166,7 +180,13 @@ impl Llm {
                 .map_err(|error| anyhow!("Failed to decode LLM response: {error}"))?;
             loaded.model.clear_kv_cache();
 
-            Ok(response.trim().to_owned())
+            let response = response.trim().to_owned();
+            tracing::debug!(
+                response_len = response.len(),
+                generated_tokens = generated.len(),
+                "LLM inference complete"
+            );
+            Ok(response)
         })
         .await
         .context("Native LLM inference task failed")?

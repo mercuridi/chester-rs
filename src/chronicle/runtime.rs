@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, bail};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeState {
@@ -82,10 +83,17 @@ impl GpuRuntime {
             .map_err(|_| anyhow::anyhow!("GPU runtime state is poisoned"))?;
 
         if *state != required_state {
+            warn!(
+                ?state,
+                ?required_state,
+                ?operation,
+                "GPU operation rejected because runtime is busy"
+            );
             bail!("{busy_message}");
         }
 
         *state = operation;
+        debug!(?operation, "Acquired GPU runtime lease");
 
         Ok(GpuLease {
             state: Arc::clone(&self.state),
@@ -119,6 +127,7 @@ impl GpuLease {
                 }
 
                 *state = RuntimeState::LlmLoaded;
+                info!("GPU runtime transitioned to LLM loaded");
                 Ok(())
             });
 
@@ -139,6 +148,7 @@ impl GpuLease {
                 }
 
                 *state = RuntimeState::Idle;
+                info!("GPU runtime transitioned to idle");
                 Ok(())
             });
 
@@ -157,6 +167,7 @@ impl Drop for GpuLease {
 
         if *state == self.operation {
             *state = self.previous_state;
+            debug!(operation = ?self.operation, "Released GPU runtime lease");
         }
     }
 }

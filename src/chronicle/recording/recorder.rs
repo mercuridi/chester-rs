@@ -26,6 +26,7 @@ use crate::{
     constants::{RING_BUFFER_CAPACITY, SILENCE_FRAME},
     discord::context::Error,
 };
+use tracing::{debug, info, instrument, warn};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecordingManifest {
@@ -106,6 +107,7 @@ impl Recorder {
         }
     }
 
+    #[instrument(skip(self), fields(session = %session_name))]
     pub async fn start_recording(
         &self,
         guild_id: GuildId,
@@ -159,6 +161,9 @@ impl Recorder {
         };
 
         let participants: Vec<UserId> = session.users.keys().copied().collect();
+        let guild_id = session.guild_id;
+        let session_name = session.session_name.clone();
+        info!(%guild_id, session = %session_name, participant_count = participants.len(), "Stopping recording");
 
         for (_, user_recording) in session.users {
             let UserRecording {
@@ -178,7 +183,7 @@ impl Recorder {
             match encoder.await {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => {
-                    tracing::error!(%error, "User recording encoder failed");
+                    warn!(%error, "User recording encoder failed");
                 }
                 Err(error) => {
                     tracing::error!(%error, "User recording encoder task failed");
@@ -206,6 +211,7 @@ impl Recorder {
             "Recording manifest written"
         );
 
+        info!(%guild_id, session = %session_name, "Recording stopped");
         Ok(true)
     }
 
@@ -238,6 +244,7 @@ impl Recorder {
     }
 
     pub async fn attach_to_call(&self, call: &Arc<Mutex<Call>>) -> Result<(), Error> {
+        debug!("Attaching recorder event handler to voice call");
         let mut call_lock = call.lock().await;
 
         call_lock.add_global_event(CoreEvent::SpeakingStateUpdate.into(), self.clone());

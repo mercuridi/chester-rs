@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use tokenizers::Encoding;
 
 use crate::chronicle::indexer::document::Document;
+use tracing::{debug, info, instrument, warn};
 
 use super::{
     chunker,
@@ -40,6 +41,7 @@ impl Indexer {
         }
     }
 
+    #[instrument(skip(self), fields(root = %self.root.display()))]
     pub async fn index(&self) -> Result<IndexStats> {
         let documents = scanner::scan_directory(&self.root)
             .with_context(|| format!("Failed to scan index directory: {}", self.root.display()))?;
@@ -49,6 +51,11 @@ impl Indexer {
             .all_documents()
             .await
             .context("Failed to load existing index")?;
+        info!(
+            discovered = documents.len(),
+            indexed = indexed_documents.len(),
+            "Preparing Chronicle index"
+        );
 
         let indexed_by_path = indexed_documents
             .iter()
@@ -77,6 +84,10 @@ impl Indexer {
 
         self.index_pending_documents(&mut pending, &mut stats)
             .await?;
+        debug!(
+            pending_documents = pending.len(),
+            "Indexed changed documents"
+        );
 
         for document in indexed_documents {
             if !seen_paths.contains(&document.path) {
@@ -88,9 +99,11 @@ impl Indexer {
                     })?;
 
                 stats.removed += 1;
+                warn!(path = %document.path, "Removed document from Chronicle index");
             }
         }
 
+        info!(?stats, "Chronicle indexing finished");
         Ok(stats)
     }
 
@@ -103,6 +116,10 @@ impl Indexer {
         pending: &mut [(Document, String, bool)],
         stats: &mut IndexStats,
     ) -> Result<()> {
+        debug!(
+            documents = pending.len(),
+            "Building embeddings for pending documents"
+        );
         let mut chunks = pending
             .iter()
             .enumerate()
@@ -130,6 +147,7 @@ impl Indexer {
             })
             .collect::<Vec<Vec<Option<Vec<f32>>>>>();
         for batch in chunks.chunks(EMBEDDING_BATCH_SIZE) {
+            debug!(batch_size = batch.len(), "Embedding chunk batch");
             let encodings = batch
                 .iter()
                 .map(|(_, _, _, encoding)| encoding.clone())

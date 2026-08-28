@@ -14,7 +14,9 @@ use crate::{
         youtube::get_youtube_id,
     },
 };
+use tracing::{debug, info, instrument, warn};
 
+#[instrument(skip(db_pool), fields(link = %yt_link))]
 pub async fn download_track(
     db_pool: &SqlitePool,
     yt_link: String,
@@ -23,9 +25,11 @@ pub async fn download_track(
     track_title: Option<String>,
 ) -> Result<TrackInfo, Error> {
     let video_id = VideoId::from(get_youtube_id(&yt_link).ok_or("Invalid YouTube link")?);
+    info!(track_id = %video_id.as_str(), "Starting track download");
 
     // Guard against duplicate downloads
     if let Some(track) = lookup_track(db_pool, &video_id).await? {
+        debug!(track_id = %video_id.as_str(), "Skipping duplicate track download");
         return Ok(track);
     }
 
@@ -44,6 +48,7 @@ pub async fn download_track(
         .map_err(|e| format!("Failed to execute yt-dlp: {e}"))?;
 
     if !output.status.success() {
+        warn!(track_id = %video_id.as_str(), stderr = %String::from_utf8_lossy(&output.stderr), "yt-dlp returned non-zero exit");
         return Err(format!(
             "yt-dlp failed with error: {}",
             String::from_utf8_lossy(&output.stderr)
@@ -75,6 +80,8 @@ pub async fn download_track(
     let origin_id = get_or_insert_metadata_id(db_pool, MetadataKind::Origin, &origin).await?;
 
     insert_new_track(db_pool, &video_id, &slim, &title, artist_id, origin_id).await?;
+
+    info!(track_id = %video_id.as_str(), %title, %artist, %origin, "Track downloaded and added to library");
 
     Ok(TrackInfo {
         id: video_id,

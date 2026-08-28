@@ -5,6 +5,7 @@ use serenity::model::id::UserId;
 
 use super::{audio::load_opus, whisper::transcriber::WhisperTranscriber};
 use crate::chronicle::runtime::GpuRuntime;
+use tracing::{debug, info, instrument};
 
 pub struct TranscribedSegment {
     pub start: f64,
@@ -24,17 +25,20 @@ impl TranscriptionService {
     }
 
     /// Transcribe a set of per-user Opus recordings with exclusive GPU access.
+    #[instrument(skip(self, recordings), fields(recording_count = recordings.len()))]
     pub async fn transcribe_recordings(
         &self,
         recordings: Vec<PathBuf>,
     ) -> Result<Vec<TranscribedSegment>> {
         let _gpu_lease = self.runtime.acquire_transcription()?;
 
+        info!("Starting recording transcription");
         tokio::task::spawn_blocking(move || {
             let mut transcriber = WhisperTranscriber::new_cuda()?;
             let mut output = Vec::new();
 
             for path in recordings {
+                debug!(path = %path.display(), "Transcribing recording");
                 let audio = load_opus(&path)?;
                 let segments = transcriber.transcribe(&audio)?;
 
@@ -66,6 +70,10 @@ impl TranscriptionService {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
+            info!(
+                segment_count = output.len(),
+                "Recording transcription complete"
+            );
             Ok::<_, anyhow::Error>(output)
         })
         .await

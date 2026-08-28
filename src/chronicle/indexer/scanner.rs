@@ -4,9 +4,11 @@ use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
+use tracing::{info, instrument};
 
 use crate::chronicle::indexer::document::Document;
 
+#[instrument(skip(root))]
 pub fn scan_directory(root: impl AsRef<Path>) -> Result<Vec<Document>> {
     let root = root.as_ref();
 
@@ -21,6 +23,7 @@ pub fn scan_directory(root: impl AsRef<Path>) -> Result<Vec<Document>> {
     scan_directory_recursive(root, &mut documents)?;
 
     documents.sort_by(|a, b| a.path.cmp(&b.path));
+    info!(document_count = documents.len(), "Scanned Chronicle corpus");
 
     Ok(documents)
 }

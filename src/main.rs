@@ -50,7 +50,7 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
             error: cmd_err,
             ..
         } => {
-            tracing::debug!("Error in command `{}`: {:?}", ctx.command().name, cmd_err);
+            tracing::warn!(command = %ctx.command().name, error = ?cmd_err, "Command failed");
         }
         // You can match other variants here if you like...
         _ => {}
@@ -69,6 +69,7 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle, Error> {
     );
 
     let index_db = IndexerDb::open(&config.chronicle.index_db).await?;
+    tracing::info!("Loading Chronicle embedding model");
     let embedder = Embedder::load(candle_core::Device::cuda_if_available(0)?)?;
     let indexer = Indexer::new(
         PathBuf::from(&config.chronicle.corpus_dir),
@@ -89,6 +90,7 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle, Error> {
     let (index_db, _embedder) = indexer.into_parts();
     let runtime = GpuRuntime::new();
     let llm = Llm::new(&config.chronicle, runtime.clone());
+    tracing::info!("Chronicle services initialized");
 
     Ok(Chronicle::new(
         index_db,
@@ -122,13 +124,16 @@ fn build_commands() -> Vec<poise::Command<Data, Error>> {
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    let env_filter = EnvFilter::from_default_env()
-        .add_directive("chester_rs=debug".parse()?)
-        .add_directive("warn".parse()?);
+    dotenv().ok();
+
+    // Keep normal operation useful without being noisy. Set RUST_LOG to override,
+    // for example: `RUST_LOG=chester_rs=debug cargo run`.
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("chester_rs=info,warn"));
 
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
-    dotenv().ok();
+    tracing::info!("Starting Chester");
     // Initialize the SQLite connection pool
     tracing::debug!("Initialising player database connection");
     let database_url = "sqlite://database/jester/jester.sqlite3";
@@ -138,6 +143,12 @@ async fn main() -> Result<(), Error> {
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"))?;
 
     let config = Config::load(".chronicle/config.toml")?;
+    tracing::debug!(
+        corpus_dir = %config.chronicle.corpus_dir,
+        retrieval_limit = config.chronicle.retrieval_limit,
+        max_chunk_length = config.chronicle.max_chunk_length,
+        "Loaded configuration"
+    );
 
     let chronicle = build_chronicle(&config).await?;
 
@@ -153,6 +164,10 @@ async fn main() -> Result<(), Error> {
     let token = std::env::var("DISCORD_TOKEN")?;
 
     let poise_commands = build_commands();
+    tracing::info!(
+        command_count = poise_commands.len(),
+        "Registering bot commands"
+    );
 
     let poise_options = poise::FrameworkOptions {
         commands: poise_commands,
@@ -196,6 +211,13 @@ async fn main() -> Result<(), Error> {
                     };
 
                     let user_id = new.user_id;
+                    tracing::debug!(
+                        ?guild_id,
+                        ?user_id,
+                        ?old,
+                        ?new,
+                        "Received voice state update"
+                    );
 
                     // The initiator is deliberately excluded from notifications.
                     if user_id == initiator {
@@ -221,6 +243,7 @@ async fn main() -> Result<(), Error> {
                     }
 
                     notify_recording_user(&ctx.http, notification_channel_id, user_id).await?;
+                    tracing::info!(?guild_id, ?user_id, "Notified user about active recording");
                 }
 
                 Ok(())
