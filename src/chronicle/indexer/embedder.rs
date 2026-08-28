@@ -126,10 +126,6 @@ impl Embedder {
         self.normalize(embedding)
     }
 
-    pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        texts.iter().map(|text| self.embed(text)).collect()
-    }
-
     fn normalize(&self, embedding: Tensor) -> Result<Vec<f32>> {
         let norm = embedding
             .sqr()

@@ -23,9 +23,11 @@ pub struct IndexedChunk {
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     pub document_path: String,
+    #[expect(dead_code, reason = "Retained for future result display and reranking")]
     pub chunk_index: i64,
     pub heading: Option<String>,
     pub text: String,
+    #[expect(dead_code, reason = "Retained for future result display and reranking")]
     pub distance: f32,
 }
 
@@ -65,26 +67,6 @@ impl IndexerDb {
         metadata::initialise(&pool).await?;
 
         Ok(Self { pool })
-    }
-
-    pub async fn document_by_path(&self, path: &str) -> Result<Option<IndexedDocument>> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, path, content_hash
-            FROM documents
-            WHERE path = ?
-            "#,
-        )
-        .bind(path)
-        .fetch_optional(&self.pool)
-        .await
-        .context("Failed to query indexed document")?;
-
-        Ok(row.map(|row| IndexedDocument {
-            id: row.get("id"),
-            path: row.get("path"),
-            content_hash: row.get("content_hash"),
-        }))
     }
 
     pub async fn all_documents(&self) -> Result<Vec<IndexedDocument>> {
@@ -138,30 +120,6 @@ impl IndexerDb {
             .context("Failed to commit document deletion")?;
 
         Ok(())
-    }
-
-    pub async fn chunks_for_document(&self, document_id: i64) -> Result<Vec<IndexedChunk>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, document_id, chunk_index, heading, text
-            FROM chunks
-            WHERE document_id = ?
-            ORDER BY chunk_index
-            "#,
-        )
-        .bind(document_id)
-        .fetch_all(&self.pool)
-        .await
-        .context("Failed to query document chunks")?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| IndexedChunk {
-                chunk_index: row.get("chunk_index"),
-                heading: row.get("heading"),
-                text: row.get("text"),
-            })
-            .collect())
     }
 
     pub async fn replace_document(

@@ -9,6 +9,7 @@ pub struct Document {
 
 #[derive(Debug, Clone)]
 pub struct Chunk {
+    #[expect(dead_code, reason = "Retained for future chunk provenance")]
     pub document_path: PathBuf,
     pub index: usize,
     pub content: String,
