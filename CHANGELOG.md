@@ -1,6 +1,19 @@
 # Changelog
 
-## [2.2.2] — 2026-08-28
+## [2.2.3] — 2026-08-28
+
+### Bug Fixes
+
+- Clippy prefers inspect over map when the value is unchanged
+- Extract framework building out of main to satisfy clippy
+- Add extra tracing for scanning and tokenising statistics
+
+
+### Features
+
+- Tracing rework with proper warn/info/debug traces
+
+## [v2.2.2] — 2026-08-28
 
 ### Bug Fixes
 
