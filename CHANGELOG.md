@@ -1,6 +1,18 @@
 # Changelog
 
-## [2.2.1] — 2026-08-28
+## [2.2.2] — 2026-08-28
+
+### Bug Fixes
+
+- Rustfmt fixes
+
+
+### Features
+
+- Batch initial embedding processing on startup for performance
+- Batched embedding now groups chunks by token length to improve gpu efficiency
+
+## [v2.2.1] — 2026-08-28
 
 ### Bug Fixes
 
