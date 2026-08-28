@@ -1,6 +1,24 @@
 # Changelog
 
-## [2.0.0] — 2026-08-28
+## [2.1.0] — 2026-08-28
+
+### Bug Fixes
+
+- Change corpus gitignore
+
+
+### Features
+
+- New GpuRuntime state machine to define the gpu processing state with RAII
+- Integrate llm directly rather than rely on app-external http server
+- Rework transcription into a proper service and enforce correct raii gpu leasing
+
+
+### Refactor
+
+- Ask is now a subcommand under chronicle; introduced explicit start and stop commands
+
+## [v2.0.0] — 2026-08-28
 
 ### Bug Fixes
 
