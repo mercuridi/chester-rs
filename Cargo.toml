@@ -10,7 +10,6 @@ candle-kernels = { path = "../candle/candle-kernels" }
 [dependencies]
 dotenv = "0.15.0"
 futures = "0.3.31"
-reqwest = "0.12.23"
 sqlx = { version = "0.8.6", features = ["sqlite", "runtime-tokio-native-tls"] }
 symphonia = { version = "0.5.4", features = ["mp3"] }
 tracing = "0.1.41"

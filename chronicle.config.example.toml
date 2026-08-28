@@ -4,8 +4,12 @@
 index_db = "sqlite://database/chronicle/chronicle.sqlite3"
 corpus_dir = "corpus"
 
-llm_url = "http://127.0.0.1:8080"
-llm_model = "Qwen2.5-7B-Instruct"
+# The first `/chronicle start` downloads these files into the Hugging Face cache.
+llm_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
+llm_revision = "main"
+llm_model_file = "qwen2.5-7b-instruct-q3_k_m.gguf"
+llm_tokenizer_repo = "Qwen/Qwen2.5-7B-Instruct"
+llm_tokenizer_file = "tokenizer.json"
 
 # Must be between 1 and 32768.
 llm_max_tokens = 512
@@ -13,10 +17,12 @@ llm_max_tokens = 512
 # Must be finite and between 0.0 and 2.0.
 llm_temperature = 0.2
 
+# Seed used by the native Candle sampler.
+llm_seed = 42
+
 # Must be between 1 and 100. Larger values increase prompt size and latency.
 retrieval_limit = 5
 
 # Must be greater than zero. This is a character/byte-oriented chunk limit;
 # the embedding tokenizer still truncates each chunk at 512 tokens.
 max_chunk_length = 2000
-

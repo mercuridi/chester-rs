@@ -48,12 +48,12 @@ impl Chronicle {
         self.runtime.clone()
     }
 
-    pub fn start_llm(&self) -> Result<()> {
-        self.runtime.set_llm_loaded(true)
+    pub async fn start_llm(&self) -> Result<()> {
+        self.llm.load().await
     }
 
-    pub fn stop_llm(&self) -> Result<()> {
-        self.runtime.set_llm_loaded(false)
+    pub async fn stop_llm(&self) -> Result<()> {
+        self.llm.unload().await
     }
 
     pub fn is_llm_loaded(&self) -> Result<bool> {

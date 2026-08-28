@@ -10,10 +10,14 @@ pub type AliasGroupId = String;
 
 const DEFAULT_INDEX_DB: &str = "sqlite://database/chronicle/chronicle.sqlite3";
 const DEFAULT_CORPUS_DIR: &str = "corpus";
-const DEFAULT_LLM_URL: &str = "http://127.0.0.1:8080";
-const DEFAULT_LLM_MODEL: &str = "Qwen2.5-7B-Instruct";
+const DEFAULT_LLM_REPO: &str = "Qwen/Qwen2.5-7B-Instruct-GGUF";
+const DEFAULT_LLM_REVISION: &str = "main";
+const DEFAULT_LLM_MODEL_FILE: &str = "qwen2.5-7b-instruct-q3_k_m.gguf";
+const DEFAULT_LLM_TOKENIZER_REPO: &str = "Qwen/Qwen2.5-7B-Instruct";
+const DEFAULT_LLM_TOKENIZER_FILE: &str = "tokenizer.json";
 const DEFAULT_LLM_MAX_TOKENS: u32 = 512;
 const DEFAULT_LLM_TEMPERATURE: f32 = 0.2;
+const DEFAULT_LLM_SEED: u64 = 42;
 const DEFAULT_RETRIEVAL_LIMIT: usize = 5;
 const DEFAULT_MAX_CHUNK_LENGTH: usize = 2_000;
 
@@ -21,12 +25,24 @@ fn default_index_db() -> String {
     DEFAULT_INDEX_DB.to_owned()
 }
 
-fn default_llm_url() -> String {
-    DEFAULT_LLM_URL.to_owned()
+fn default_llm_repo() -> String {
+    DEFAULT_LLM_REPO.to_owned()
 }
 
-fn default_llm_model() -> String {
-    DEFAULT_LLM_MODEL.to_owned()
+fn default_llm_revision() -> String {
+    DEFAULT_LLM_REVISION.to_owned()
+}
+
+fn default_llm_model_file() -> String {
+    DEFAULT_LLM_MODEL_FILE.to_owned()
+}
+
+fn default_llm_tokenizer_repo() -> String {
+    DEFAULT_LLM_TOKENIZER_REPO.to_owned()
+}
+
+fn default_llm_tokenizer_file() -> String {
+    DEFAULT_LLM_TOKENIZER_FILE.to_owned()
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,11 +62,20 @@ pub struct RawChronicleConfig {
     #[serde(default = "default_index_db")]
     index_db: String,
 
-    #[serde(default = "default_llm_url")]
-    llm_url: String,
+    #[serde(default = "default_llm_repo")]
+    llm_repo: String,
 
-    #[serde(default = "default_llm_model")]
-    llm_model: String,
+    #[serde(default = "default_llm_revision")]
+    llm_revision: String,
+
+    #[serde(default = "default_llm_model_file")]
+    llm_model_file: String,
+
+    #[serde(default = "default_llm_tokenizer_repo")]
+    llm_tokenizer_repo: String,
+
+    #[serde(default = "default_llm_tokenizer_file")]
+    llm_tokenizer_file: String,
 
     #[serde(default = "default_corpus_dir")]
     corpus_dir: String,
@@ -60,6 +85,9 @@ pub struct RawChronicleConfig {
 
     #[serde(default = "default_llm_temperature")]
     llm_temperature: f32,
+
+    #[serde(default = "default_llm_seed")]
+    llm_seed: u64,
 
     #[serde(default = "default_retrieval_limit")]
     retrieval_limit: usize,
@@ -71,6 +99,7 @@ pub struct RawChronicleConfig {
 fn default_corpus_dir() -> String { DEFAULT_CORPUS_DIR.to_owned() }
 fn default_llm_max_tokens() -> u32 { DEFAULT_LLM_MAX_TOKENS }
 fn default_llm_temperature() -> f32 { DEFAULT_LLM_TEMPERATURE }
+fn default_llm_seed() -> u64 { DEFAULT_LLM_SEED }
 fn default_retrieval_limit() -> usize { DEFAULT_RETRIEVAL_LIMIT }
 fn default_max_chunk_length() -> usize { DEFAULT_MAX_CHUNK_LENGTH }
 
@@ -98,11 +127,15 @@ pub struct Config {
 #[derive(Debug, Clone)]
 pub struct ChronicleConfig {
     pub index_db: String,
-    pub llm_url: String,
-    pub llm_model: String,
+    pub llm_repo: String,
+    pub llm_revision: String,
+    pub llm_model_file: String,
+    pub llm_tokenizer_repo: String,
+    pub llm_tokenizer_file: String,
     pub corpus_dir: String,
     pub llm_max_tokens: u32,
     pub llm_temperature: f32,
+    pub llm_seed: u64,
     pub retrieval_limit: usize,
     pub max_chunk_length: usize,
 }
@@ -196,11 +229,15 @@ impl Config {
 
         let chronicle = ChronicleConfig {
             index_db: raw.chronicle.index_db,
-            llm_url: raw.chronicle.llm_url,
-            llm_model: raw.chronicle.llm_model,
+            llm_repo: raw.chronicle.llm_repo,
+            llm_revision: raw.chronicle.llm_revision,
+            llm_model_file: raw.chronicle.llm_model_file,
+            llm_tokenizer_repo: raw.chronicle.llm_tokenizer_repo,
+            llm_tokenizer_file: raw.chronicle.llm_tokenizer_file,
             corpus_dir: raw.chronicle.corpus_dir,
             llm_max_tokens: raw.chronicle.llm_max_tokens,
             llm_temperature: raw.chronicle.llm_temperature,
+            llm_seed: raw.chronicle.llm_seed,
             retrieval_limit: raw.chronicle.retrieval_limit,
             max_chunk_length: raw.chronicle.max_chunk_length,
         };
@@ -282,13 +319,13 @@ impl ChronicleConfig {
         if self.index_db.trim().is_empty() || self.corpus_dir.trim().is_empty() {
             bail!("Chronicle index_db and corpus_dir cannot be empty");
         }
-        if self.llm_model.trim().is_empty() {
-            bail!("Chronicle llm_model cannot be empty");
-        }
-        let url = url::Url::parse(&self.llm_url)
-            .with_context(|| format!("Invalid Chronicle llm_url `{}`", self.llm_url))?;
-        if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
-            bail!("Chronicle llm_url must be an HTTP(S) URL with a host");
+        if self.llm_repo.trim().is_empty()
+            || self.llm_revision.trim().is_empty()
+            || self.llm_model_file.trim().is_empty()
+            || self.llm_tokenizer_repo.trim().is_empty()
+            || self.llm_tokenizer_file.trim().is_empty()
+        {
+            bail!("Chronicle LLM repository and file settings cannot be empty");
         }
         if self.llm_max_tokens == 0 || self.llm_max_tokens > 32_768 {
             bail!("Chronicle llm_max_tokens must be between 1 and 32768");

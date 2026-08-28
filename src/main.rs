@@ -89,14 +89,9 @@ async fn main() -> Result<(), Error> {
 
     let (index_db, embedder) = indexer.into_parts();
 
-    let llm = Llm::new(
-        &config.chronicle.llm_url,
-        &config.chronicle.llm_model,
-        config.chronicle.llm_max_tokens,
-        config.chronicle.llm_temperature,
-    );
-
     let runtime = GpuRuntime::new();
+
+    let llm = Llm::new(&config.chronicle, runtime.clone());
 
     let chronicle = Chronicle::new(
         index_db,

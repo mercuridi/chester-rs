@@ -19,7 +19,8 @@ pub async fn chronicle(_ctx: PoiseContext<'_>) -> Result<(), Error> {
 
 #[poise::command(slash_command, rename = "start")]
 pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    match ctx.data().chronicle.start_llm() {
+    ctx.defer().await?;
+    match ctx.data().chronicle.start_llm().await {
         Ok(()) => {
             ctx.say("Chronicle LLM is ready.").await?;
         }
@@ -34,7 +35,7 @@ pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
 
 #[poise::command(slash_command, rename = "stop")]
 pub async fn chronicle_stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    match ctx.data().chronicle.stop_llm() {
+    match ctx.data().chronicle.stop_llm().await {
         Ok(()) => {
             ctx.say("Chronicle LLM unloaded.").await?;
         }

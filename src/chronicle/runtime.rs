@@ -5,9 +5,11 @@ use anyhow::{Result, bail};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeState {
     Idle,
+    LoadingLlm,
     LlmLoaded,
     Inference,
     Transcription,
+    UnloadingLlm,
 }
 
 #[derive(Clone)]
@@ -22,30 +24,20 @@ impl GpuRuntime {
         }
     }
 
-    /// Mark the internally managed LLM as loaded or unloaded.
-    ///
-    /// This is used by the LLM lifecycle implementation in the next phase.
-    pub fn set_llm_loaded(&self, loaded: bool) -> Result<()> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| anyhow::anyhow!("GPU runtime state is poisoned"))?;
+    pub fn begin_llm_load(&self) -> Result<GpuLease> {
+        self.acquire(
+            RuntimeState::Idle,
+            RuntimeState::LoadingLlm,
+            "Cannot load the LLM while GPU work is in progress",
+        )
+    }
 
-        if loaded {
-            if *state != RuntimeState::Idle {
-                bail!("Cannot load the LLM while GPU work is in progress");
-            }
-
-            *state = RuntimeState::LlmLoaded;
-        } else {
-            if *state != RuntimeState::LlmLoaded {
-                bail!("The LLM is not loaded");
-            }
-
-            *state = RuntimeState::Idle;
-        }
-
-        Ok(())
+    pub fn begin_llm_unload(&self) -> Result<GpuLease> {
+        self.acquire(
+            RuntimeState::LlmLoaded,
+            RuntimeState::UnloadingLlm,
+            "Cannot unload the LLM while an operation is running",
+        )
     }
 
     pub fn is_llm_loaded(&self) -> Result<bool> {
@@ -113,6 +105,48 @@ pub struct GpuLease {
     state: Arc<Mutex<RuntimeState>>,
     previous_state: RuntimeState,
     operation: RuntimeState,
+}
+
+impl GpuLease {
+    pub fn commit_to_loaded(self) -> Result<()> {
+        let result = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("GPU runtime state is poisoned"))
+            .and_then(|mut state| {
+                if *state != self.operation {
+                    bail!("GPU runtime state changed unexpectedly");
+                }
+
+                *state = RuntimeState::LlmLoaded;
+                Ok(())
+            });
+
+        if result.is_ok() {
+            std::mem::forget(self);
+        }
+        result
+    }
+
+    pub fn commit_to_idle(self) -> Result<()> {
+        let result = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("GPU runtime state is poisoned"))
+            .and_then(|mut state| {
+                if *state != self.operation {
+                    bail!("GPU runtime state changed unexpectedly");
+                }
+
+                *state = RuntimeState::Idle;
+                Ok(())
+            });
+
+        if result.is_ok() {
+            std::mem::forget(self);
+        }
+        result
+    }
 }
 
 impl Drop for GpuLease {

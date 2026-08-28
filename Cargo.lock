@@ -459,7 +459,6 @@ dependencies = [
  "opus",
  "poise",
  "rand 0.9.5",
- "reqwest",
  "rtrb",
  "rubato",
  "serde",
