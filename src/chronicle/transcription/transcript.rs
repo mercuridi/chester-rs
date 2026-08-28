@@ -44,11 +44,7 @@ impl TranscriptDocument {
 
         let yaml = serde_yaml::to_string(&self.frontmatter)?;
 
-        let contents = format!(
-            "---\n{}---\n\n{}",
-            yaml,
-            self.body.trim_end()
-        );
+        let contents = format!("---\n{}---\n\n{}", yaml, self.body.trim_end());
 
         // Don't overwrite a valid transcript with a partially-written file.
         let tmp_path = path.with_extension("md.tmp");

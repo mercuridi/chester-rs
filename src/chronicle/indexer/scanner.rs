@@ -1,9 +1,6 @@
 // src/chronicle/indexer/scanner.rs
 
-use std::{
-    fs,
-    path::Path,
-};
+use std::{fs, path::Path};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -14,7 +11,10 @@ pub fn scan_directory(root: impl AsRef<Path>) -> Result<Vec<Document>> {
     let root = root.as_ref();
 
     if !root.is_dir() {
-        anyhow::bail!("index directory does not exist or is not a directory: {}", root.display());
+        anyhow::bail!(
+            "index directory does not exist or is not a directory: {}",
+            root.display()
+        );
     }
 
     let mut documents = Vec::new();
@@ -25,10 +25,7 @@ pub fn scan_directory(root: impl AsRef<Path>) -> Result<Vec<Document>> {
     Ok(documents)
 }
 
-fn scan_directory_recursive(
-    directory: &Path,
-    documents: &mut Vec<Document>,
-) -> Result<()> {
+fn scan_directory_recursive(directory: &Path, documents: &mut Vec<Document>) -> Result<()> {
     for entry in fs::read_dir(directory)
         .with_context(|| format!("failed to read directory: {}", directory.display()))?
     {

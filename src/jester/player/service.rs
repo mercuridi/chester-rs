@@ -1,12 +1,15 @@
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::{Mutex, RwLock};
-use songbird::{Call, tracks::LoopState};
+use poise::serenity_prelude::GuildId;
+use songbird::driver::Bitrate;
 use songbird::input::File as SongbirdFile;
 use songbird::input::cached::Compressed;
-use songbird::driver::Bitrate;
-use poise::serenity_prelude::GuildId;
+use songbird::{Call, tracks::LoopState};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::{Mutex, RwLock};
 
-use crate::{discord::context::Error, jester::track::types::{NowPlaying, TrackInfo}};
+use crate::{
+    discord::context::Error,
+    jester::track::types::{NowPlaying, TrackInfo},
+};
 
 pub struct PlayerService {
     now_playing: RwLock<HashMap<GuildId, NowPlaying>>,
@@ -29,12 +32,10 @@ impl PlayerService {
 
         let track_path = format!("audio/{}.mp3", track_info.id.as_str());
 
-        let song_src = Compressed::new(
-            SongbirdFile::new(track_path).into(),
-            Bitrate::Bits(128_000),
-        )
-        .await
-        .expect("An error occurred constructing the track source");
+        let song_src =
+            Compressed::new(SongbirdFile::new(track_path).into(), Bitrate::Bits(128_000))
+                .await
+                .expect("An error occurred constructing the track source");
 
         let _ = song_src.raw.spawn_loader();
 
@@ -56,7 +57,8 @@ impl PlayerService {
 
     pub async fn pause(&self, guild_id: GuildId) -> Result<bool, Error> {
         let state = self.now_playing.read().await;
-        let now = state.get(&guild_id)
+        let now = state
+            .get(&guild_id)
             .ok_or("No track is currently playing.")?;
 
         let info = now.handle.get_info().await?;
@@ -71,7 +73,8 @@ impl PlayerService {
 
     pub async fn toggle_loop(&self, guild_id: GuildId) -> Result<bool, Error> {
         let state = self.now_playing.read().await;
-        let now = state.get(&guild_id)
+        let now = state
+            .get(&guild_id)
             .ok_or("No track is currently playing.")?;
 
         let info = now.handle.get_info().await?;
@@ -105,4 +108,3 @@ impl PlayerService {
             .ok_or_else(|| "No track is currently playing.".into())
     }
 }
-

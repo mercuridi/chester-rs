@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use sqlx::{sqlite::SqlitePool, Row};
+use sqlx::{Row, sqlite::SqlitePool};
 
 use super::metadata;
 
@@ -39,9 +39,7 @@ impl IndexerDb {
 
         let pool = SqlitePool::connect(path)
             .await
-            .with_context(|| {
-                format!("Failed to open Chronicle index database: {path}")
-            })?;
+            .with_context(|| format!("Failed to open Chronicle index database: {path}"))?;
 
         let rows = sqlx::query("PRAGMA database_list")
             .fetch_all(&pool)
@@ -69,10 +67,7 @@ impl IndexerDb {
         Ok(Self { pool })
     }
 
-    pub async fn document_by_path(
-        &self,
-        path: &str,
-    ) -> Result<Option<IndexedDocument>> {
+    pub async fn document_by_path(&self, path: &str) -> Result<Option<IndexedDocument>> {
         let row = sqlx::query(
             r#"
             SELECT id, path, content_hash
@@ -132,13 +127,11 @@ impl IndexerDb {
         .await
         .context("Failed to delete document embeddings")?;
 
-        sqlx::query(
-            "DELETE FROM documents WHERE id = ?",
-        )
-        .bind(document_id)
-        .execute(&mut *tx)
-        .await
-        .context("Failed to delete document")?;
+        sqlx::query("DELETE FROM documents WHERE id = ?")
+            .bind(document_id)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to delete document")?;
 
         tx.commit()
             .await
@@ -147,10 +140,7 @@ impl IndexerDb {
         Ok(())
     }
 
-    pub async fn chunks_for_document(
-        &self,
-        document_id: i64,
-    ) -> Result<Vec<IndexedChunk>> {
+    pub async fn chunks_for_document(&self, document_id: i64) -> Result<Vec<IndexedChunk>> {
         let rows = sqlx::query(
             r#"
             SELECT id, document_id, chunk_index, heading, text
@@ -229,13 +219,11 @@ impl IndexerDb {
         .await
         .context("Failed to delete existing chunk embeddings")?;
 
-        sqlx::query(
-            "DELETE FROM chunks WHERE document_id = ?",
-        )
-        .bind(document_id)
-        .execute(&mut *tx)
-        .await
-        .context("Failed to delete existing chunks")?;
+        sqlx::query("DELETE FROM chunks WHERE document_id = ?")
+            .bind(document_id)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to delete existing chunks")?;
 
         for (chunk, embedding) in chunks.iter().zip(embeddings) {
             let chunk_id: i64 = sqlx::query_scalar(
@@ -258,8 +246,8 @@ impl IndexerDb {
             .await
             .context("Failed to insert chunk")?;
 
-            let embedding_json = serde_json::to_string(embedding)
-                .context("Failed to serialise embedding")?;
+            let embedding_json =
+                serde_json::to_string(embedding).context("Failed to serialise embedding")?;
 
             sqlx::query(
                 r#"
@@ -341,8 +329,8 @@ impl IndexerDb {
 
 fn register_sqlite_vec() {
     unsafe {
-        libsqlite3_sys::sqlite3_auto_extension(Some(
-            std::mem::transmute(sqlite_vec::sqlite3_vec_init as *const ()),
-        ));
+        libsqlite3_sys::sqlite3_auto_extension(Some(std::mem::transmute(
+            sqlite_vec::sqlite3_vec_init as *const (),
+        )));
     }
 }

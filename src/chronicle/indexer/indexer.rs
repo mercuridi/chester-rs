@@ -28,12 +28,7 @@ pub struct Indexer {
 }
 
 impl Indexer {
-    pub fn new(
-        root: PathBuf,
-        db: IndexerDb,
-        embedder: Embedder,
-        max_chunk_length: usize,
-    ) -> Self {
+    pub fn new(root: PathBuf, db: IndexerDb, embedder: Embedder, max_chunk_length: usize) -> Self {
         Self {
             root,
             db,
@@ -44,12 +39,7 @@ impl Indexer {
 
     pub async fn index(&self) -> Result<IndexStats> {
         let documents = scanner::scan_directory(&self.root)
-            .with_context(|| {
-                format!(
-                    "Failed to scan index directory: {}",
-                    self.root.display()
-                )
-            })?;
+            .with_context(|| format!("Failed to scan index directory: {}", self.root.display()))?;
 
         let indexed_documents = self
             .db
@@ -75,13 +65,11 @@ impl Indexer {
                     continue;
                 }
 
-                self.index_document(&document, &path)
-                    .await?;
+                self.index_document(&document, &path).await?;
 
                 stats.updated += 1;
             } else {
-                self.index_document(&document, &path)
-                    .await?;
+                self.index_document(&document, &path).await?;
 
                 stats.added += 1;
             }
@@ -93,10 +81,7 @@ impl Indexer {
                     .delete_document(document.id)
                     .await
                     .with_context(|| {
-                        format!(
-                            "Failed to remove deleted document: {}",
-                            document.path
-                        )
+                        format!("Failed to remove deleted document: {}", document.path)
                     })?;
 
                 stats.removed += 1;
@@ -110,27 +95,16 @@ impl Indexer {
         (self.db, self.embedder)
     }
 
-    async fn index_document(
-        &self,
-        document: &Document,
-        path: &str,
-    ) -> Result<()> {
+    async fn index_document(&self, document: &Document, path: &str) -> Result<()> {
         let chunks = chunker::chunk(document, self.max_chunk_length)
-            .with_context(|| {
-                format!("Failed to chunk document: {path}")
-            })?;
+            .with_context(|| format!("Failed to chunk document: {path}"))?;
 
         let embeddings = chunks
             .iter()
             .map(|chunk| {
                 self.embedder
                     .embed(&chunk.content)
-                    .with_context(|| {
-                        format!(
-                            "Failed to embed chunk {} of {path}",
-                            chunk.index
-                        )
-                    })
+                    .with_context(|| format!("Failed to embed chunk {} of {path}", chunk.index))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -144,16 +118,9 @@ impl Indexer {
             .collect::<Vec<_>>();
 
         self.db
-            .replace_document(
-                path,
-                &document.content_hash,
-                &indexed_chunks,
-                &embeddings,
-            )
+            .replace_document(path, &document.content_hash, &indexed_chunks, &embeddings)
             .await
-            .with_context(|| {
-                format!("Failed to persist document: {path}")
-            })?;
+            .with_context(|| format!("Failed to persist document: {path}"))?;
 
         Ok(())
     }
@@ -167,33 +134,21 @@ mod tests {
     async fn failed_document_replacement_preserves_existing_document() -> Result<()> {
         let db = IndexerDb::open(":memory:").await?;
 
-        let chunks = vec![
-            IndexedChunk {
-                chunk_index: 0,
-                heading: None,
-                text: "Original text".to_owned(),
-            },
-        ];
+        let chunks = vec![IndexedChunk {
+            chunk_index: 0,
+            heading: None,
+            text: "Original text".to_owned(),
+        }];
 
         let embeddings = vec![vec![0.1_f32; 384]];
 
-        db.replace_document(
-            "test.md",
-            "original-hash",
-            &chunks,
-            &embeddings,
-        )
-        .await?;
+        db.replace_document("test.md", "original-hash", &chunks, &embeddings)
+            .await?;
 
         // Deliberately provide mismatched data. The operation must fail
         // before modifying the existing document.
         let result = db
-            .replace_document(
-                "test.md",
-                "new-hash",
-                &chunks,
-                &[],
-            )
+            .replace_document("test.md", "new-hash", &chunks, &[])
             .await;
 
         assert!(result.is_err());

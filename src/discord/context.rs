@@ -1,6 +1,9 @@
 use sqlx::SqlitePool;
 
-use crate::{chronicle::{config::Config, recording::recorder::RecorderManager, service::Chronicle}, jester::player::service::PlayerService};
+use crate::{
+    chronicle::{config::Config, recording::recorder::RecorderManager, service::Chronicle},
+    jester::player::service::PlayerService,
+};
 
 // Defines user data; this is always available in the Serenity context of an invocation
 pub struct Data {
@@ -12,11 +15,7 @@ pub struct Data {
 }
 
 impl Data {
-    pub fn new(
-        db_pool: SqlitePool,
-        config: Config,
-        chronicle: Chronicle,
-    ) -> Self {
+    pub fn new(db_pool: SqlitePool, config: Config, chronicle: Chronicle) -> Self {
         Self {
             db_pool,
             player: PlayerService::new(),
@@ -26,7 +25,6 @@ impl Data {
         }
     }
 }
-
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 

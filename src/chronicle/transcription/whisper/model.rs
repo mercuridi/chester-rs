@@ -1,13 +1,15 @@
-use crate::{chronicle::transcription::whisper::{tokens::token_id, transcriber::WhisperTranscriber}, constants::{MODEL_ID, MODEL_REVISION}};
+use crate::{
+    chronicle::transcription::whisper::{tokens::token_id, transcriber::WhisperTranscriber},
+    constants::{MODEL_ID, MODEL_REVISION},
+};
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::whisper::{self as m, Config};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::Tokenizer;
-
 
 pub enum Model {
     Normal(m::model::Whisper),
@@ -20,11 +22,7 @@ impl Model {
         }
     }
 
-    pub fn encoder_forward(
-        &mut self,
-        input: &Tensor,
-        flush: bool,
-    ) -> candle_core::Result<Tensor> {
+    pub fn encoder_forward(&mut self, input: &Tensor, flush: bool) -> candle_core::Result<Tensor> {
         match self {
             Self::Normal(model) => model.encoder.forward(input, flush),
         }
@@ -37,16 +35,11 @@ impl Model {
         flush: bool,
     ) -> candle_core::Result<Tensor> {
         match self {
-            Self::Normal(model) => {
-                model.decoder.forward(tokens, audio_features, flush)
-            }
+            Self::Normal(model) => model.decoder.forward(tokens, audio_features, flush),
         }
     }
 
-    pub fn decoder_final_linear(
-        &self,
-        input: &Tensor,
-    ) -> candle_core::Result<Tensor> {
+    pub fn decoder_final_linear(&self, input: &Tensor) -> candle_core::Result<Tensor> {
         match self {
             Self::Normal(model) => model.decoder.final_linear(input),
         }
@@ -90,8 +83,7 @@ impl WhisperTranscriber {
         // );
 
         let config: Config = serde_json::from_str(
-            &std::fs::read_to_string(&config_path)
-                .context("Failed to read Whisper config")?,
+            &std::fs::read_to_string(&config_path).context("Failed to read Whisper config")?,
         )
         .context("Failed to parse Whisper config")?;
 
@@ -106,11 +98,7 @@ impl WhisperTranscriber {
             .map_err(|error| anyhow!("Failed to load tokenizer: {error}"))?;
 
         let model = unsafe {
-            VarBuilder::from_mmaped_safetensors(
-                &[PathBuf::from(&weights_path)],
-                m::DTYPE,
-                &device,
-            )
+            VarBuilder::from_mmaped_safetensors(&[PathBuf::from(&weights_path)], m::DTYPE, &device)
         }
         .context("Failed to memory-map Whisper weights")?;
 
@@ -118,14 +106,11 @@ impl WhisperTranscriber {
 
         let model = Model::Normal(model);
 
-        let no_timestamps_token =
-            token_id(&tokenizer, m::NO_TIMESTAMPS_TOKEN)?;
+        let no_timestamps_token = token_id(&tokenizer, m::NO_TIMESTAMPS_TOKEN)?;
 
         let suppress_tokens: Vec<f32> = (0..model.config().vocab_size as u32)
             .map(|token| {
-                if model.config().suppress_tokens.contains(&token)
-                    || token == no_timestamps_token
-                {
+                if model.config().suppress_tokens.contains(&token) || token == no_timestamps_token {
                     f32::NEG_INFINITY
                 } else {
                     0.0
@@ -133,17 +118,12 @@ impl WhisperTranscriber {
             })
             .collect();
 
-        let suppress_tokens =
-            Tensor::new(suppress_tokens.as_slice(), &device)?;
+        let suppress_tokens = Tensor::new(suppress_tokens.as_slice(), &device)?;
 
-        let sot_token = 
-            token_id(&tokenizer, m::SOT_TOKEN)?;
-        let lang_token = 
-            token_id(&tokenizer, "<|en|>")?;
-        let transcribe_token = 
-            token_id(&tokenizer, m::TRANSCRIBE_TOKEN)?;
-        let eot_token = 
-            token_id(&tokenizer, m::EOT_TOKEN)?;
+        let sot_token = token_id(&tokenizer, m::SOT_TOKEN)?;
+        let lang_token = token_id(&tokenizer, "<|en|>")?;
+        let transcribe_token = token_id(&tokenizer, m::TRANSCRIBE_TOKEN)?;
+        let eot_token = token_id(&tokenizer, m::EOT_TOKEN)?;
 
         let no_speech_token = m::NO_SPEECH_TOKENS
             .iter()

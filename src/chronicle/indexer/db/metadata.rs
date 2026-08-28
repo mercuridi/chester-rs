@@ -46,11 +46,7 @@ pub async fn initialise(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-pub async fn set_metadata(
-    pool: &SqlitePool,
-    key: &str,
-    value: &str,
-) -> Result<()> {
+pub async fn set_metadata(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
     sqlx::query(
         r#"
         INSERT INTO metadata (key, value)

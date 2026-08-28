@@ -42,9 +42,7 @@ impl TranscriptionService {
                     .file_stem()
                     .and_then(|name| name.to_str())
                     .and_then(|name| name.strip_prefix("recording-"))
-                    .ok_or_else(|| {
-                        anyhow!("Invalid recording filename: {}", path.display())
-                    })?
+                    .ok_or_else(|| anyhow!("Invalid recording filename: {}", path.display()))?
                     .parse::<u64>()
                     .map(UserId::new)
                     .map_err(|error| {

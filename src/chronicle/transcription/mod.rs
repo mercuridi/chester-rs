@@ -1,4 +1,4 @@
 pub mod audio;
-pub mod whisper;
-pub mod transcript;
 pub mod service;
+pub mod transcript;
+pub mod whisper;

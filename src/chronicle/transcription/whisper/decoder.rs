@@ -1,9 +1,8 @@
 use crate::chronicle::transcription::whisper::transcriber::WhisperTranscriber;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use candle_core::{IndexOp, Tensor};
 use candle_nn::ops::softmax;
-
 
 pub struct Decoded {
     pub tokens: Vec<u32>,
@@ -13,15 +12,10 @@ pub struct Decoded {
 }
 
 impl WhisperTranscriber {
-    pub fn decode_segment(
-        &mut self,
-        mel: &Tensor,
-    ) -> Result<Decoded> {
-        let audio_features =
-            self.model.encoder_forward(mel, true)?;
+    pub fn decode_segment(&mut self, mel: &Tensor) -> Result<Decoded> {
+        let audio_features = self.model.encoder_forward(mel, true)?;
 
-        let sample_len =
-            self.model.config().max_target_positions / 2;
+        let sample_len = self.model.config().max_target_positions / 2;
 
         let mut tokens = vec![self.sot_token, self.language_token, self.transcribe_token];
 
@@ -29,41 +23,29 @@ impl WhisperTranscriber {
         let mut no_speech_prob = f64::NAN;
 
         for i in 0..sample_len {
-            let tokens_tensor =
-                Tensor::new(tokens.as_slice(), mel.device())?
-                    .unsqueeze(0)?;
+            let tokens_tensor = Tensor::new(tokens.as_slice(), mel.device())?.unsqueeze(0)?;
 
-            let ys = self.model.decoder_forward(
-                &tokens_tensor,
-                &audio_features,
-                i == 0,
-            )?;
+            let ys = self
+                .model
+                .decoder_forward(&tokens_tensor, &audio_features, i == 0)?;
 
             if i == 0 {
-                let logits = self
-                    .model
-                    .decoder_final_linear(&ys.i(..1)?)?
-                    .i(0)?
-                    .i(0)?;
+                let logits = self.model.decoder_final_linear(&ys.i(..1)?)?.i(0)?.i(0)?;
 
                 no_speech_prob = softmax(&logits, 0)?
                     .i(self.no_speech_token as usize)?
-                    .to_scalar::<f32>()?
-                    as f64;
+                    .to_scalar::<f32>()? as f64;
             }
 
             let (_, seq_len, _) = ys.dims3()?;
 
             let logits = self
                 .model
-                .decoder_final_linear(
-                    &ys.i((..1, seq_len - 1..))?,
-                )?
+                .decoder_final_linear(&ys.i((..1, seq_len - 1..))?)?
                 .i(0)?
                 .i(0)?;
 
-            let logits =
-                logits.broadcast_add(&self.suppress_tokens)?;
+            let logits = logits.broadcast_add(&self.suppress_tokens)?;
 
             let logits_vec = logits.to_vec1::<f32>()?;
 
@@ -74,10 +56,9 @@ impl WhisperTranscriber {
                 .map(|(index, _)| index as u32)
                 .ok_or_else(|| anyhow!("Whisper produced no logits"))?;
 
-            let probability =
-                softmax(&logits, 0)?
-                    .i(next_token as usize)?
-                    .to_scalar::<f32>()?;
+            let probability = softmax(&logits, 0)?
+                .i(next_token as usize)?
+                .to_scalar::<f32>()?;
 
             if probability > 0.0 {
                 sum_logprob += (probability as f64).ln();
@@ -86,8 +67,7 @@ impl WhisperTranscriber {
             tokens.push(next_token);
 
             if next_token == self.eot_token
-                || tokens.len()
-                    > self.model.config().max_target_positions
+                || tokens.len() > self.model.config().max_target_positions
             {
                 break;
             }
@@ -98,8 +78,7 @@ impl WhisperTranscriber {
             .decode(&tokens, true)
             .map_err(|error| anyhow!("Tokenizer decode failed: {error}"))?;
 
-        let avg_logprob =
-            sum_logprob / tokens.len().max(1) as f64;
+        let avg_logprob = sum_logprob / tokens.len().max(1) as f64;
 
         Ok(Decoded {
             tokens,

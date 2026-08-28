@@ -1,21 +1,35 @@
+mod chronicle;
 mod constants;
-mod utils;
 mod discord;
 mod jester;
-mod chronicle;
+mod utils;
 
 use std::path::PathBuf;
 
 ////////////////////////////////////////////////////////////////////////////////
+use dotenv::dotenv;
 /// Imports
-
 use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
 use serenity::client::FullEvent;
-use songbird::{Config as SongbirdConfig, SerenityInit, driver::{DecodeConfig, DecodeMode}}; use sqlx::SqlitePool;
-use dotenv::dotenv;
+use songbird::{
+    Config as SongbirdConfig, SerenityInit,
+    driver::{DecodeConfig, DecodeMode},
+};
+use sqlx::SqlitePool;
 use tracing::info;
 
-use crate::{chronicle::{config::Config, indexer::{db::repository::IndexerDb, embedder::Embedder, indexer::Indexer}, llm::Llm, recording::recorder::notify_recording_user, runtime::GpuRuntime, service::Chronicle}, discord::context::{Data, Error}, jester::library::sync::sync_audio_library};
+use crate::{
+    chronicle::{
+        config::Config,
+        indexer::{db::repository::IndexerDb, embedder::Embedder, indexer::Indexer},
+        llm::Llm,
+        recording::recorder::notify_recording_user,
+        runtime::GpuRuntime,
+        service::Chronicle,
+    },
+    discord::context::{Data, Error},
+    jester::library::sync::sync_audio_library,
+};
 use tracing_subscriber::EnvFilter;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -25,11 +39,17 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     // 1) Inspect & log any command errors without moving out of `error`
     match &error {
         // Panic on setup failures
-        poise::FrameworkError::Setup { error: setup_err, .. } => {
+        poise::FrameworkError::Setup {
+            error: setup_err, ..
+        } => {
             panic!("Failed to start bot: {:?}", setup_err);
         }
         // Log command errors
-        poise::FrameworkError::Command { ctx, error: cmd_err, .. } => {
+        poise::FrameworkError::Command {
+            ctx,
+            error: cmd_err,
+            ..
+        } => {
             tracing::debug!("Error in command `{}`: {:?}", ctx.command().name, cmd_err);
         }
         // You can match other variants here if you like...
@@ -45,9 +65,11 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env()
-        .add_directive("chester_rs=debug".parse().unwrap())
-        .add_directive("warn".parse().unwrap()))
+        .with_env_filter(
+            EnvFilter::from_default_env()
+                .add_directive("chester_rs=debug".parse().unwrap())
+                .add_directive("warn".parse().unwrap()),
+        )
         .init();
 
     dotenv().ok();
@@ -57,7 +79,8 @@ async fn main() -> Result<(), Error> {
     let pool = SqlitePool::connect(database_url).await?;
     tracing::debug!("player database connection successful");
 
-    std::env::set_current_dir(env!("CARGO_MANIFEST_DIR")).expect("Encountered an error setting the CWD to top-level");
+    std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"))
+        .expect("Encountered an error setting the CWD to top-level");
 
     let config = Config::load(".chronicle/config.toml")?;
 
@@ -151,7 +174,10 @@ async fn main() -> Result<(), Error> {
         // This code is run after a command if it was successful (returned Ok)
         post_command: |ctx| {
             Box::pin(async move {
-                tracing::debug!("Successfully executed command {}", ctx.command().qualified_name);
+                tracing::debug!(
+                    "Successfully executed command {}",
+                    ctx.command().qualified_name
+                );
             })
         },
         skip_checks_for_owners: true,
@@ -197,13 +223,7 @@ async fn main() -> Result<(), Error> {
                         return Ok(());
                     }
 
-                    notify_recording_user(
-                        &ctx.http,
-                        notification_channel_id,
-                        user_id,
-                    )
-                    .await?;
-
+                    notify_recording_user(&ctx.http, notification_channel_id, user_id).await?;
                 }
 
                 Ok(())
@@ -226,8 +246,8 @@ async fn main() -> Result<(), Error> {
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
 
     // 2) Build the Songbird config too (required for decoding voice data)
-    let songbird_config = SongbirdConfig::default()
-        .decode_mode(DecodeMode::Decode(DecodeConfig::default()));
+    let songbird_config =
+        SongbirdConfig::default().decode_mode(DecodeMode::Decode(DecodeConfig::default()));
 
     // 3) Create the Serenity client, attach Poise as the event handler…
     // 4) And register Songbird on the same builder

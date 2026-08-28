@@ -1,4 +1,8 @@
-use std::{fs::File, io::BufReader, sync::{Arc, Mutex}};
+use std::{
+    fs::File,
+    io::BufReader,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use candle_core::{Device, Tensor, quantized::gguf_file};
@@ -116,9 +120,9 @@ impl Llm {
             let mut model = model
                 .lock()
                 .map_err(|_| anyhow!("LLM model state is poisoned"))?;
-            let loaded = model
-                .as_mut()
-                .ok_or_else(|| anyhow!("Chronicle LLM is not loaded; run /chronicle start first"))?;
+            let loaded = model.as_mut().ok_or_else(|| {
+                anyhow!("Chronicle LLM is not loaded; run /chronicle start first")
+            })?;
 
             loaded.model.clear_kv_cache();
             let encoded = loaded

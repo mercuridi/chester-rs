@@ -5,11 +5,11 @@ use poise::serenity_prelude::AutocompleteChoice;
 use titlecase::Titlecase;
 
 use crate::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
-use crate::jester::db::metadata::MetadataKind;
-use crate::jester::db::repository::{search_incomplete_tracks, search_metadata, search_tracks};
 use crate::discord::context::PoiseContext;
 use crate::discord::voice::require_guild;
-use crate::utils::format::{lightweight_trim, build_autocomplete_display};
+use crate::jester::db::metadata::MetadataKind;
+use crate::jester::db::repository::{search_incomplete_tracks, search_metadata, search_tracks};
+use crate::utils::format::{build_autocomplete_display, lightweight_trim};
 
 pub async fn autocomplete_artist(
     ctx: PoiseContext<'_>,
@@ -40,13 +40,14 @@ async fn autocomplete_metadata(
     let needle = partial.to_lowercase();
     let db_pool = &ctx.data().db_pool;
 
-    let results = match search_metadata(db_pool, kind, &needle, AUTOCOMPLETE_MAX_CHOICES as i64).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("Autocomplete metadata query failed: {}", e);
-            return vec![].into_iter();
-        }
-    };
+    let results =
+        match search_metadata(db_pool, kind, &needle, AUTOCOMPLETE_MAX_CHOICES as i64).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Autocomplete metadata query failed: {}", e);
+                return vec![].into_iter();
+            }
+        };
 
     let mut choices: Vec<String> = results
         .into_iter()
@@ -85,8 +86,8 @@ pub async fn autocomplete_track(
     choices
         .into_iter()
         .map(|(display, video_id)| AutocompleteChoice::new(display, video_id))
-        .collect::<Vec<_>>()  // collect into Vec<AutocompleteChoice>...
-        .into_iter()          // ...then re-iterate, matching the early return type
+        .collect::<Vec<_>>() // collect into Vec<AutocompleteChoice>...
+        .into_iter() // ...then re-iterate, matching the early return type
 }
 
 pub async fn autocomplete_incomplete_track(
@@ -96,13 +97,14 @@ pub async fn autocomplete_incomplete_track(
     let needle = partial.to_lowercase();
     let db_pool = &ctx.data().db_pool;
 
-    let results = match search_incomplete_tracks(db_pool, &needle, AUTOCOMPLETE_MAX_CHOICES as i64).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!("Incomplete track autocomplete query failed: {}", e);
-            return vec![].into_iter();
-        }
-    };
+    let results =
+        match search_incomplete_tracks(db_pool, &needle, AUTOCOMPLETE_MAX_CHOICES as i64).await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("Incomplete track autocomplete query failed: {}", e);
+                return vec![].into_iter();
+            }
+        };
 
     let mut choices: Vec<(String, String)> = results
         .into_iter()
@@ -129,19 +131,14 @@ pub async fn autocomplete_existing_transcript(
     let guild_id = match require_guild(ctx) {
         Ok(guild_id) => guild_id,
         Err(error) => {
-            tracing::error!(
-                "Failed to get guild for transcript autocomplete: {error}"
-            );
+            tracing::error!("Failed to get guild for transcript autocomplete: {error}");
             return Vec::new().into_iter();
         }
     };
 
     let needle = partial.to_lowercase();
 
-    let recording_dir = PathBuf::from(format!(
-        ".chronicle/recordings/{}",
-        guild_id
-    ));
+    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{}", guild_id));
 
     let entries = match std::fs::read_dir(&recording_dir) {
         Ok(entries) => entries,
@@ -191,7 +188,6 @@ pub async fn autocomplete_recording_session(
     ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = AutocompleteChoice> {
-
     let guild_id = match require_guild(ctx) {
         Ok(guild_id) => guild_id,
         Err(error) => {
@@ -202,10 +198,7 @@ pub async fn autocomplete_recording_session(
 
     let needle = partial.to_lowercase();
 
-    let recording_dir = PathBuf::from(format!(
-        ".chronicle/recordings/{}",
-        guild_id
-    ));
+    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{}", guild_id));
 
     let entries = match std::fs::read_dir(&recording_dir) {
         Ok(entries) => entries,
@@ -289,9 +282,7 @@ pub async fn autocomplete_alias_group(
         })
         .collect();
 
-    choices.sort_unstable_by(|(display_a, _), (display_b, _)| {
-        display_a.cmp(display_b)
-    });
+    choices.sort_unstable_by(|(display_a, _), (display_b, _)| display_a.cmp(display_b));
 
     choices.truncate(MAX_CHOICES);
 
@@ -307,26 +298,20 @@ fn format_session_display_name(session: &str) -> String {
     // first 15 chars are always the timestamp due to consistent formatting
     // anything after that is the session name
     match session.split_once('-') {
-        Some((date, rest)) if date.len() == 8 => {
-            match rest.split_once('-') {
-                Some((time, name)) if time.len() == 6 => {
-                    match NaiveDateTime::parse_from_str(
-                        &format!("{date}-{time}"),
-                        "%Y%m%d-%H%M%S",
-                    ) {
-                        Ok(datetime) => {
-                            let display_date =
-                                datetime.format("%d %b %Y, %H:%M").to_string();
-                            let display_name = name.replace('-', " ").titlecase();
+        Some((date, rest)) if date.len() == 8 => match rest.split_once('-') {
+            Some((time, name)) if time.len() == 6 => {
+                match NaiveDateTime::parse_from_str(&format!("{date}-{time}"), "%Y%m%d-%H%M%S") {
+                    Ok(datetime) => {
+                        let display_date = datetime.format("%d %b %Y, %H:%M").to_string();
+                        let display_name = name.replace('-', " ").titlecase();
 
-                            format!("{display_name} ({display_date})")
-                        }
-                        Err(_) => session.to_uppercase(),
+                        format!("{display_name} ({display_date})")
                     }
+                    Err(_) => session.to_uppercase(),
                 }
-                _ => session.to_uppercase(),
             }
-        }
+            _ => session.to_uppercase(),
+        },
         _ => session.to_uppercase(),
     }
 }

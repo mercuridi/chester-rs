@@ -9,21 +9,23 @@ use crate::discord::context::{Error, PoiseContext};
 pub async fn get_vc_id(ctx: PoiseContext<'_>) -> Result<ChannelId, Error> {
     let guild_id = require_guild(ctx)?;
 
-    let voice_state = ctx.serenity_context()
+    let voice_state = ctx
+        .serenity_context()
         .cache
         .clone()
         .guild(guild_id)
         .and_then(|g| g.voice_states.get(&ctx.author().id).cloned());
     let voice_channel_id = match voice_state.and_then(|vs| vs.channel_id) {
         Some(c) => c,
-        None => return Err("The user is not in a voice channel.".into())
+        None => return Err("The user is not in a voice channel.".into()),
     };
 
     Ok(voice_channel_id)
 }
 
 pub fn require_guild(ctx: PoiseContext<'_>) -> Result<GuildId, Error> {
-    ctx.guild_id().ok_or_else(|| "This command can only be used in a server.".into())
+    ctx.guild_id()
+        .ok_or_else(|| "This command can only be used in a server.".into())
 }
 
 pub async fn join_vc(
@@ -38,8 +40,7 @@ pub async fn join_vc(
         .expect("Songbird was not initialized")
         .clone();
 
-    let (recorder, is_new) =
-        ctx.data().recorder.get_or_create(guild_id).await;
+    let (recorder, is_new) = ctx.data().recorder.get_or_create(guild_id).await;
 
     // Create the Call and attach receive handlers BEFORE joining.
     let call = manager.get_or_insert(guild_id);
@@ -62,10 +63,7 @@ pub async fn join_vc(
     Ok(call)
 }
 
-pub async fn leave_vc(
-    ctx: PoiseContext<'_>,
-    guild_id: GuildId,
-) -> Result<(), Error> {
+pub async fn leave_vc(ctx: PoiseContext<'_>, guild_id: GuildId) -> Result<(), Error> {
     let recorder = ctx.data().recorder.remove(guild_id).await;
 
     let recording_error = if let Some(recorder) = recorder {

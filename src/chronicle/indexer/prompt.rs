@@ -11,11 +11,7 @@ pub fn build_prompt(question: &str, results: &[SearchResult]) -> String {
     prompt.push_str("Context:\n");
 
     for (index, result) in results.iter().enumerate() {
-        prompt.push_str(&format!(
-            "[{}] {}",
-            index + 1,
-            result.document_path,
-        ));
+        prompt.push_str(&format!("[{}] {}", index + 1, result.document_path,));
 
         if let Some(heading) = &result.heading {
             prompt.push_str(&format!(" — {heading}"));

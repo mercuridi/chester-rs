@@ -4,7 +4,7 @@ use std::{
     path::Path,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use ogg::PacketReader;
 use opus::{Channels, Decoder as OpusDecoder};
 use rubato::{FftFixedIn, Resampler};
@@ -52,10 +52,7 @@ where
 
             pre_skip = header.pre_skip as usize;
 
-            decoder = Some(OpusDecoder::new(
-                OPUS_SAMPLE_RATE as u32,
-                Channels::Mono,
-            )?);
+            decoder = Some(OpusDecoder::new(OPUS_SAMPLE_RATE as u32, Channels::Mono)?);
 
             continue;
         }
@@ -65,20 +62,14 @@ where
         }
 
         let Some(decoder) = decoder.as_mut() else {
-            return Err(anyhow!(
-                "Encountered Opus audio packet before OpusHead"
-            ));
+            return Err(anyhow!("Encountered Opus audio packet before OpusHead"));
         };
 
         // Opus permits up to 120 ms per packet at 48 kHz.
         let mut pcm = [0i16; OPUS_SAMPLE_RATE * 120 / 1000];
         let samples = decoder.decode(data, &mut pcm, false)?;
 
-        decoded.extend(
-            pcm[..samples]
-                .iter()
-                .map(|&sample| sample as f32 / 32768.0),
-        );
+        decoded.extend(pcm[..samples].iter().map(|&sample| sample as f32 / 32768.0));
     }
 
     if decoder.is_none() {
@@ -157,24 +148,13 @@ fn parse_opus_head(data: &[u8]) -> Result<OpusHead> {
     let channels = data[9];
     let pre_skip = u16::from_le_bytes([data[10], data[11]]);
 
-    Ok(OpusHead {
-        channels,
-        pre_skip,
-    })
+    Ok(OpusHead { channels, pre_skip })
 }
 
 fn resample_48k_to_16k(input: &[f32]) -> Result<Vec<f32>> {
-    let mut resampler = FftFixedIn::<f32>::new(
-        OPUS_SAMPLE_RATE,
-        WHISPER_SAMPLE_RATE,
-        1024,
-        1,
-        1,
-    )?;
+    let mut resampler = FftFixedIn::<f32>::new(OPUS_SAMPLE_RATE, WHISPER_SAMPLE_RATE, 1024, 1, 1)?;
 
-    let mut output = Vec::with_capacity(
-        input.len() * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE,
-    );
+    let mut output = Vec::with_capacity(input.len() * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE);
 
     let mut offset = 0;
 
@@ -194,8 +174,7 @@ fn resample_48k_to_16k(input: &[f32]) -> Result<Vec<f32>> {
 
     // The final chunk may have been zero-padded to the required input size.
     // Trim the output to the expected resampled length.
-    let expected_len =
-        input.len() * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE;
+    let expected_len = input.len() * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE;
 
     output.truncate(expected_len);
 

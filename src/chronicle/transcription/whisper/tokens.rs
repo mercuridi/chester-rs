@@ -1,12 +1,11 @@
-use crate::chronicle::transcription::whisper::transcriber::{TranscriptSegment, WhisperTranscriber};
+use crate::chronicle::transcription::whisper::transcriber::{
+    TranscriptSegment, WhisperTranscriber,
+};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use tokenizers::Tokenizer;
 
-pub fn token_id(
-    tokenizer: &Tokenizer,
-    token: &str,
-) -> Result<u32> {
+pub fn token_id(tokenizer: &Tokenizer, token: &str) -> Result<u32> {
     tokenizer
         .token_to_id(token)
         .ok_or_else(|| anyhow!("No tokenizer ID for {token}"))
@@ -33,8 +32,7 @@ impl WhisperTranscriber {
             }
 
             if self.is_timestamp_token(token) {
-                let timestamp =
-                    (token - self.no_timestamps_token + 1) as f64 * 0.02;
+                let timestamp = (token - self.no_timestamps_token + 1) as f64 * 0.02;
 
                 if let Some(start) = start_timestamp {
                     if !text_tokens.is_empty() {

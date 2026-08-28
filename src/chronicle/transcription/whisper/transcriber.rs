@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use candle_core::{Device, Tensor};
 use candle_transformers::models::whisper::{self as m, audio};
 use tokenizers::Tokenizer;
@@ -28,15 +28,13 @@ pub struct WhisperTranscriber {
     pub no_timestamps_token: u32,
 }
 
-
 impl WhisperTranscriber {
     /// Load Whisper Small English onto CUDA device 0.
     ///
     /// The first invocation downloads the model through hf-hub.
     /// Subsequent invocations use the local Hugging Face cache.
     pub fn new_cuda() -> Result<Self> {
-        let device = Device::new_cuda(0)
-            .context("Failed to initialize CUDA device 0")?;
+        let device = Device::new_cuda(0).context("Failed to initialize CUDA device 0")?;
 
         Self::load(device)
     }
@@ -57,11 +55,7 @@ impl WhisperTranscriber {
 
         let mel_filters = load_mel_filters()?;
 
-        let mel = audio::pcm_to_mel(
-            self.model.config(),
-            &audio.samples,
-            &mel_filters,
-        );
+        let mel = audio::pcm_to_mel(self.model.config(), &audio.samples, &mel_filters);
 
         let mel_len = mel.len();
 
@@ -79,7 +73,6 @@ impl WhisperTranscriber {
     }
 
     fn decode_mel(&mut self, mel: &Tensor) -> Result<Vec<TranscriptSegment>> {
-
         let stride_frames =
             (STRIDE_SIZE_SECONDS * m::SAMPLE_RATE as f64 / m::HOP_LENGTH as f64) as usize;
 
@@ -89,18 +82,13 @@ impl WhisperTranscriber {
         let mut segments = Vec::new();
 
         while seek < content_frames {
-            let segment_size =
-                usize::min(content_frames - seek, m::N_FRAMES);
+            let segment_size = usize::min(content_frames - seek, m::N_FRAMES);
 
-            let mel_segment =
-                self.pad_mel_segment(mel, segment_size, seek)?;
+            let mel_segment = self.pad_mel_segment(mel, segment_size, seek)?;
 
-            let segment_start =
-                (seek * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
+            let segment_start = (seek * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
 
-            let segment_duration =
-                (segment_size * m::HOP_LENGTH) as f64
-                    / m::SAMPLE_RATE as f64;
+            let segment_duration = (segment_size * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
 
             let decoded = self.decode_segment(&mel_segment)?;
 
@@ -112,11 +100,7 @@ impl WhisperTranscriber {
             }
 
             let timestamp_segments =
-                self.extract_timestamp_segments(
-                    &decoded.tokens,
-                    segment_start,
-                    segment_duration,
-                )?;
+                self.extract_timestamp_segments(&decoded.tokens, segment_start, segment_duration)?;
             // tracing::info!(
             //     timestamp_segment_count = timestamp_segments.len(),
             //     "Whisper timestamp extraction"
@@ -145,7 +129,6 @@ impl WhisperTranscriber {
                 segments.extend(timestamp_segments);
             }
 
-
             if segment_size == content_frames - seek {
                 break;
             }
@@ -167,12 +150,7 @@ impl WhisperTranscriber {
         token > self.no_timestamps_token
     }
 
-    fn pad_mel_segment(
-        &self,
-        mel: &Tensor,
-        segment_size: usize,
-        seek: usize,
-    ) -> Result<Tensor> {
+    fn pad_mel_segment(&self, mel: &Tensor, segment_size: usize, seek: usize) -> Result<Tensor> {
         let mel_segment = mel.narrow(2, seek, segment_size)?;
 
         if segment_size >= m::N_FRAMES {
@@ -189,31 +167,21 @@ impl WhisperTranscriber {
             mel.device(),
         )?;
 
-        Tensor::cat(&[&mel_segment, &padding], 2)
-            .map_err(Into::into)
+        Tensor::cat(&[&mel_segment, &padding], 2).map_err(Into::into)
     }
 }
 
 fn load_mel_filters() -> Result<Vec<f32>> {
-    let bytes =
-        include_bytes!("melfilters/melfilters128.bytes");
+    let bytes = include_bytes!("melfilters/melfilters128.bytes");
 
     if bytes.len() % 4 != 0 {
-        return Err(anyhow!(
-            "melfilters.bytes length is not divisible by 4"
-        ));
+        return Err(anyhow!("melfilters.bytes length is not divisible by 4"));
     }
 
-    let mut filters =
-        Vec::with_capacity(bytes.len() / 4);
+    let mut filters = Vec::with_capacity(bytes.len() / 4);
 
     for chunk in bytes.chunks_exact(4) {
-        filters.push(f32::from_le_bytes([
-            chunk[0],
-            chunk[1],
-            chunk[2],
-            chunk[3],
-        ]));
+        filters.push(f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]));
     }
 
     Ok(filters)
@@ -229,9 +197,7 @@ fn normalize_text(text: &str) -> String {
         .to_lowercase()
 }
 
-pub fn deduplicate_segments(
-    mut segments: Vec<TranscriptSegment>,
-) -> Vec<TranscriptSegment> {
+pub fn deduplicate_segments(mut segments: Vec<TranscriptSegment>) -> Vec<TranscriptSegment> {
     segments.sort_by(|a, b| {
         a.start
             .total_cmp(&b.start)
@@ -247,14 +213,11 @@ pub fn deduplicate_segments(
         };
 
         let overlaps = segment.start < previous.end;
-        let same_text =
-            normalize_text(&segment.text) == normalize_text(&previous.text);
+        let same_text = normalize_text(&segment.text) == normalize_text(&previous.text);
 
         if overlaps && same_text {
             // Keep the shorter version.
-            if (segment.end - segment.start)
-                < (previous.end - previous.start)
-            {
+            if (segment.end - segment.start) < (previous.end - previous.start) {
                 *previous = segment;
             }
 

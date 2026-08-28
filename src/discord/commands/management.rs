@@ -1,18 +1,14 @@
-use crate::jester::db::metadata::MetadataKind;
 use crate::discord::autocomplete::{
+    autocomplete_artist, autocomplete_incomplete_track, autocomplete_origin, autocomplete_tag,
     autocomplete_track,
-    autocomplete_tag,
-    autocomplete_origin,
-    autocomplete_artist,
-    autocomplete_incomplete_track
 };
 use crate::discord::context::{Error, PoiseContext};
-use crate::jester::track::download::download_track;
+use crate::jester::db::metadata::MetadataKind;
 use crate::jester::db::repository::{
-    get_or_insert_metadata_id, require_track,
-    delete_track_tags, insert_track_tag,
-    update_track_title, update_track_artist, update_track_origin,
+    delete_track_tags, get_or_insert_metadata_id, insert_track_tag, require_track,
+    update_track_artist, update_track_origin, update_track_title,
 };
+use crate::jester::track::download::download_track;
 use crate::jester::track::types::{TrackInfo, VideoId};
 
 pub async fn download_direct(
@@ -46,16 +42,14 @@ pub async fn download_direct(
 #[poise::command(slash_command)]
 pub async fn download(
     ctx: PoiseContext<'_>,
-    #[description = "YouTube link to download from"]
-    yt_link: String,
+    #[description = "YouTube link to download from"] yt_link: String,
     #[description = "The actual artist of the track"]
     #[autocomplete = "autocomplete_artist"]
     track_artist: Option<String>,
     #[description = "The origin of the track (e.g., game/movie title)"]
     #[autocomplete = "autocomplete_origin"]
     track_origin: Option<String>,
-    #[description = "The actual title of the track"]
-    track_title: Option<String>,
+    #[description = "The actual title of the track"] track_title: Option<String>,
 ) -> Result<(), Error> {
     download_direct(ctx, yt_link, track_artist, track_origin, track_title).await?;
     Ok(())
@@ -74,7 +68,8 @@ pub async fn reset_tags(
 
     delete_track_tags(db_pool, &info.id).await?;
 
-    ctx.say(format!("Reset tags for track `{}`", info.title)).await?;
+    ctx.say(format!("Reset tags for track `{}`", info.title))
+        .await?;
     Ok(())
 }
 
@@ -95,15 +90,18 @@ pub async fn add_tag(
 
     insert_track_tag(db_pool, &info.id, tag_id).await?;
 
-    ctx.say(format!("Tag `{}` added to track `{}`", tag, info.title)).await?;
+    ctx.say(format!("Tag `{}` added to track `{}`", tag, info.title))
+        .await?;
     Ok(())
 }
 
 /// Set a track's title, artist, or origin
-#[poise::command(slash_command, subcommands("title", "artist", "origin"), subcommand_required)]
-pub async fn set_metadata(
-    _ctx: PoiseContext<'_>,
-) -> Result<(), Error> {
+#[poise::command(
+    slash_command,
+    subcommands("title", "artist", "origin"),
+    subcommand_required
+)]
+pub async fn set_metadata(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
@@ -114,8 +112,7 @@ pub async fn title(
     #[description = "The track to adjust"]
     #[autocomplete = "autocomplete_track"]
     track: String,
-    #[description = "The new title to give the track"]
-    new_title: String,
+    #[description = "The new title to give the track"] new_title: String,
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
     let track_id = VideoId::from(track);
@@ -125,8 +122,7 @@ pub async fn title(
 
     ctx.say(format!(
         "Set new title `{}` for track `{}`",
-        new_title,
-        info.title
+        new_title, info.title
     ))
     .await?;
     Ok(())
@@ -151,8 +147,7 @@ pub async fn artist(
 
     ctx.say(format!(
         "Set new artist `{}` for track `{}`",
-        new_artist,
-        info.title
+        new_artist, info.title
     ))
     .await?;
     Ok(())
@@ -177,8 +172,7 @@ pub async fn origin(
 
     ctx.say(format!(
         "Set new origin `{}` for track `{}`",
-        new_origin,
-        info.title
+        new_origin, info.title
     ))
     .await?;
     Ok(())
@@ -191,8 +185,7 @@ pub async fn fix(
     #[description = "The incomplete track to fix"]
     #[autocomplete = "autocomplete_incomplete_track"]
     track: String,
-    #[description = "New title for the track"]
-    new_title: Option<String>,
+    #[description = "New title for the track"] new_title: Option<String>,
     #[description = "New artist for the track"]
     #[autocomplete = "autocomplete_artist"]
     new_artist: Option<String>,
@@ -201,7 +194,8 @@ pub async fn fix(
     new_origin: Option<String>,
 ) -> Result<(), Error> {
     if new_title.is_none() && new_artist.is_none() && new_origin.is_none() {
-        ctx.say("Please provide at least one field to update.").await?;
+        ctx.say("Please provide at least one field to update.")
+            .await?;
         return Ok(());
     }
 
@@ -232,7 +226,8 @@ pub async fn fix(
         "Updated `{}`: {}",
         info.title,
         updated_fields.join(", ")
-    )).await?;
+    ))
+    .await?;
 
     Ok(())
 }

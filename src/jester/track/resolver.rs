@@ -1,17 +1,19 @@
-use crate::{jester::db::repository::lookup_track, discord::context::Error, jester::track::{download::download_track, types::{TrackInfo, VideoId}, youtube::get_youtube_id}};
+use crate::{
+    discord::context::Error,
+    jester::db::repository::lookup_track,
+    jester::track::{
+        download::download_track,
+        types::{TrackInfo, VideoId},
+        youtube::get_youtube_id,
+    },
+};
 use sqlx::SqlitePool;
 
 pub fn normalise_track_input(input: &str) -> VideoId {
-    VideoId::from(
-        get_youtube_id(input)
-            .unwrap_or_else(|| input.to_string())
-    )
+    VideoId::from(get_youtube_id(input).unwrap_or_else(|| input.to_string()))
 }
 
-pub async fn resolve_track(
-    db_pool: &SqlitePool,
-    input: String,
-) -> Result<TrackInfo, Error> {
+pub async fn resolve_track(db_pool: &SqlitePool, input: String) -> Result<TrackInfo, Error> {
     let video_id = normalise_track_input(&input);
 
     if let Some(track) = lookup_track(db_pool, &video_id).await? {

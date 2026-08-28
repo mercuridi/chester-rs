@@ -1,35 +1,30 @@
 use std::{
-    collections::{HashMap, hash_map::Entry}, path::{Path, PathBuf}, sync::Arc,
+    collections::{HashMap, hash_map::Entry},
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 
-use chrono::{
-    prelude::Local,
-    DateTime,
-};
-use rtrb::{
-    Producer,
-    RingBuffer
-};
+use chrono::{DateTime, prelude::Local};
+use rtrb::{Producer, RingBuffer};
 use serde::{Deserialize, Serialize};
-use serenity::{http::Http, model::id::{ChannelId, GuildId}};
+use serenity::all::UserId;
+use serenity::{
+    http::Http,
+    model::id::{ChannelId, GuildId},
+};
+use songbird::{
+    Call, CoreEvent,
+    events::{Event, EventContext, EventHandler},
+};
 use tokio::{
-    sync::{
-        oneshot,
-        Mutex
-    },
+    sync::{Mutex, oneshot},
     task::JoinHandle,
 };
-use serenity::all::UserId;
-use songbird::{Call, CoreEvent, events::{
-    Event,
-    EventContext,
-    EventHandler
-}};
 
 use crate::{
-    chronicle::recording::encoder::run_encoder, constants::{
-        RING_BUFFER_CAPACITY,
-        SILENCE_FRAME}, discord::context::Error,
+    chronicle::recording::encoder::run_encoder,
+    constants::{RING_BUFFER_CAPACITY, SILENCE_FRAME},
+    discord::context::Error,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -77,16 +72,11 @@ impl RecorderManager {
         self.recorders.lock().await.get(&guild_id).cloned()
     }
 
-    pub async fn get_or_create(
-        &self,
-        guild_id: GuildId,
-    ) -> (Recorder, bool) {
+    pub async fn get_or_create(&self, guild_id: GuildId) -> (Recorder, bool) {
         let mut recorders = self.recorders.lock().await;
 
         match recorders.entry(guild_id) {
-            Entry::Occupied(entry) => {
-                (entry.get().clone(), false)
-            }
+            Entry::Occupied(entry) => (entry.get().clone(), false),
             Entry::Vacant(entry) => {
                 let recorder = Recorder::new();
                 entry.insert(recorder.clone());
@@ -158,7 +148,6 @@ impl Recorder {
     }
 
     pub async fn stop_recording(&self) -> Result<bool, Error> {
-
         let session = {
             let mut recording = self.recording_session.lock().await;
 
@@ -197,19 +186,16 @@ impl Recorder {
             }
         }
 
-        let manifest: RecordingManifest = RecordingManifest { 
+        let manifest: RecordingManifest = RecordingManifest {
             guild_id: session.guild_id,
             started_at: session.started_at,
             ended_at: Local::now(),
-            participants 
+            participants,
         };
 
-        let manifest_path = recording_directory(
-            session.guild_id,
-            &session.session_name,
-            session.started_at,
-        )
-        .join("manifest.toml");
+        let manifest_path =
+            recording_directory(session.guild_id, &session.session_name, session.started_at)
+                .join("manifest.toml");
 
         let manifest_toml = toml::to_string_pretty(&manifest)?;
 
@@ -235,21 +221,14 @@ impl Recorder {
         session_name: String,
         initial_silence_ticks: u64,
     ) -> Result<UserRecording, Error> {
-        let (producer, consumer) =
-            RingBuffer::<i16>::new(RING_BUFFER_CAPACITY);
+        let (producer, consumer) = RingBuffer::<i16>::new(RING_BUFFER_CAPACITY);
 
         let (stop_tx, stop_rx) = oneshot::channel();
 
         let path = recording_path(guild_id, user_id, &session_name, started_at);
 
         let encoder = tokio::task::spawn_blocking(move || {
-            run_encoder(
-                user_id,
-                path,
-                consumer,
-                stop_rx,
-                initial_silence_ticks,
-            )
+            run_encoder(user_id, path, consumer, stop_rx, initial_silence_ticks)
         });
 
         Ok(UserRecording {
@@ -258,23 +237,13 @@ impl Recorder {
             encoder,
         })
     }
-    
-    pub async fn attach_to_call(
-        &self,
-        call: &Arc<Mutex<Call>>,
-    ) -> Result<(), Error> {
 
+    pub async fn attach_to_call(&self, call: &Arc<Mutex<Call>>) -> Result<(), Error> {
         let mut call_lock = call.lock().await;
 
-        call_lock.add_global_event(
-            CoreEvent::SpeakingStateUpdate.into(),
-            self.clone(),
-        );
+        call_lock.add_global_event(CoreEvent::SpeakingStateUpdate.into(), self.clone());
 
-        call_lock.add_global_event(
-            CoreEvent::VoiceTick.into(),
-            self.clone(),
-        );
+        call_lock.add_global_event(CoreEvent::VoiceTick.into(), self.clone());
 
         Ok(())
     }
@@ -290,13 +259,11 @@ impl Recorder {
             )
         })
     }
-
 }
 
 #[async_trait::async_trait]
 impl EventHandler for Recorder {
     async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
-
         match ctx {
             EventContext::SpeakingStateUpdate(state) => {
                 tracing::debug!(?state, "RAW SpeakingStateUpdate");
@@ -361,16 +328,13 @@ impl EventHandler for Recorder {
                         continue;
                     }
 
-                    let user_recording = match self
-                        .initiate_user_recording(
-                            session.guild_id,
-                            user_id,
-                            session.started_at,
-                            session.session_name.clone(),
-                            session.tick,
-                        )
-
-                    {
+                    let user_recording = match self.initiate_user_recording(
+                        session.guild_id,
+                        user_id,
+                        session.started_at,
+                        session.session_name.clone(),
+                        session.tick,
+                    ) {
                         Ok(recording) => recording,
 
                         Err(error) => {
@@ -392,16 +356,9 @@ impl EventHandler for Recorder {
                 // If Songbird supplied audio, write that audio.
                 // Otherwise, write 20 ms of silence.
                 for (&user_id, user_recording) in &mut session.users {
-                    let audio = tick_audio
-                        .get(&user_id)
-                        .copied()
-                        .unwrap_or(&SILENCE_FRAME);
+                    let audio = tick_audio.get(&user_id).copied().unwrap_or(&SILENCE_FRAME);
 
-                    write_pcm(
-                        &mut user_recording.producer,
-                        audio,
-                        user_id,
-                    );
+                    write_pcm(&mut user_recording.producer, audio, user_id);
                 }
 
                 // Advance our recording timeline by one 20 ms tick.
@@ -415,11 +372,7 @@ impl EventHandler for Recorder {
     }
 }
 
-fn write_pcm(
-    producer: &mut Producer<i16>,
-    samples: &[i16],
-    user_id: UserId,
-) {
+fn write_pcm(producer: &mut Producer<i16>, samples: &[i16], user_id: UserId) {
     if producer.slots() < samples.len() {
         tracing::warn!(
             ?user_id,
@@ -482,9 +435,7 @@ fn ensure_recording_directory(
     session_name: &str,
     started_at: DateTime<Local>,
 ) -> Result<(), std::io::Error> {
-    std::fs::create_dir_all(
-        recording_directory(guild_id, session_name, started_at),
-    )
+    std::fs::create_dir_all(recording_directory(guild_id, session_name, started_at))
 }
 
 pub async fn notify_recording_user(

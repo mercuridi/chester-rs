@@ -11,8 +11,8 @@ pub fn get_youtube_id(link: &str) -> Option<String> {
         "youtu.be" => {
             // path_segments() -> segments between the slashes
             url.path_segments()
-               .and_then(|mut segs| segs.next())
-               .map(|id| id.to_string())
+                .and_then(|mut segs| segs.next())
+                .map(|id| id.to_string())
         }
 
         // Standard watch URLs, mobile, or www embeds
@@ -23,10 +23,8 @@ pub fn get_youtube_id(link: &str) -> Option<String> {
             }
             // 2) /embed/VIDEO_ID
             url.path_segments()
-               .and_then(|mut segs| {
-                   segs.find(|part| *part == "embed").and_then(|_| segs.next())
-               })
-               .map(|id| id.to_string())
+                .and_then(|mut segs| segs.find(|part| *part == "embed").and_then(|_| segs.next()))
+                .map(|id| id.to_string())
         }
 
         _ => None,

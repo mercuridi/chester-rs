@@ -48,11 +48,7 @@ impl Retriever {
         Ok(())
     }
 
-    pub async fn search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
+    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         let query = query.trim();
 
         if query.is_empty() {

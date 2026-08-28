@@ -2,11 +2,11 @@
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{self, BertModel, Config};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
 const MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
@@ -27,30 +27,25 @@ impl Embedder {
             device = ?device,
             "Loading embedding model"
         );
-    
-    let api = Api::new()
-        .context("Failed to initialize Hugging Face Hub")?;
 
-    let repo = api.repo(Repo::new(
-        MODEL_ID.to_owned(),
-        RepoType::Model,
-    ));
+        let api = Api::new().context("Failed to initialize Hugging Face Hub")?;
 
-    let config_path = repo
-        .get("config.json")
-        .context("Failed to download/load BGE config.json")?;
+        let repo = api.repo(Repo::new(MODEL_ID.to_owned(), RepoType::Model));
 
-    let tokenizer_path = repo
-        .get("tokenizer.json")
-        .context("Failed to download/load BGE tokenizer.json")?;
+        let config_path = repo
+            .get("config.json")
+            .context("Failed to download/load BGE config.json")?;
 
-    let weights_path = repo
-        .get("model.safetensors")
-        .context("Failed to download/load BGE model.safetensors")?;
+        let tokenizer_path = repo
+            .get("tokenizer.json")
+            .context("Failed to download/load BGE tokenizer.json")?;
+
+        let weights_path = repo
+            .get("model.safetensors")
+            .context("Failed to download/load BGE model.safetensors")?;
 
         let config: Config = serde_json::from_str(
-            &std::fs::read_to_string(&config_path)
-                .context("Failed to read BGE config")?,
+            &std::fs::read_to_string(&config_path).context("Failed to read BGE config")?,
         )
         .context("Failed to parse BGE config")?;
 
@@ -86,8 +81,7 @@ impl Embedder {
         }
         .context("Failed to memory-map BGE weights")?;
 
-        let model = BertModel::load(weights, &config)
-            .context("Failed to load BGE model")?;
+        let model = BertModel::load(weights, &config).context("Failed to load BGE model")?;
 
         tracing::info!("Embedding model loaded");
 
@@ -104,37 +98,24 @@ impl Embedder {
             .encode(text, true)
             .map_err(|error| anyhow!("Failed to tokenize text: {error}"))?;
 
-        let input_ids = Tensor::new(
-            encoding.get_ids(),
-            &self.device,
-        )
-        .context("Failed to create input ID tensor")?
-        .unsqueeze(0)
-        .context("Failed to add batch dimension to input IDs")?;
+        let input_ids = Tensor::new(encoding.get_ids(), &self.device)
+            .context("Failed to create input ID tensor")?
+            .unsqueeze(0)
+            .context("Failed to add batch dimension to input IDs")?;
 
-        let token_type_ids = Tensor::new(
-            encoding.get_type_ids(),
-            &self.device,
-        )
-        .context("Failed to create token type ID tensor")?
-        .unsqueeze(0)
-        .context("Failed to add batch dimension to token type IDs")?;
+        let token_type_ids = Tensor::new(encoding.get_type_ids(), &self.device)
+            .context("Failed to create token type ID tensor")?
+            .unsqueeze(0)
+            .context("Failed to add batch dimension to token type IDs")?;
 
-        let attention_mask = Tensor::new(
-            encoding.get_attention_mask(),
-            &self.device,
-        )
-        .context("Failed to create attention mask tensor")?
-        .unsqueeze(0)
-        .context("Failed to add batch dimension to attention mask")?;
+        let attention_mask = Tensor::new(encoding.get_attention_mask(), &self.device)
+            .context("Failed to create attention mask tensor")?
+            .unsqueeze(0)
+            .context("Failed to add batch dimension to attention mask")?;
 
         let hidden_states = self
             .model
-            .forward(
-                &input_ids,
-                &token_type_ids,
-                Some(&attention_mask),
-            )
+            .forward(&input_ids, &token_type_ids, Some(&attention_mask))
             .context("BGE forward pass failed")?;
 
         // BGE-small-en-v1.5 uses CLS pooling.
@@ -146,10 +127,7 @@ impl Embedder {
     }
 
     pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        texts
-            .iter()
-            .map(|text| self.embed(text))
-            .collect()
+        texts.iter().map(|text| self.embed(text)).collect()
     }
 
     fn normalize(&self, embedding: Tensor) -> Result<Vec<f32>> {

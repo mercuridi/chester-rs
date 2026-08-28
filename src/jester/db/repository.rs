@@ -1,7 +1,11 @@
 use serde_json::Value;
-use sqlx::{SqlitePool, Row};
+use sqlx::{Row, SqlitePool};
 
-use crate::{jester::db::metadata::MetadataKind, discord::context::Error, jester::track::types::{TrackInfo, VideoId}};
+use crate::{
+    discord::context::Error,
+    jester::db::metadata::MetadataKind,
+    jester::track::types::{TrackInfo, VideoId},
+};
 
 pub async fn get_or_insert_metadata_id(
     db_pool: &SqlitePool,
@@ -88,12 +92,21 @@ pub async fn fetch_library_all(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>,
     .await
     .map_err(|e| format!("Database query failed: {}", e))?;
 
-    Ok(rows.into_iter().map(|row| vec![
-        row.try_get::<String, _>(0).unwrap_or_else(|_| "No title".to_string()),
-        row.try_get::<String, _>(1).unwrap_or_else(|_| "No artist".to_string()),
-        row.try_get::<String, _>(2).unwrap_or_else(|_| "No origin".to_string()),
-        row.try_get::<String, _>(3).unwrap_or_else(|_| "".to_string()),
-    ]).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                row.try_get::<String, _>(0)
+                    .unwrap_or_else(|_| "No title".to_string()),
+                row.try_get::<String, _>(1)
+                    .unwrap_or_else(|_| "No artist".to_string()),
+                row.try_get::<String, _>(2)
+                    .unwrap_or_else(|_| "No origin".to_string()),
+                row.try_get::<String, _>(3)
+                    .unwrap_or_else(|_| "".to_string()),
+            ]
+        })
+        .collect())
 }
 
 pub async fn fetch_library_by_artist(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>, Error> {
@@ -107,10 +120,17 @@ pub async fn fetch_library_by_artist(db_pool: &SqlitePool) -> Result<Vec<Vec<Str
     .await
     .map_err(|e| format!("Database query failed: {}", e))?;
 
-    Ok(rows.into_iter().map(|row| vec![
-        row.try_get::<String, _>(0).unwrap_or_else(|_| "No artist".to_string()),
-        row.try_get::<String, _>(1).unwrap_or_else(|_| "No title".to_string()),
-    ]).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                row.try_get::<String, _>(0)
+                    .unwrap_or_else(|_| "No artist".to_string()),
+                row.try_get::<String, _>(1)
+                    .unwrap_or_else(|_| "No title".to_string()),
+            ]
+        })
+        .collect())
 }
 
 pub async fn fetch_library_by_origin(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>, Error> {
@@ -124,10 +144,17 @@ pub async fn fetch_library_by_origin(db_pool: &SqlitePool) -> Result<Vec<Vec<Str
     .await
     .map_err(|e| format!("Database query failed: {}", e))?;
 
-    Ok(rows.into_iter().map(|row| vec![
-        row.try_get::<String, _>(0).unwrap_or_else(|_| "No origin".to_string()),
-        row.try_get::<String, _>(1).unwrap_or_else(|_| "No title".to_string()),
-    ]).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                row.try_get::<String, _>(0)
+                    .unwrap_or_else(|_| "No origin".to_string()),
+                row.try_get::<String, _>(1)
+                    .unwrap_or_else(|_| "No title".to_string()),
+            ]
+        })
+        .collect())
 }
 
 pub async fn fetch_library_by_tag(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>, Error> {
@@ -145,10 +172,17 @@ pub async fn fetch_library_by_tag(db_pool: &SqlitePool) -> Result<Vec<Vec<String
     .await
     .map_err(|e| format!("Database query failed: {}", e))?;
 
-    Ok(rows.into_iter().map(|row| vec![
-        row.try_get::<String, _>(0).unwrap_or_else(|_| "No tags".to_string()),
-        row.try_get::<String, _>(1).unwrap_or_else(|_| "No title".to_string()),
-    ]).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                row.try_get::<String, _>(0)
+                    .unwrap_or_else(|_| "No tags".to_string()),
+                row.try_get::<String, _>(1)
+                    .unwrap_or_else(|_| "No title".to_string()),
+            ]
+        })
+        .collect())
 }
 
 pub async fn fetch_library_by_incomplete(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>, Error> {
@@ -159,17 +193,25 @@ pub async fn fetch_library_by_incomplete(db_pool: &SqlitePool) -> Result<Vec<Vec
             LEFT JOIN origins ON tracks.origin_id = origins.id
             WHERE artists.artist = 'No artist provided'
             OR origins.origin = 'No origin provided'
-            ORDER BY artists.artist, origins.origin, tracks.track_title"
+            ORDER BY artists.artist, origins.origin, tracks.track_title",
     )
     .fetch_all(db_pool)
     .await
     .map_err(|e| format!("Database query failed: {}", e))?;
 
-    Ok(rows.into_iter().map(|row| vec![
-        row.try_get::<String, _>(0).unwrap_or_else(|_| "No title".to_string()),
-        row.try_get::<String, _>(1).unwrap_or_else(|_| "No artist".to_string()),
-        row.try_get::<String, _>(2).unwrap_or_else(|_| "No origin".to_string()),
-    ]).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            vec![
+                row.try_get::<String, _>(0)
+                    .unwrap_or_else(|_| "No title".to_string()),
+                row.try_get::<String, _>(1)
+                    .unwrap_or_else(|_| "No artist".to_string()),
+                row.try_get::<String, _>(2)
+                    .unwrap_or_else(|_| "No origin".to_string()),
+            ]
+        })
+        .collect())
 }
 
 pub async fn lookup_track(
@@ -197,10 +239,7 @@ pub async fn lookup_track(
     }))
 }
 
-pub async fn require_track(
-    db_pool: &SqlitePool,
-    id: &VideoId,
-) -> Result<TrackInfo, Error> {
+pub async fn require_track(db_pool: &SqlitePool, id: &VideoId) -> Result<TrackInfo, Error> {
     lookup_track(db_pool, id)
         .await?
         .ok_or_else(|| "Track could not be found in the database.".into())
@@ -213,9 +252,13 @@ pub async fn search_metadata(
     limit: i64,
 ) -> Result<Vec<String>, Error> {
     let query = match kind {
-        MetadataKind::Artist => "SELECT DISTINCT artist FROM artists WHERE LOWER(artist) LIKE ?1 LIMIT ?2",
-        MetadataKind::Origin => "SELECT DISTINCT origin FROM origins WHERE LOWER(origin) LIKE ?1 LIMIT ?2",
-        MetadataKind::Tag    => "SELECT DISTINCT tag FROM tags WHERE LOWER(tag) LIKE ?1 LIMIT ?2",
+        MetadataKind::Artist => {
+            "SELECT DISTINCT artist FROM artists WHERE LOWER(artist) LIKE ?1 LIMIT ?2"
+        }
+        MetadataKind::Origin => {
+            "SELECT DISTINCT origin FROM origins WHERE LOWER(origin) LIKE ?1 LIMIT ?2"
+        }
+        MetadataKind::Tag => "SELECT DISTINCT tag FROM tags WHERE LOWER(tag) LIKE ?1 LIMIT ?2",
     };
 
     sqlx::query_scalar(query)
@@ -281,15 +324,18 @@ pub async fn search_incomplete_tracks(
     .map_err(|e| format!("Incomplete track search query failed: {}", e).into())
 }
 
-pub async fn delete_track_tags(
-    db_pool: &SqlitePool,
-    track_id: &VideoId,
-) -> Result<(), Error> {
+pub async fn delete_track_tags(db_pool: &SqlitePool, track_id: &VideoId) -> Result<(), Error> {
     sqlx::query("DELETE FROM track_tags WHERE track_id = ?1")
         .bind(track_id.as_str())
         .execute(db_pool)
         .await
-        .map_err(|e| format!("Failed to delete tags for track {}: {}", track_id.as_str(), e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to delete tags for track {}: {}",
+                track_id.as_str(),
+                e
+            )
+        })?;
     Ok(())
 }
 
@@ -303,7 +349,13 @@ pub async fn insert_track_tag(
         .bind(tag_id)
         .execute(db_pool)
         .await
-        .map_err(|e| format!("Failed to insert tag for track {}: {}", track_id.as_str(), e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to insert tag for track {}: {}",
+                track_id.as_str(),
+                e
+            )
+        })?;
     Ok(())
 }
 
@@ -317,7 +369,13 @@ pub async fn update_track_title(
         .bind(track_id.as_str())
         .execute(db_pool)
         .await
-        .map_err(|e| format!("Failed to update title for track {}: {}", track_id.as_str(), e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to update title for track {}: {}",
+                track_id.as_str(),
+                e
+            )
+        })?;
     Ok(())
 }
 
@@ -331,7 +389,13 @@ pub async fn update_track_artist(
         .bind(track_id.as_str())
         .execute(db_pool)
         .await
-        .map_err(|e| format!("Failed to update artist for track {}: {}", track_id.as_str(), e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to update artist for track {}: {}",
+                track_id.as_str(),
+                e
+            )
+        })?;
     Ok(())
 }
 
@@ -345,6 +409,12 @@ pub async fn update_track_origin(
         .bind(track_id.as_str())
         .execute(db_pool)
         .await
-        .map_err(|e| format!("Failed to update origin for track {}: {}", track_id.as_str(), e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to update origin for track {}: {}",
+                track_id.as_str(),
+                e
+            )
+        })?;
     Ok(())
 }

@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
+use futures::stream::{self, StreamExt as FuturesStreamExt};
 use sqlx::SqlitePool;
 use std::{path::PathBuf, time::Duration};
 use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
-use futures::stream::{self, StreamExt as FuturesStreamExt};
 
 use crate::constants::{AUDIO_DIR, DOWNLOAD_CONCURRENCY, MAX_RETRIES, YTDLP_PATH};
 
@@ -104,8 +104,6 @@ async fn verify_dependencies() -> Result<()> {
     info!("yt-dlp and ffmpeg both available");
 
     Ok(())
-
-
 }
 
 async fn fetch_track_ids(pool: &SqlitePool) -> Result<Vec<String>> {

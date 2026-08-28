@@ -1,4 +1,11 @@
-use crate::{discord::{autocomplete::autocomplete_track, context::{Error, PoiseContext}, voice::{ensure_vc, leave_vc, require_guild}}, jester::track::resolver::resolve_track};
+use crate::{
+    discord::{
+        autocomplete::autocomplete_track,
+        context::{Error, PoiseContext},
+        voice::{ensure_vc, leave_vc, require_guild},
+    },
+    jester::track::resolver::resolve_track,
+};
 
 /// Joins your voice channel
 #[poise::command(slash_command)]
@@ -26,10 +33,9 @@ pub async fn play(
 
     ctx.say(format!(
         "Now playing: `{}` by `{}`, from `{}`.",
-        track_info.title,
-        track_info.artist,
-        track_info.origin,
-    )).await?;
+        track_info.title, track_info.artist, track_info.origin,
+    ))
+    .await?;
 
     Ok(())
 }
@@ -44,7 +50,8 @@ pub async fn now_playing(ctx: PoiseContext<'_>) -> Result<(), Error> {
             ctx.say(format!(
                 "Now Playing:\n**Title:** {}\n**Artist:** {}\n**Origin:** {}",
                 track.title, track.artist, track.origin,
-            )).await?;
+            ))
+            .await?;
         }
         None => {
             ctx.say("No track is currently playing.").await?;
@@ -63,7 +70,8 @@ pub async fn loop_track(ctx: PoiseContext<'_>) -> Result<(), Error> {
     ctx.say(format!(
         "Looping {}",
         if looping { "enabled" } else { "disabled" }
-    )).await?;
+    ))
+    .await?;
     Ok(())
 }
 
@@ -77,7 +85,8 @@ pub async fn pause(ctx: PoiseContext<'_>) -> Result<(), Error> {
         "Resumed the currently paused track."
     } else {
         "Paused the currently playing track."
-    }).await?;
+    })
+    .await?;
     Ok(())
 }
 

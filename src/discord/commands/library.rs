@@ -1,19 +1,16 @@
-use crate::constants::{
-    ELLIPSIS,
-    MAX_RESULTS_PER_PAGE,
-    META_MAX_CHARS,
-    TITLE_MAX_CHARS
-};
+use crate::constants::{ELLIPSIS, MAX_RESULTS_PER_PAGE, META_MAX_CHARS, TITLE_MAX_CHARS};
 
-
+use crate::discord::context::{Error, PoiseContext};
 use crate::jester::db::repository::{
     fetch_library_all, fetch_library_by_artist, fetch_library_by_incomplete,
     fetch_library_by_origin, fetch_library_by_tag,
 };
-use crate::discord::context::{Error, PoiseContext};
 
 /// /library
-#[poise::command(slash_command, subcommands("all", "artist", "origin", "tags", "incomplete"))]
+#[poise::command(
+    slash_command,
+    subcommands("all", "artist", "origin", "tags", "incomplete")
+)]
 pub async fn library(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -54,11 +51,11 @@ async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error>
     let db_pool = &ctx.data().db_pool;
 
     let (raw_data, grouped) = match mode {
-        "artist"     => (fetch_library_by_artist(db_pool).await?,   true),
-        "origin"     => (fetch_library_by_origin(db_pool).await?,   true),
-        "tags"       => (fetch_library_by_tag(db_pool).await?,      true),
+        "artist" => (fetch_library_by_artist(db_pool).await?, true),
+        "origin" => (fetch_library_by_origin(db_pool).await?, true),
+        "tags" => (fetch_library_by_tag(db_pool).await?, true),
         "incomplete" => (fetch_library_by_incomplete(db_pool).await?, false),
-        _            => (fetch_library_all(db_pool).await?,          false),
+        _ => (fetch_library_all(db_pool).await?, false),
     };
 
     if raw_data.is_empty() {
@@ -118,7 +115,10 @@ fn format_flat(rows: Vec<Vec<String>>) -> Vec<String> {
         .map(|(i, cols)| {
             // cols: [title, artist, origin, tags?]  or  [title, artist, origin]
             let num = format!("{:>width$}.", i + 1, width = num_width);
-            let title = trunc(cols.get(0).map(String::as_str).unwrap_or("—"), TITLE_MAX_CHARS);
+            let title = trunc(
+                cols.get(0).map(String::as_str).unwrap_or("—"),
+                TITLE_MAX_CHARS,
+            );
             let meta_parts: Vec<&str> = cols[1..].iter().map(String::as_str).collect();
             let meta = meta_line(&meta_parts);
             let indent = " ".repeat(num_width + 2 + 2); // lines up under the title plus two more spaces for visual separation
@@ -150,7 +150,10 @@ fn format_grouped(rows: Vec<Vec<String>>) -> Vec<String> {
 
     for cols in rows {
         let key = cols.get(0).map(String::as_str).unwrap_or("—");
-        let title = trunc(cols.get(1).map(String::as_str).unwrap_or("—"), TITLE_MAX_CHARS);
+        let title = trunc(
+            cols.get(1).map(String::as_str).unwrap_or("—"),
+            TITLE_MAX_CHARS,
+        );
 
         if key != last_key {
             // Blank line before every group except the very first

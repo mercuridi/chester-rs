@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serenity::all::{GuildId, UserId};
 
@@ -104,12 +104,24 @@ pub struct RawChronicleConfig {
     max_chunk_length: usize,
 }
 
-fn default_corpus_dir() -> String { DEFAULT_CORPUS_DIR.to_owned() }
-fn default_llm_max_tokens() -> u32 { DEFAULT_LLM_MAX_TOKENS }
-fn default_llm_temperature() -> f32 { DEFAULT_LLM_TEMPERATURE }
-fn default_llm_seed() -> u64 { DEFAULT_LLM_SEED }
-fn default_retrieval_limit() -> usize { DEFAULT_RETRIEVAL_LIMIT }
-fn default_max_chunk_length() -> usize { DEFAULT_MAX_CHUNK_LENGTH }
+fn default_corpus_dir() -> String {
+    DEFAULT_CORPUS_DIR.to_owned()
+}
+fn default_llm_max_tokens() -> u32 {
+    DEFAULT_LLM_MAX_TOKENS
+}
+fn default_llm_temperature() -> f32 {
+    DEFAULT_LLM_TEMPERATURE
+}
+fn default_llm_seed() -> u64 {
+    DEFAULT_LLM_SEED
+}
+fn default_retrieval_limit() -> usize {
+    DEFAULT_RETRIEVAL_LIMIT
+}
+fn default_max_chunk_length() -> usize {
+    DEFAULT_MAX_CHUNK_LENGTH
+}
 
 #[derive(Debug, Deserialize, Clone)]
 struct RawAliasGroup {
@@ -188,12 +200,9 @@ impl Config {
             let mut aliases = HashMap::new();
 
             for (raw_user_id, alias) in raw_group.aliases {
-                let user_id = parse_user_id(&raw_user_id)
-                    .with_context(|| {
-                        format!(
-                            "Invalid user ID `{raw_user_id}` in alias group `{group_id}`"
-                        )
-                    })?;
+                let user_id = parse_user_id(&raw_user_id).with_context(|| {
+                    format!("Invalid user ID `{raw_user_id}` in alias group `{group_id}`")
+                })?;
 
                 if alias.trim().is_empty() {
                     bail!(
@@ -222,9 +231,7 @@ impl Config {
 
             for group_id in &raw_guild.alias_groups {
                 if !alias_groups.contains_key(group_id) {
-                    bail!(
-                        "Guild `{raw_guild_id}` references unknown alias group `{group_id}`"
-                    );
+                    bail!("Guild `{raw_guild_id}` references unknown alias group `{group_id}`");
                 }
             }
 
@@ -265,10 +272,7 @@ impl Config {
         self.alias_groups.get(group_id)
     }
 
-    pub fn alias_groups_for_guild(
-        &self,
-        guild_id: GuildId,
-    ) -> Option<Vec<(&str, &AliasGroup)>> {
+    pub fn alias_groups_for_guild(&self, guild_id: GuildId) -> Option<Vec<(&str, &AliasGroup)>> {
         let guild = self.guilds.get(&guild_id)?;
 
         Some(
@@ -289,12 +293,11 @@ impl Config {
         group_id: &str,
         participants: impl IntoIterator<Item = &'a UserId>,
     ) -> Result<(), AliasValidationError> {
-        let group = self
-            .alias_groups
-            .get(group_id)
-            .ok_or_else(|| AliasValidationError::UnknownAliasGroup {
+        let group = self.alias_groups.get(group_id).ok_or_else(|| {
+            AliasValidationError::UnknownAliasGroup {
                 group_id: group_id.to_owned(),
-            })?;
+            }
+        })?;
 
         let missing = participants
             .into_iter()
@@ -312,16 +315,11 @@ impl Config {
         }
     }
 
-    pub fn guild_has_alias_group(
-        &self,
-        guild_id: GuildId,
-        group_id: &str,
-    ) -> bool {
+    pub fn guild_has_alias_group(&self, guild_id: GuildId, group_id: &str) -> bool {
         self.guilds
             .get(&guild_id)
             .is_some_and(|guild| guild.alias_groups.iter().any(|id| id == group_id))
     }
-
 }
 
 impl ChronicleConfig {
@@ -374,14 +372,8 @@ impl std::fmt::Display for AliasValidationError {
                 write!(f, "unknown alias group `{group_id}`")
             }
 
-            Self::MissingAliases {
-                group_id,
-                user_ids,
-            } => {
-                write!(
-                    f,
-                    "alias group `{group_id}` is missing aliases for users: "
-                )?;
+            Self::MissingAliases { group_id, user_ids } => {
+                write!(f, "alias group `{group_id}` is missing aliases for users: ")?;
 
                 for (index, user_id) in user_ids.iter().enumerate() {
                     if index > 0 {

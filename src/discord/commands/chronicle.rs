@@ -5,13 +5,31 @@ use serenity::model::id::{GuildId, UserId};
 use titlecase::Titlecase;
 
 use crate::{
-    chronicle::{config::{AliasGroup, Config}, recording::recorder::{RecordingManifest, notify_recording_user}, transcription::{service::{TranscribedSegment, TranscriptionService}, transcript::{TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant}}}, constants::{CHESTER_USER_ID, TRANSCRIPT_PAGE_LIMIT}, discord::{autocomplete::{autocomplete_alias_group, autocomplete_existing_transcript, autocomplete_recording_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
+    chronicle::{
+        config::{AliasGroup, Config},
+        recording::recorder::{RecordingManifest, notify_recording_user},
+        transcription::{
+            service::{TranscribedSegment, TranscriptionService},
+            transcript::{
+                TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant,
+            },
+        },
+    },
+    constants::{CHESTER_USER_ID, TRANSCRIPT_PAGE_LIMIT},
+    discord::{
+        autocomplete::{
+            autocomplete_alias_group, autocomplete_existing_transcript,
+            autocomplete_recording_session,
+        },
+        context::{Error, PoiseContext},
+        voice::{ensure_vc, require_guild},
+    },
 };
 
 #[poise::command(
     slash_command,
     subcommands("chronicle_start", "ask", "chronicle_stop"),
-    subcommand_required,
+    subcommand_required
 )]
 pub async fn chronicle(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
@@ -40,7 +58,8 @@ pub async fn chronicle_stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
             ctx.say("Chronicle stopped.").await?;
         }
         Err(_error) if ctx.data().chronicle.is_llm_loaded()? => {
-            ctx.say("Chronicle LLM cannot be unloaded while an operation is running.").await?;
+            ctx.say("Chronicle LLM cannot be unloaded while an operation is running.")
+                .await?;
         }
         Err(error) => return Err(error.into()),
     }
@@ -48,11 +67,7 @@ pub async fn chronicle_stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-#[poise::command(
-    slash_command,
-    subcommands("start", "stop"),
-    subcommand_required,
-)]
+#[poise::command(slash_command, subcommands("start", "stop"), subcommand_required)]
 pub async fn recording(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -62,7 +77,6 @@ pub async fn start(
     ctx: PoiseContext<'_>,
     #[description = "The session name"] session_name: String,
 ) -> Result<(), Error> {
-
     let (guild_id, voice_channel_id, _call) = ensure_vc(ctx).await?;
     let notification_channel_id = ctx.channel_id();
 
@@ -71,18 +85,14 @@ pub async fn start(
         .recorder
         .get(guild_id)
         .await
-        .ok_or_else(|| -> Error {
-            "Failed to initialize the guild recorder.".into()
-        })?;
+        .ok_or_else(|| -> Error { "Failed to initialize the guild recorder.".into() })?;
 
     if recorder.is_recording().await {
         ctx.say("A recording is already in progress.").await?;
         return Ok(());
     }
 
-    let session_name = session_name
-        .replace(' ', "-")
-        .titlecase();
+    let session_name = session_name.replace(' ', "-").titlecase();
 
     let started = recorder
         .start_recording(
@@ -99,7 +109,12 @@ pub async fn start(
         return Ok(());
     }
 
-    ctx.say(format!("Recording session `{}` started by <@{}>.", session_name, ctx.author().id)).await?;
+    ctx.say(format!(
+        "Recording session `{}` started by <@{}>.",
+        session_name,
+        ctx.author().id
+    ))
+    .await?;
 
     let voice_states = ctx
         .serenity_context()
@@ -133,9 +148,7 @@ pub async fn start(
 }
 
 #[poise::command(slash_command)]
-pub async fn stop(
-    ctx: PoiseContext<'_>,
-) -> Result<(), Error> {
+pub async fn stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
 
     let recorder = ctx
@@ -143,9 +156,7 @@ pub async fn stop(
         .recorder
         .get(guild_id)
         .await
-        .ok_or_else(|| -> Error {
-            "Failed to initialize the guild recorder.".into()
-        })?;
+        .ok_or_else(|| -> Error { "Failed to initialize the guild recorder.".into() })?;
 
     if !recorder.is_recording().await {
         ctx.say("There is no recording in progress.").await?;
@@ -158,13 +169,8 @@ pub async fn stop(
     Ok(())
 }
 
-#[poise::command(
-    slash_command,
-    subcommands("show", "generate")
-)]
-pub async fn transcript(
-    _ctx: PoiseContext<'_>,
-) -> Result<(), Error> {
+#[poise::command(slash_command, subcommands("show", "generate"))]
+pub async fn transcript(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
@@ -179,11 +185,7 @@ pub async fn show(
 ) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
 
-    let recording_dir = PathBuf::from(format!(
-        ".chronicle/recordings/{}/{}",
-        guild_id,
-        session,
-    ));
+    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{}/{}", guild_id, session,));
 
     let transcript_path = transcript_path(&recording_dir);
 
@@ -219,17 +221,9 @@ pub async fn generate(
 ) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
 
-    let recording_dir = PathBuf::from(format!(
-        ".chronicle/recordings/{}/{}",
-        guild_id,
-        session,
-    ));
+    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{}/{}", guild_id, session,));
 
-    let manifest = match load_recording_manifest(
-        &recording_dir,
-        guild_id,
-        &session,
-    ) {
+    let manifest = match load_recording_manifest(&recording_dir, guild_id, &session) {
         Ok(manifest) => manifest,
         Err(message) => {
             ctx.say(message).await?;
@@ -240,25 +234,20 @@ pub async fn generate(
     let recordings = find_recordings(&recording_dir)?;
 
     if recordings.is_empty() {
-        ctx.say("No Opus recordings found in that session.")
-            .await?;
+        ctx.say("No Opus recordings found in that session.").await?;
         return Ok(());
     }
 
     let config = &ctx.data().config;
 
-    let alias_group = match validate_alias_group(
-        config,
-        guild_id,
-        &alias_group_id,
-        &manifest.participants,
-    ) {
-        Ok(alias_group) => alias_group,
-        Err(error) => {
-            ctx.say(error.to_string()).await?;
-            return Ok(());
-        }
-    };
+    let alias_group =
+        match validate_alias_group(config, guild_id, &alias_group_id, &manifest.participants) {
+            Ok(alias_group) => alias_group,
+            Err(error) => {
+                ctx.say(error.to_string()).await?;
+                return Ok(());
+            }
+        };
 
     let transcript_path = transcript_path(&recording_dir);
 
@@ -302,16 +291,9 @@ async fn display_transcript(
     ctx: PoiseContext<'_>,
     transcript: &TranscriptDocument,
 ) -> Result<(), Error> {
-    let pages = paginate_transcript(
-        transcript
-            .body
-            .lines()
-            .map(str::to_owned)
-            .collect(),
-    );
+    let pages = paginate_transcript(transcript.body.lines().map(str::to_owned).collect());
 
-    let page_refs: Vec<&str> =
-        pages.iter().map(String::as_str).collect();
+    let page_refs: Vec<&str> = pages.iter().map(String::as_str).collect();
 
     poise::samples::paginate(ctx, &page_refs).await?;
 
@@ -377,30 +359,22 @@ fn load_recording_manifest(
     session: &str,
 ) -> Result<RecordingManifest, String> {
     if !recording_dir.is_dir() {
-        return Err(format!(
-            "Recording session not found: `{session}`"
-        ));
+        return Err(format!("Recording session not found: `{session}`"));
     }
 
     let manifest_path = recording_dir.join("manifest.toml");
 
     let manifest = RecordingManifest::load(&manifest_path)
-        .map_err(|error| {
-            format!("Failed to load recording manifest: {error}")
-        })?;
+        .map_err(|error| format!("Failed to load recording manifest: {error}"))?;
 
     if manifest.guild_id != guild_id {
-        return Err(
-            "Recording manifest belongs to a different guild.".to_string()
-        );
+        return Err("Recording manifest belongs to a different guild.".to_string());
     }
 
     Ok(manifest)
 }
 
-fn find_recordings(
-    recording_dir: &Path,
-) -> std::io::Result<Vec<PathBuf>> {
+fn find_recordings(recording_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut recordings = Vec::new();
 
     for entry in std::fs::read_dir(recording_dir)? {
@@ -421,15 +395,10 @@ fn validate_alias_group<'a>(
     participants: &Vec<UserId>,
 ) -> anyhow::Result<&'a AliasGroup> {
     if !config.guild_has_alias_group(guild_id, alias_group_id) {
-        anyhow::bail!(
-            "Alias group `{alias_group_id}` is not available in this guild."
-        );
+        anyhow::bail!("Alias group `{alias_group_id}` is not available in this guild.");
     }
 
-    config.validate_participants(
-        alias_group_id,
-        participants,
-    )?;
+    config.validate_participants(alias_group_id, participants)?;
 
     Ok(config
         .alias_group(alias_group_id)
@@ -516,8 +485,7 @@ fn build_transcript_document(
             schema_version: 1,
             recording_date: manifest.started_at,
             ended_at: manifest.ended_at,
-            duration_seconds: (manifest.ended_at - manifest.started_at)
-                .num_milliseconds() as f64
+            duration_seconds: (manifest.ended_at - manifest.started_at).num_milliseconds() as f64
                 / 1000.0,
             participants,
             recording_count: recordings.len(),
@@ -541,7 +509,9 @@ async fn generate_transcript(
     transcript_path: &Path,
     transcription: TranscriptionService,
 ) -> Result<TranscriptDocument, Error> {
-    let result = transcription.transcribe_recordings(recordings.clone()).await?;
+    let result = transcription
+        .transcribe_recordings(recordings.clone())
+        .await?;
 
     for segment in &result {
         println!(
@@ -560,27 +530,16 @@ async fn generate_transcript(
         return Err("No transcription results.".into());
     }
 
-    let transcript = build_transcript_document(
-        manifest,
-        &recordings,
-        &entries,
-    );
+    let transcript = build_transcript_document(manifest, &recordings, &entries);
 
-    transcript
-        .save(transcript_path)
-        .map_err(|error| -> Error {
-            format!(
-                "Transcription succeeded, but failed to save transcript: {error}"
-            )
-            .into()
-        })?;
+    transcript.save(transcript_path).map_err(|error| -> Error {
+        format!("Transcription succeeded, but failed to save transcript: {error}").into()
+    })?;
 
     Ok(transcript)
 }
 
-async fn confirm_transcript_regeneration(
-    ctx: PoiseContext<'_>,
-) -> Result<bool, Error> {
+async fn confirm_transcript_regeneration(ctx: PoiseContext<'_>) -> Result<bool, Error> {
     let reply = ctx
         .send(
             poise::CreateReply::default()
@@ -589,16 +548,14 @@ async fn confirm_transcript_regeneration(
                      Regenerating it will replace the existing transcript. \
                      Continue?",
                 )
-                .components(vec![
-                    serenity::all::CreateActionRow::Buttons(vec![
-                        serenity::all::CreateButton::new("transcript:regenerate")
-                            .label("Regenerate")
-                            .style(serenity::all::ButtonStyle::Danger),
-                        serenity::all::CreateButton::new("transcript:cancel")
-                            .label("Cancel")
-                            .style(serenity::all::ButtonStyle::Secondary),
-                    ]),
-                ])
+                .components(vec![serenity::all::CreateActionRow::Buttons(vec![
+                    serenity::all::CreateButton::new("transcript:regenerate")
+                        .label("Regenerate")
+                        .style(serenity::all::ButtonStyle::Danger),
+                    serenity::all::CreateButton::new("transcript:cancel")
+                        .label("Cancel")
+                        .style(serenity::all::ButtonStyle::Secondary),
+                ])])
                 .ephemeral(true),
         )
         .await?;

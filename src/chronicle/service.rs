@@ -17,12 +17,7 @@ pub struct Chronicle {
 }
 
 impl Chronicle {
-    pub fn new(
-        db: IndexerDb,
-        llm: Llm,
-        runtime: GpuRuntime,
-        retrieval_limit: usize,
-    ) -> Self {
+    pub fn new(db: IndexerDb, llm: Llm, runtime: GpuRuntime, retrieval_limit: usize) -> Self {
         Self {
             retriever: Retriever::new(db),
             llm,
@@ -37,7 +32,10 @@ impl Chronicle {
         let _lifecycle = self.lifecycle.lock().await;
         let _gpu_lease = self.runtime.acquire_inference()?;
 
-        let results = self.retriever.search(question, self.retrieval_limit).await?;
+        let results = self
+            .retriever
+            .search(question, self.retrieval_limit)
+            .await?;
 
         let prompt = prompt::build_prompt(question, &results);
 
@@ -72,5 +70,4 @@ impl Chronicle {
     pub fn transcription_service(&self) -> TranscriptionService {
         self.transcription.clone()
     }
-
 }

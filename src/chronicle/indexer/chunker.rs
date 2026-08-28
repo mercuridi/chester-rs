@@ -96,7 +96,7 @@ fn split_long_text(text: &str, max_length: usize) -> Vec<String> {
 mod tests {
     use std::path::PathBuf;
 
-use super::*;
+    use super::*;
 
     fn document(content: &str) -> Document {
         Document {
@@ -127,35 +127,26 @@ use super::*;
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].index, 0);
         assert_eq!(chunks[0].content, "Hello world.");
-        assert_eq!(
-            chunks[0].document_path,
-            PathBuf::from("test.md")
-        );
+        assert_eq!(chunks[0].document_path, PathBuf::from("test.md"));
         assert_eq!(chunks[0].heading, None);
     }
 
     #[test]
     fn combines_paragraphs_until_limit() {
-        let document = document(
-            "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.",
-        );
+        let document = document("First paragraph.\n\nSecond paragraph.\n\nThird paragraph.");
 
         let chunks = chunk_text(&document, 35).unwrap();
 
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].index, 0);
-        assert_eq!(
-            chunks[0].content,
-            "First paragraph.\n\nSecond paragraph."
-        );
+        assert_eq!(chunks[0].content, "First paragraph.\n\nSecond paragraph.");
         assert_eq!(chunks[1].index, 1);
         assert_eq!(chunks[1].content, "Third paragraph.");
     }
 
     #[test]
     fn splits_long_paragraphs() {
-        let document =
-            document("one two three four five six seven eight");
+        let document = document("one two three four five six seven eight");
 
         let chunks = chunk_text(&document, 15).unwrap();
 
@@ -164,11 +155,7 @@ use super::*;
                 .iter()
                 .map(|chunk| chunk.content.as_str())
                 .collect::<Vec<_>>(),
-            vec![
-                "one two three",
-                "four five six",
-                "seven eight",
-            ]
+            vec!["one two three", "four five six", "seven eight",]
         );
     }
 
@@ -182,17 +169,12 @@ use super::*;
 
         let chunks = chunk(&document, 2_000).unwrap();
 
-        assert_eq!(
-            chunks[0].document_path,
-            PathBuf::from("people/alice.md")
-        );
+        assert_eq!(chunks[0].document_path, PathBuf::from("people/alice.md"));
     }
 
     #[test]
     fn indexes_chunks_sequentially() {
-        let document = document(
-            "First.\n\nSecond.\n\nThird.",
-        );
+        let document = document("First.\n\nSecond.\n\nThird.");
 
         let chunks = chunk_text(&document, 10).unwrap();
 

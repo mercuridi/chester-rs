@@ -1,29 +1,17 @@
-use std::{
-    fs::File,
-    path::PathBuf
-};
+use std::{fs::File, path::PathBuf};
 
 use ogg::{PacketWriteEndInfo, PacketWriter};
-use opus::{
-    Application,
-    Channels,
-    Encoder as OpusEncoder
-};
+use opus::{Application, Channels, Encoder as OpusEncoder};
 use rtrb::Consumer;
 use serenity::all::UserId;
 use tokio::sync::oneshot;
 
 use crate::{
     constants::{
-        MAX_OPUS_PACKET_SIZE,
-        MONO_FRAME_SAMPLES,
-        PCM_CHANNELS,
-        SAMPLE_RATE,
-        STEREO_FRAME_SAMPLES,
+        MAX_OPUS_PACKET_SIZE, MONO_FRAME_SAMPLES, PCM_CHANNELS, SAMPLE_RATE, STEREO_FRAME_SAMPLES,
     },
     discord::context::Error,
 };
-
 
 pub fn run_encoder(
     user_id: UserId,
@@ -35,11 +23,7 @@ pub fn run_encoder(
     let file = File::create(&path)?;
     let mut ogg = PacketWriter::new(file);
 
-    let mut opus = OpusEncoder::new(
-        SAMPLE_RATE,
-        Channels::Mono,
-        Application::Audio,
-    )?;
+    let mut opus = OpusEncoder::new(SAMPLE_RATE, Channels::Mono, Application::Audio)?;
 
     let mut stereo_buffer = Vec::<i16>::with_capacity(STEREO_FRAME_SAMPLES);
     let mut mono_buffer = [0i16; MONO_FRAME_SAMPLES];
@@ -51,19 +35,12 @@ pub fn run_encoder(
 
     let pre_skip = u16::try_from(opus.get_lookahead()?)?;
 
-    write_opus_headers(
-        &mut ogg,
-        serial,
-        user_id,
-        SAMPLE_RATE,
-        pre_skip,
-    )?;
+    write_opus_headers(&mut ogg, serial, user_id, SAMPLE_RATE, pre_skip)?;
 
     for _ in 0..initial_silence_ticks {
         mono_buffer.fill(0);
 
-        let encoded_len =
-            opus.encode(&mono_buffer, &mut opus_packet)?;
+        let encoded_len = opus.encode(&mono_buffer, &mut opus_packet)?;
 
         if encoded_len > 0 {
             let packet = opus_packet[..encoded_len].to_vec();
@@ -83,9 +60,7 @@ pub fn run_encoder(
 
     loop {
         while stereo_buffer.len() < STEREO_FRAME_SAMPLES {
-            match consumer.read_chunk(
-                STEREO_FRAME_SAMPLES - stereo_buffer.len()
-            ) {
+            match consumer.read_chunk(STEREO_FRAME_SAMPLES - stereo_buffer.len()) {
                 Ok(chunk) => {
                     let (first, second) = chunk.as_slices();
 
@@ -104,8 +79,7 @@ pub fn run_encoder(
 
             downmix_stereo_frame(frame, &mut mono_buffer);
 
-            let encoded_len =
-                opus.encode(&mono_buffer, &mut opus_packet)?;
+            let encoded_len = opus.encode(&mono_buffer, &mut opus_packet)?;
 
             if encoded_len > 0 {
                 let packet = opus_packet[..encoded_len].to_vec();
@@ -150,20 +124,13 @@ pub fn run_encoder(
     //
     // We intentionally discard an incomplete final frame because
     // Opus requires a valid frame size.
-    
-    tracing::info!(
-        ?user_id,
-        ?path,
-        "Finished recording"
-    );
+
+    tracing::info!(?user_id, ?path, "Finished recording");
 
     Ok(())
 }
 
-fn downmix_stereo_frame(
-    interleaved: &[i16],
-    mono: &mut [i16; MONO_FRAME_SAMPLES],
-) {
+fn downmix_stereo_frame(interleaved: &[i16], mono: &mut [i16; MONO_FRAME_SAMPLES]) {
     debug_assert_eq!(interleaved.len(), STEREO_FRAME_SAMPLES);
 
     for (index, pair) in interleaved.chunks_exact(PCM_CHANNELS).enumerate() {
@@ -191,12 +158,7 @@ fn write_opus_headers<W: std::io::Write>(
     opus_head.extend_from_slice(&0i16.to_le_bytes());
     opus_head.push(0);
 
-    ogg.write_packet(
-        opus_head,
-        serial,
-        PacketWriteEndInfo::EndPage,
-        0,
-    )?;
+    ogg.write_packet(opus_head, serial, PacketWriteEndInfo::EndPage, 0)?;
 
     let vendor = b"chronicle";
 
@@ -211,12 +173,7 @@ fn write_opus_headers<W: std::io::Write>(
     opus_tags.extend_from_slice(&(comment.len() as u32).to_le_bytes());
     opus_tags.extend_from_slice(comment.as_bytes());
 
-    ogg.write_packet(
-        opus_tags,
-        serial,
-        PacketWriteEndInfo::EndPage,
-        0,
-    )?;
+    ogg.write_packet(opus_tags, serial, PacketWriteEndInfo::EndPage, 0)?;
 
     Ok(())
 }
