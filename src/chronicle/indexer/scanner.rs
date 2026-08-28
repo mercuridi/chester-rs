@@ -8,8 +8,16 @@ use tracing::{info, instrument};
 
 use crate::chronicle::indexer::document::Document;
 
+#[derive(Debug, Default, Clone, Copy)]
+pub struct CorpusStats {
+    pub directory_count: usize,
+    pub file_count: usize,
+    pub word_count: usize,
+    pub character_count: usize,
+}
+
 #[instrument(skip(root))]
-pub fn scan_directory(root: impl AsRef<Path>) -> Result<Vec<Document>> {
+pub fn scan_directory_with_stats(root: impl AsRef<Path>) -> Result<(Vec<Document>, CorpusStats)> {
     let root = root.as_ref();
 
     if !root.is_dir() {
@@ -20,15 +28,35 @@ pub fn scan_directory(root: impl AsRef<Path>) -> Result<Vec<Document>> {
     }
 
     let mut documents = Vec::new();
-    scan_directory_recursive(root, &mut documents)?;
+    let mut stats = CorpusStats {
+        directory_count: 1,
+        ..CorpusStats::default()
+    };
+    scan_directory_recursive(root, &mut documents, &mut stats)?;
 
     documents.sort_by(|a, b| a.path.cmp(&b.path));
-    info!(document_count = documents.len(), "Scanned Chronicle corpus");
+    let average_words_per_file = if stats.file_count == 0 {
+        0.0
+    } else {
+        stats.word_count as f64 / stats.file_count as f64
+    };
+    info!(
+        directory_count = stats.directory_count,
+        file_count = stats.file_count,
+        word_count = stats.word_count,
+        character_count = stats.character_count,
+        average_words_per_file,
+        "Scanned Chronicle corpus"
+    );
 
-    Ok(documents)
+    Ok((documents, stats))
 }
 
-fn scan_directory_recursive(directory: &Path, documents: &mut Vec<Document>) -> Result<()> {
+fn scan_directory_recursive(
+    directory: &Path,
+    documents: &mut Vec<Document>,
+    stats: &mut CorpusStats,
+) -> Result<()> {
     for entry in fs::read_dir(directory)
         .with_context(|| format!("failed to read directory: {}", directory.display()))?
     {
@@ -39,7 +67,8 @@ fn scan_directory_recursive(directory: &Path, documents: &mut Vec<Document>) -> 
         let path = entry.path();
 
         if path.is_dir() {
-            scan_directory_recursive(&path, documents)?;
+            stats.directory_count += 1;
+            scan_directory_recursive(&path, documents, stats)?;
             continue;
         }
 
@@ -47,7 +76,11 @@ fn scan_directory_recursive(directory: &Path, documents: &mut Vec<Document>) -> 
             continue;
         }
 
-        documents.push(scan_file(&path)?);
+        let document = scan_file(&path)?;
+        stats.file_count += 1;
+        stats.word_count += document.content.split_whitespace().count();
+        stats.character_count += document.content.chars().count();
+        documents.push(document);
     }
 
     Ok(())
