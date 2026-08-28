@@ -5,7 +5,7 @@ pub const SCHEMA_VERSION: &str = "1";
 
 pub async fn initialise(pool: &SqlitePool) -> Result<()> {
     sqlx::query(
-        r#"
+        r"
         CREATE TABLE IF NOT EXISTS metadata (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -35,7 +35,7 @@ pub async fn initialise(pool: &SqlitePool) -> Result<()> {
         CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(
             embedding float[384]
         );
-        "#,
+        ",
     )
     .execute(pool)
     .await
@@ -48,11 +48,11 @@ pub async fn initialise(pool: &SqlitePool) -> Result<()> {
 
 pub async fn set_metadata(pool: &SqlitePool, key: &str, value: &str) -> Result<()> {
     sqlx::query(
-        r#"
+        r"
         INSERT INTO metadata (key, value)
         VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        "#,
+        ",
     )
     .bind(key)
     .bind(value)

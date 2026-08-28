@@ -38,7 +38,7 @@ pub async fn download_direct(
     Ok(track)
 }
 
-/// Download a track from a YouTube link
+/// Download a track from a `YouTube` link
 #[poise::command(slash_command)]
 pub async fn download(
     ctx: PoiseContext<'_>,
@@ -207,19 +207,19 @@ pub async fn fix(
 
     if let Some(ref title) = new_title {
         update_track_title(db_pool, &info.id, title).await?;
-        updated_fields.push(format!("title → `{}`", title));
+        updated_fields.push(format!("title → `{title}`"));
     }
 
     if let Some(ref artist) = new_artist {
         let artist_id = get_or_insert_metadata_id(db_pool, MetadataKind::Artist, artist).await?;
         update_track_artist(db_pool, &info.id, artist_id).await?;
-        updated_fields.push(format!("artist → `{}`", artist));
+        updated_fields.push(format!("artist → `{artist}`"));
     }
 
     if let Some(ref origin) = new_origin {
         let origin_id = get_or_insert_metadata_id(db_pool, MetadataKind::Origin, origin).await?;
         update_track_origin(db_pool, &info.id, origin_id).await?;
-        updated_fields.push(format!("origin → `{}`", origin));
+        updated_fields.push(format!("origin → `{origin}`"));
     }
 
     ctx.say(format!(

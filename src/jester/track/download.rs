@@ -41,7 +41,7 @@ pub async fn download_track(
         .arg("cookies.txt")
         .arg(&yt_link)
         .output()
-        .map_err(|e| format!("Failed to execute yt-dlp: {}", e))?;
+        .map_err(|e| format!("Failed to execute yt-dlp: {e}"))?;
 
     if !output.status.success() {
         return Err(format!(

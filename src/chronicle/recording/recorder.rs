@@ -427,7 +427,7 @@ fn recording_path(
     started_at: DateTime<Local>,
 ) -> PathBuf {
     recording_directory(guild_id, session_name, started_at)
-        .join(format!("recording-{}.opus", user_id))
+        .join(format!("recording-{user_id}.opus"))
 }
 
 fn ensure_recording_directory(
@@ -447,8 +447,7 @@ pub async fn notify_recording_user(
         .say(
             http,
             format!(
-                "Recording notice: <@{}>, this voice channel is currently being recorded. Your voice will be included in the recording.",
-                user_id
+                "Recording notice: <@{user_id}>, this voice channel is currently being recorded. Your voice will be included in the recording."
             ),
         )
         .await?;

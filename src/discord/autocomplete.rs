@@ -138,7 +138,7 @@ pub async fn autocomplete_existing_transcript(
 
     let needle = partial.to_lowercase();
 
-    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{}", guild_id));
+    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{guild_id}"));
 
     let entries = match std::fs::read_dir(&recording_dir) {
         Ok(entries) => entries,
@@ -198,7 +198,7 @@ pub async fn autocomplete_recording_session(
 
     let needle = partial.to_lowercase();
 
-    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{}", guild_id));
+    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{guild_id}"));
 
     let entries = match std::fs::read_dir(&recording_dir) {
         Ok(entries) => entries,

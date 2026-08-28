@@ -185,7 +185,7 @@ pub async fn show(
 ) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
 
-    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{}/{}", guild_id, session,));
+    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{guild_id}/{session}"));
 
     let transcript_path = transcript_path(&recording_dir);
 
@@ -221,7 +221,7 @@ pub async fn generate(
 ) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
 
-    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{}/{}", guild_id, session,));
+    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{guild_id}/{session}"));
 
     let manifest = match load_recording_manifest(&recording_dir, guild_id, &session) {
         Ok(manifest) => manifest,
@@ -253,11 +253,10 @@ pub async fn generate(
 
     ctx.defer().await?;
 
-    if transcript_path.is_file() {
-        if !confirm_transcript_regeneration(ctx).await? {
+    if transcript_path.is_file()
+        && !confirm_transcript_regeneration(ctx).await? {
             return Ok(());
         }
-    }
 
     let transcript = generate_transcript(
         &manifest,
@@ -437,7 +436,7 @@ fn format_timestamp(seconds: f64) -> String {
     let seconds = (total_tenths % 600) / 10;
     let tenths = total_tenths % 10;
 
-    format!("{:02}:{:02}:{:02}.{}", hours, minutes, seconds, tenths)
+    format!("{hours:02}:{minutes:02}:{seconds:02}.{tenths}")
 }
 
 fn format_transcript(entries: &[TranscriptEntry]) -> Vec<String> {

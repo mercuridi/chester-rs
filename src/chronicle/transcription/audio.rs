@@ -69,7 +69,7 @@ where
         let mut pcm = [0i16; OPUS_SAMPLE_RATE * 120 / 1000];
         let samples = decoder.decode(data, &mut pcm, false)?;
 
-        decoded.extend(pcm[..samples].iter().map(|&sample| sample as f32 / 32768.0));
+        decoded.extend(pcm[..samples].iter().map(|&sample| f32::from(sample) / 32768.0));
     }
 
     if decoder.is_none() {

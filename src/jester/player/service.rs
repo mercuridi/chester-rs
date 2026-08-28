@@ -40,7 +40,7 @@ impl PlayerService {
         let _ = song_src.raw.spawn_loader();
 
         let track_handle = handler.play_only_input(song_src.into());
-        let _ = track_handle.enable_loop()?;
+        let () = track_handle.enable_loop()?;
 
         let mut state = self.now_playing.write().await;
 

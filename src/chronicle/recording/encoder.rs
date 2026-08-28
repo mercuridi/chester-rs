@@ -134,10 +134,10 @@ fn downmix_stereo_frame(interleaved: &[i16], mono: &mut [i16; MONO_FRAME_SAMPLES
     debug_assert_eq!(interleaved.len(), STEREO_FRAME_SAMPLES);
 
     for (index, pair) in interleaved.chunks_exact(PCM_CHANNELS).enumerate() {
-        let left = pair[0] as i32;
-        let right = pair[1] as i32;
+        let left = i32::from(pair[0]);
+        let right = i32::from(pair[1]);
 
-        mono[index] = ((left + right) / 2) as i16;
+        mono[index] = i32::midpoint(left, right) as i16;
     }
 }
 
@@ -162,7 +162,7 @@ fn write_opus_headers<W: std::io::Write>(
 
     let vendor = b"chronicle";
 
-    let comment = format!("USER_ID={}", user_id);
+    let comment = format!("USER_ID={user_id}");
 
     let mut opus_tags = Vec::new();
 

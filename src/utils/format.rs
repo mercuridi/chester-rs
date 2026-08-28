@@ -8,7 +8,7 @@ pub fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
     let content_max_length =
         AUTOCOMPLETE_MAX_LENGTH - (AUTOCOMPLETE_SEPARATOR_LEN * to_display.len()) + 1;
 
-    let mut lens: Vec<usize> = to_display.iter().map(|n| n.len()).collect();
+    let mut lens: Vec<usize> = to_display.iter().map(std::string::String::len).collect();
     let total_len: usize = lens.iter().sum();
     let mut excess = total_len.saturating_sub(content_max_length);
 

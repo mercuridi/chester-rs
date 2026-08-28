@@ -174,7 +174,7 @@ impl WhisperTranscriber {
 fn load_mel_filters() -> Result<Vec<f32>> {
     let bytes = include_bytes!("melfilters/melfilters128.bytes");
 
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(anyhow!("melfilters.bytes length is not divisible by 4"));
     }
 

@@ -42,7 +42,7 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
         poise::FrameworkError::Setup {
             error: setup_err, ..
         } => {
-            panic!("Failed to start bot: {:?}", setup_err);
+            panic!("Failed to start bot: {setup_err:?}");
         }
         // Log command errors
         poise::FrameworkError::Command {

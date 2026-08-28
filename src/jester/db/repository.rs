@@ -14,26 +14,22 @@ pub async fn get_or_insert_metadata_id(
 ) -> Result<i64, Error> {
     let select_sql = kind.select_sql();
 
-    match sqlx::query_scalar::<_, i64>(select_sql)
+    if let Some(id) = sqlx::query_scalar::<_, i64>(select_sql)
         .bind(value)
         .fetch_optional(db_pool)
         .await
-        .map_err(|e| format!("Database select failed: {}", e))?
-    {
-        Some(id) => Ok(id),
-        None => {
-            sqlx::query(kind.insert_sql())
-                .bind(value)
-                .execute(db_pool)
-                .await
-                .map_err(|e| format!("Database insert failed: {}", e))?;
+        .map_err(|e| format!("Database select failed: {e}"))? { Ok(id) } else {
+        sqlx::query(kind.insert_sql())
+            .bind(value)
+            .execute(db_pool)
+            .await
+            .map_err(|e| format!("Database insert failed: {e}"))?;
 
-            Ok(sqlx::query_scalar::<_, i64>(select_sql)
-                .bind(value)
-                .fetch_one(db_pool)
-                .await
-                .map_err(|e| format!("Database fetch after insert failed: {}", e))?)
-        }
+        Ok(sqlx::query_scalar::<_, i64>(select_sql)
+            .bind(value)
+            .fetch_one(db_pool)
+            .await
+            .map_err(|e| format!("Database fetch after insert failed: {e}"))?)
     }
 }
 
@@ -90,7 +86,7 @@ pub async fn fetch_library_all(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>,
     )
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Database query failed: {}", e))?;
+    .map_err(|e| format!("Database query failed: {e}"))?;
 
     Ok(rows
         .into_iter()
@@ -103,7 +99,7 @@ pub async fn fetch_library_all(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>,
                 row.try_get::<String, _>(2)
                     .unwrap_or_else(|_| "No origin".to_string()),
                 row.try_get::<String, _>(3)
-                    .unwrap_or_else(|_| "".to_string()),
+                    .unwrap_or_else(|_| String::new()),
             ]
         })
         .collect())
@@ -118,7 +114,7 @@ pub async fn fetch_library_by_artist(db_pool: &SqlitePool) -> Result<Vec<Vec<Str
     )
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Database query failed: {}", e))?;
+    .map_err(|e| format!("Database query failed: {e}"))?;
 
     Ok(rows
         .into_iter()
@@ -142,7 +138,7 @@ pub async fn fetch_library_by_origin(db_pool: &SqlitePool) -> Result<Vec<Vec<Str
     )
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Database query failed: {}", e))?;
+    .map_err(|e| format!("Database query failed: {e}"))?;
 
     Ok(rows
         .into_iter()
@@ -170,7 +166,7 @@ pub async fn fetch_library_by_tag(db_pool: &SqlitePool) -> Result<Vec<Vec<String
     )
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Database query failed: {}", e))?;
+    .map_err(|e| format!("Database query failed: {e}"))?;
 
     Ok(rows
         .into_iter()
@@ -197,7 +193,7 @@ pub async fn fetch_library_by_incomplete(db_pool: &SqlitePool) -> Result<Vec<Vec
     )
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Database query failed: {}", e))?;
+    .map_err(|e| format!("Database query failed: {e}"))?;
 
     Ok(rows
         .into_iter()
@@ -262,11 +258,11 @@ pub async fn search_metadata(
     };
 
     sqlx::query_scalar(query)
-        .bind(format!("%{}%", needle))
+        .bind(format!("%{needle}%"))
         .bind(limit)
         .fetch_all(db_pool)
         .await
-        .map_err(|e| format!("Autocomplete metadata query failed: {}", e).into())
+        .map_err(|e| format!("Autocomplete metadata query failed: {e}").into())
 }
 
 pub async fn search_tracks(
@@ -289,11 +285,11 @@ pub async fn search_tracks(
          GROUP BY tracks.id, tracks.track_title, artists.artist, origins.origin
          LIMIT ?2",
     )
-    .bind(format!("%{}%", needle))
+    .bind(format!("%{needle}%"))
     .bind(limit)
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Autocomplete track query failed: {}", e).into())
+    .map_err(|e| format!("Autocomplete track query failed: {e}").into())
 }
 
 pub async fn search_incomplete_tracks(
@@ -317,11 +313,11 @@ pub async fn search_incomplete_tracks(
          GROUP BY tracks.id
          LIMIT ?2",
     )
-    .bind(format!("%{}%", needle))
+    .bind(format!("%{needle}%"))
     .bind(limit)
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Incomplete track search query failed: {}", e).into())
+    .map_err(|e| format!("Incomplete track search query failed: {e}").into())
 }
 
 pub async fn delete_track_tags(db_pool: &SqlitePool, track_id: &VideoId) -> Result<(), Error> {

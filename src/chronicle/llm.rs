@@ -45,7 +45,7 @@ impl Llm {
             tokenizer_repo: config.llm_tokenizer_repo.clone(),
             tokenizer_file: config.llm_tokenizer_file.clone(),
             max_tokens: config.llm_max_tokens as usize,
-            temperature: config.llm_temperature as f64,
+            temperature: f64::from(config.llm_temperature),
             seed: config.llm_seed,
             system_prompt: config.llm_system_prompt.clone(),
         }

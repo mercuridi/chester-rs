@@ -32,7 +32,7 @@ impl WhisperTranscriber {
             }
 
             if self.is_timestamp_token(token) {
-                let timestamp = (token - self.no_timestamps_token + 1) as f64 * 0.02;
+                let timestamp = f64::from(token - self.no_timestamps_token + 1) * 0.02;
 
                 if let Some(start) = start_timestamp {
                     if !text_tokens.is_empty() {

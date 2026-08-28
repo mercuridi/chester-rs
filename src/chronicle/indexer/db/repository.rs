@@ -71,11 +71,11 @@ impl IndexerDb {
 
     pub async fn all_documents(&self) -> Result<Vec<IndexedDocument>> {
         let rows = sqlx::query(
-            r#"
+            r"
             SELECT id, path, content_hash
             FROM documents
             ORDER BY path
-            "#,
+            ",
         )
         .fetch_all(&self.pool)
         .await
@@ -95,14 +95,14 @@ impl IndexerDb {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            r#"
+            r"
             DELETE FROM chunk_embeddings
             WHERE rowid IN (
                 SELECT id
                 FROM chunks
                 WHERE document_id = ?
             )
-            "#,
+            ",
         )
         .bind(document_id)
         .execute(&mut *tx)
@@ -142,7 +142,7 @@ impl IndexerDb {
         let indexed_at = Utc::now().to_rfc3339();
 
         let document_id: i64 = sqlx::query_scalar(
-            r#"
+            r"
             INSERT INTO documents (
                 path,
                 content_hash,
@@ -153,7 +153,7 @@ impl IndexerDb {
                 content_hash = excluded.content_hash,
                 indexed_at = excluded.indexed_at
             RETURNING id
-            "#,
+            ",
         )
         .bind(path)
         .bind(content_hash)
@@ -163,14 +163,14 @@ impl IndexerDb {
         .context("Failed to upsert indexed document")?;
 
         sqlx::query(
-            r#"
+            r"
             DELETE FROM chunk_embeddings
             WHERE rowid IN (
                 SELECT id
                 FROM chunks
                 WHERE document_id = ?
             )
-            "#,
+            ",
         )
         .bind(document_id)
         .execute(&mut *tx)
@@ -185,7 +185,7 @@ impl IndexerDb {
 
         for (chunk, embedding) in chunks.iter().zip(embeddings) {
             let chunk_id: i64 = sqlx::query_scalar(
-                r#"
+                r"
                 INSERT INTO chunks (
                     document_id,
                     chunk_index,
@@ -194,7 +194,7 @@ impl IndexerDb {
                 )
                 VALUES (?, ?, ?, ?)
                 RETURNING id
-                "#,
+                ",
             )
             .bind(document_id)
             .bind(chunk.chunk_index)
@@ -208,13 +208,13 @@ impl IndexerDb {
                 serde_json::to_string(embedding).context("Failed to serialise embedding")?;
 
             sqlx::query(
-                r#"
+                r"
                 INSERT INTO chunk_embeddings (
                     rowid,
                     embedding
                 )
                 VALUES (?, ?)
-                "#,
+                ",
             )
             .bind(chunk_id)
             .bind(embedding_json)
@@ -251,7 +251,7 @@ impl IndexerDb {
             serde_json::to_string(embedding).context("Failed to serialise query embedding")?;
 
         let rows = sqlx::query(
-            r#"
+            r"
             SELECT
                 d.path,
                 c.chunk_index,
@@ -264,7 +264,7 @@ impl IndexerDb {
             WHERE ce.embedding MATCH ?
             AND k = ?
             ORDER BY ce.distance
-            "#,
+            ",
         )
         .bind(embedding_json)
         .bind(limit as i64)
