@@ -93,25 +93,44 @@ impl Embedder {
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        let encoding = self
+        self.embed_batch(&[text])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("Embedding batch returned no embeddings"))
+    }
+
+    pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let encodings = self
             .tokenizer
-            .encode(text, true)
-            .map_err(|error| anyhow!("Failed to tokenize text: {error}"))?;
+            .encode_batch(texts.to_vec(), true)
+            .map_err(|error| anyhow!("Failed to tokenize embedding batch: {error}"))?;
 
-        let input_ids = Tensor::new(encoding.get_ids(), &self.device)
-            .context("Failed to create input ID tensor")?
-            .unsqueeze(0)
-            .context("Failed to add batch dimension to input IDs")?;
+        let input_ids = encodings
+            .iter()
+            .map(|encoding| Tensor::new(encoding.get_ids(), &self.device))
+            .collect::<candle_core::Result<Vec<_>>>()
+            .context("Failed to create input ID tensors")?;
+        let input_ids = Tensor::stack(&input_ids, 0).context("Failed to stack input ID tensors")?;
 
-        let token_type_ids = Tensor::new(encoding.get_type_ids(), &self.device)
-            .context("Failed to create token type ID tensor")?
-            .unsqueeze(0)
-            .context("Failed to add batch dimension to token type IDs")?;
+        let token_type_ids = encodings
+            .iter()
+            .map(|encoding| Tensor::new(encoding.get_type_ids(), &self.device))
+            .collect::<candle_core::Result<Vec<_>>>()
+            .context("Failed to create token type ID tensors")?;
+        let token_type_ids =
+            Tensor::stack(&token_type_ids, 0).context("Failed to stack token type ID tensors")?;
 
-        let attention_mask = Tensor::new(encoding.get_attention_mask(), &self.device)
-            .context("Failed to create attention mask tensor")?
-            .unsqueeze(0)
-            .context("Failed to add batch dimension to attention mask")?;
+        let attention_masks = encodings
+            .iter()
+            .map(|encoding| Tensor::new(encoding.get_attention_mask(), &self.device))
+            .collect::<candle_core::Result<Vec<_>>>()
+            .context("Failed to create attention mask tensors")?;
+        let attention_mask =
+            Tensor::stack(&attention_masks, 0).context("Failed to stack attention mask tensors")?;
 
         let hidden_states = self
             .model
@@ -119,38 +138,42 @@ impl Embedder {
             .context("BGE forward pass failed")?;
 
         // BGE-small-en-v1.5 uses CLS pooling.
-        let embedding = hidden_states
-            .i((0, 0))
-            .context("Failed to extract CLS embedding")?;
+        let embeddings = hidden_states
+            .i((.., 0))
+            .context("Failed to extract CLS embeddings")?;
 
-        Self::normalize(&embedding)
+        Self::normalize_batch(&embeddings)
     }
 
-    fn normalize(embedding: &Tensor) -> Result<Vec<f32>> {
-        let norm = embedding
+    fn normalize_batch(embeddings: &Tensor) -> Result<Vec<Vec<f32>>> {
+        let norms = embeddings
             .sqr()
-            .context("Failed to square embedding")?
-            .sum_all()
-            .context("Failed to calculate embedding norm")?
+            .context("Failed to square embeddings")?
+            .sum(1)
+            .context("Failed to calculate embedding norms")?
             .sqrt()
-            .context("Failed to calculate embedding norm")?;
+            .context("Failed to calculate embedding norms")?
+            .unsqueeze(1)
+            .context("Failed to add embedding norm dimension")?;
 
-        let embedding = embedding
-            .broadcast_div(&norm)
-            .context("Failed to normalize embedding")?;
+        let embeddings = embeddings
+            .broadcast_div(&norms)
+            .context("Failed to normalize embeddings")?;
 
-        let embedding = embedding
-            .to_vec1::<f32>()
-            .context("Failed to copy embedding from device")?;
+        let embeddings = embeddings
+            .to_vec2::<f32>()
+            .context("Failed to copy embeddings from device")?;
 
-        if embedding.len() != EMBEDDING_DIMENSIONS {
-            return Err(anyhow!(
-                "Expected embedding dimension {}, got {}",
-                EMBEDDING_DIMENSIONS,
-                embedding.len()
-            ));
+        for embedding in &embeddings {
+            if embedding.len() != EMBEDDING_DIMENSIONS {
+                return Err(anyhow!(
+                    "Expected embedding dimension {}, got {}",
+                    EMBEDDING_DIMENSIONS,
+                    embedding.len()
+                ));
+            }
         }
 
-        Ok(embedding)
+        Ok(embeddings)
     }
 }
