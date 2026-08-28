@@ -48,6 +48,18 @@ impl GpuRuntime {
         Ok(())
     }
 
+    pub fn is_llm_loaded(&self) -> Result<bool> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("GPU runtime state is poisoned"))?;
+
+        Ok(matches!(
+            *state,
+            RuntimeState::LlmLoaded | RuntimeState::Inference
+        ))
+    }
+
     /// Acquire exclusive GPU access for an LLM inference.
     pub fn acquire_inference(&self) -> Result<GpuLease> {
         self.acquire(

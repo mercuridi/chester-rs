@@ -10,6 +10,45 @@ use crate::{
 
 #[poise::command(
     slash_command,
+    subcommands("chronicle_start", "ask", "chronicle_stop"),
+    subcommand_required,
+)]
+pub async fn chronicle(_ctx: PoiseContext<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "start")]
+pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    match ctx.data().chronicle.start_llm() {
+        Ok(()) => {
+            ctx.say("Chronicle LLM is ready.").await?;
+        }
+        Err(_error) if ctx.data().chronicle.is_llm_loaded()? => {
+            ctx.say("Chronicle LLM is already loaded.").await?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "stop")]
+pub async fn chronicle_stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    match ctx.data().chronicle.stop_llm() {
+        Ok(()) => {
+            ctx.say("Chronicle LLM unloaded.").await?;
+        }
+        Err(_error) if ctx.data().chronicle.is_llm_loaded()? => {
+            ctx.say("Chronicle LLM cannot be unloaded while an operation is running.").await?;
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    Ok(())
+}
+
+#[poise::command(
+    slash_command,
     subcommands("start", "stop"),
     subcommand_required,
 )]

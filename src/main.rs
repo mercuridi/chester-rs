@@ -134,7 +134,7 @@ async fn main() -> Result<(), Error> {
         discord::commands::library::library(),
         discord::commands::chronicle::recording(),
         discord::commands::chronicle::transcript(),
-        discord::commands::chronicle::ask(),
+        discord::commands::chronicle::chronicle(),
     ];
 
     let poise_options = poise::FrameworkOptions {

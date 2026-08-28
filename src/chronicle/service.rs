@@ -35,6 +35,8 @@ impl Chronicle {
     }
 
     pub async fn ask(&self, question: &str) -> Result<String> {
+        let _gpu_lease = self.runtime.acquire_inference()?;
+
         let results = self.retriever.search(question, self.retrieval_limit).await?;
 
         let prompt = prompt::build_prompt(question, &results);
@@ -44,5 +46,17 @@ impl Chronicle {
 
     pub fn runtime(&self) -> GpuRuntime {
         self.runtime.clone()
+    }
+
+    pub fn start_llm(&self) -> Result<()> {
+        self.runtime.set_llm_loaded(true)
+    }
+
+    pub fn stop_llm(&self) -> Result<()> {
+        self.runtime.set_llm_loaded(false)
+    }
+
+    pub fn is_llm_loaded(&self) -> Result<bool> {
+        self.runtime.is_llm_loaded()
     }
 }
