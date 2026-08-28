@@ -32,9 +32,11 @@ impl WhisperTranscriber {
             if i == 0 {
                 let logits = self.model.decoder_final_linear(&ys.i(..1)?)?.i(0)?.i(0)?;
 
-                no_speech_prob = f64::from(softmax(&logits, 0)?
-                    .i(self.no_speech_token as usize)?
-                    .to_scalar::<f32>()?);
+                no_speech_prob = f64::from(
+                    softmax(&logits, 0)?
+                        .i(self.no_speech_token as usize)?
+                        .to_scalar::<f32>()?,
+                );
             }
 
             let (_, seq_len, _) = ys.dims3()?;
@@ -51,11 +53,11 @@ impl WhisperTranscriber {
 
             let next_token = u32::try_from(
                 logits_vec
-                .iter()
-                .enumerate()
-                .max_by(|(_, a), (_, b)| a.total_cmp(b))
-                .map(|(index, _)| index)
-                .ok_or_else(|| anyhow!("Whisper produced no logits"))?,
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                    .map(|(index, _)| index)
+                    .ok_or_else(|| anyhow!("Whisper produced no logits"))?,
             )?;
 
             let probability = softmax(&logits, 0)?

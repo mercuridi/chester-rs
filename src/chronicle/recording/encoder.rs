@@ -111,7 +111,6 @@ pub fn run_encoder(
             Err(oneshot::error::TryRecvError::Empty) => {
                 std::thread::yield_now();
             }
-
         }
     }
 
@@ -162,7 +161,10 @@ fn write_opus_headers<W: std::io::Write>(
 
     opus_tags.extend_from_slice(b"OpusTags");
     let vendor_len = u32::try_from(vendor.len()).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Opus vendor string is too long")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Opus vendor string is too long",
+        )
     })?;
     opus_tags.extend_from_slice(&vendor_len.to_le_bytes());
     opus_tags.extend_from_slice(vendor);

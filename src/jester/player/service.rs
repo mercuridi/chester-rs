@@ -33,9 +33,7 @@ impl PlayerService {
         let track_path = format!("audio/{}.mp3", track_info.id.as_str());
 
         let song_src =
-            Compressed::new(SongbirdFile::new(track_path).into(), Bitrate::Bits(128_000))
-                .await
-                ?;
+            Compressed::new(SongbirdFile::new(track_path).into(), Bitrate::Bits(128_000)).await?;
 
         let _ = song_src.raw.spawn_loader();
 

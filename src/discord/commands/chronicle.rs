@@ -256,10 +256,9 @@ pub async fn generate(
 
     ctx.defer().await?;
 
-    if transcript_path.is_file()
-        && !confirm_transcript_regeneration(ctx).await? {
-            return Ok(());
-        }
+    if transcript_path.is_file() && !confirm_transcript_regeneration(ctx).await? {
+        return Ok(());
+    }
 
     let transcript = generate_transcript(
         &manifest,
@@ -419,7 +418,9 @@ fn build_transcript_entries(
             let alias = alias_group
                 .aliases
                 .get(&segment.user_id)
-                .ok_or_else(|| anyhow::anyhow!("No alias configured for participant {}", segment.user_id))?
+                .ok_or_else(|| {
+                    anyhow::anyhow!("No alias configured for participant {}", segment.user_id)
+                })?
                 .clone();
 
             Ok(TranscriptEntry {

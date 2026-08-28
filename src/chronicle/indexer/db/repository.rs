@@ -294,6 +294,8 @@ fn register_sqlite_vec() {
                 *mut *mut i8,
                 *const libsqlite3_sys::sqlite3_api_routines,
             ) -> i32,
-        >(sqlite_vec::sqlite3_vec_init as *const ())));
+        >(
+            sqlite_vec::sqlite3_vec_init as *const ()
+        )));
     }
 }

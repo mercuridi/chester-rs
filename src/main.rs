@@ -126,9 +126,7 @@ async fn main() -> Result<(), Error> {
         .add_directive("chester_rs=debug".parse()?)
         .add_directive("warn".parse()?);
 
-    tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     dotenv().ok();
     // Initialize the SQLite connection pool

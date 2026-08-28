@@ -15,11 +15,7 @@ pub fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
     // truncate each as needed
     while excess > 0 {
         // pick the index of the longest field
-        let Some((max_idx, &max_len)) = lens
-            .iter()
-            .enumerate()
-            .max_by_key(|&(_, &l)| l)
-        else {
+        let Some((max_idx, &max_len)) = lens.iter().enumerate().max_by_key(|&(_, &l)| l) else {
             break;
         };
 

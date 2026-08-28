@@ -18,7 +18,10 @@ pub async fn get_or_insert_metadata_id(
         .bind(value)
         .fetch_optional(db_pool)
         .await
-        .map_err(|e| format!("Database select failed: {e}"))? { Ok(id) } else {
+        .map_err(|e| format!("Database select failed: {e}"))?
+    {
+        Ok(id)
+    } else {
         sqlx::query(kind.insert_sql())
             .bind(value)
             .execute(db_pool)

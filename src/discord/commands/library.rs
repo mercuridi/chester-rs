@@ -116,10 +116,7 @@ fn format_flat(rows: Vec<Vec<String>>) -> Vec<String> {
         .map(|(i, cols)| {
             // cols: [title, artist, origin, tags?]  or  [title, artist, origin]
             let num = format!("{:>width$}.", i + 1, width = num_width);
-            let title = trunc(
-                cols.first().map_or("—", String::as_str),
-                TITLE_MAX_CHARS,
-            );
+            let title = trunc(cols.first().map_or("—", String::as_str), TITLE_MAX_CHARS);
             let meta_parts: Vec<&str> = cols[1..].iter().map(String::as_str).collect();
             let meta = meta_line(&meta_parts);
             let indent = " ".repeat(num_width + 2 + 2); // lines up under the title plus two more spaces for visual separation
@@ -151,10 +148,7 @@ fn format_grouped(rows: Vec<Vec<String>>) -> Vec<String> {
 
     for cols in rows {
         let key = cols.first().map_or("—", String::as_str);
-        let title = trunc(
-            cols.get(1).map_or("—", String::as_str),
-            TITLE_MAX_CHARS,
-        );
+        let title = trunc(cols.get(1).map_or("—", String::as_str), TITLE_MAX_CHARS);
 
         if key != last_key {
             // Blank line before every group except the very first

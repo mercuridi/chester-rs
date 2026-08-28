@@ -44,14 +44,13 @@ async fn autocomplete_metadata(
     let needle = partial.to_lowercase();
     let db_pool = &ctx.data().db_pool;
 
-    let results =
-        match search_metadata(db_pool, kind, &needle, autocomplete_limit()).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("Autocomplete metadata query failed: {}", e);
-                return vec![].into_iter();
-            }
-        };
+    let results = match search_metadata(db_pool, kind, &needle, autocomplete_limit()).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Autocomplete metadata query failed: {}", e);
+            return vec![].into_iter();
+        }
+    };
 
     let mut choices: Vec<String> = results
         .into_iter()
@@ -101,14 +100,13 @@ pub async fn autocomplete_incomplete_track(
     let needle = partial.to_lowercase();
     let db_pool = &ctx.data().db_pool;
 
-    let results =
-        match search_incomplete_tracks(db_pool, &needle, autocomplete_limit()).await {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("Incomplete track autocomplete query failed: {}", e);
-                return vec![].into_iter();
-            }
-        };
+    let results = match search_incomplete_tracks(db_pool, &needle, autocomplete_limit()).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("Incomplete track autocomplete query failed: {}", e);
+            return vec![].into_iter();
+        }
+    };
 
     let mut choices: Vec<(String, String)> = results
         .into_iter()
