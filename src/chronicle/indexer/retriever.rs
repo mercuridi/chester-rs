@@ -79,12 +79,11 @@ impl Retriever {
             .search_similar(&embedding, limit)
             .await
             .context("Failed to search index")
-            .map(|results| {
+            .inspect(|results| {
                 debug!(
                     result_count = results.len(),
                     "Completed Chronicle retrieval"
                 );
-                results
             })
     }
 }
