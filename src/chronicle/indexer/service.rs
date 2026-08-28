@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use tokenizers::Encoding;
 
 use crate::chronicle::indexer::document::Document;
 
@@ -102,38 +103,68 @@ impl Indexer {
         pending: &mut [(Document, String, bool)],
         stats: &mut IndexStats,
     ) -> Result<()> {
-        let chunks = pending
+        let mut chunks = pending
             .iter()
             .enumerate()
             .flat_map(|(document_index, (document, _, _))| {
                 chunker::chunk(document, self.max_chunk_length)
                     .into_iter()
                     .enumerate()
-                    .map(move |(chunk_index, chunk)| (document_index, chunk_index, chunk))
-            })
-            .collect::<Vec<_>>();
+                    .map(move |(chunk_index, chunk)| {
+                        let encoding = self
+                            .embedder
+                            .encode(&chunk.content)
+                            .with_context(|| format!("Failed to tokenize chunk {chunk_index}"))?;
 
-        let mut embeddings = vec![Vec::new(); pending.len()];
+                        Ok((document_index, chunk_index, chunk, encoding))
+                    })
+            })
+            .collect::<Result<Vec<(usize, usize, _, Encoding)>>>()?;
+
+        chunks.sort_by_key(|(_, _, _, encoding)| encoding.len());
+
+        let mut embeddings = pending
+            .iter()
+            .map(|(document, _, _)| {
+                vec![None; chunker::chunk(document, self.max_chunk_length).len()]
+            })
+            .collect::<Vec<Vec<Option<Vec<f32>>>>>();
         for batch in chunks.chunks(EMBEDDING_BATCH_SIZE) {
-            let texts = batch
+            let encodings = batch
                 .iter()
-                .map(|(_, _, chunk)| chunk.content.as_str())
+                .map(|(_, _, _, encoding)| encoding.clone())
                 .collect::<Vec<_>>();
             let batch_embeddings = self
                 .embedder
-                .embed_batch(&texts)
+                .embed_encodings(&encodings)
                 .context("Failed to embed chunk batch")?;
 
-            for ((document_index, chunk_index, _), embedding) in batch.iter().zip(batch_embeddings)
+            for ((document_index, chunk_index, _, _), embedding) in
+                batch.iter().zip(batch_embeddings)
             {
-                if embeddings[*document_index].len() != *chunk_index {
-                    anyhow::bail!("Embedding batch returned chunks out of order");
+                let slot = embeddings
+                    .get_mut(*document_index)
+                    .and_then(|document_embeddings| document_embeddings.get_mut(*chunk_index))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Embedding batch returned an invalid chunk index")
+                    })?;
+                if slot.is_some() {
+                    anyhow::bail!("Embedding batch returned a duplicate chunk index");
                 }
-                embeddings[*document_index].push(embedding);
+                *slot = Some(embedding);
             }
         }
 
         for ((document, path, updated), document_embeddings) in pending.iter().zip(embeddings) {
+            let document_embeddings = document_embeddings
+                .into_iter()
+                .enumerate()
+                .map(|(chunk_index, embedding)| {
+                    embedding.ok_or_else(|| {
+                        anyhow::anyhow!("Missing embedding for chunk {chunk_index} of {path}")
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
             self.index_document(document, path, &document_embeddings)
                 .await?;
             if *updated {

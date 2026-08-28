@@ -7,7 +7,7 @@ use candle_core::{Device, IndexOp, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{self, BertModel, Config};
 use hf_hub::{Repo, RepoType, api::sync::Api};
-use tokenizers::{PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
+use tokenizers::{Encoding, PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
 const MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 
@@ -17,6 +17,7 @@ const MAX_SEQUENCE_LENGTH: usize = 512;
 pub struct Embedder {
     model: BertModel,
     tokenizer: Tokenizer,
+    padding: PaddingParams,
     device: Device,
 }
 
@@ -67,10 +68,10 @@ impl Embedder {
             }))
             .map_err(|error| anyhow!("Failed to configure tokenizer truncation: {error}"))?;
 
-        tokenizer.with_padding(Some(PaddingParams {
+        let padding = PaddingParams {
             strategy: PaddingStrategy::BatchLongest,
             ..Default::default()
-        }));
+        };
 
         let weights = unsafe {
             VarBuilder::from_mmaped_safetensors(
@@ -88,35 +89,54 @@ impl Embedder {
         Ok(Self {
             model,
             tokenizer,
+            padding,
             device,
         })
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
-        self.embed_batch(&[text])?
+        let encoding = self.encode(text)?;
+        self.embed_encodings(std::slice::from_ref(&encoding))?
             .into_iter()
             .next()
             .ok_or_else(|| anyhow!("Embedding batch returned no embeddings"))
     }
 
-    pub fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-        if texts.is_empty() {
+    pub fn encode(&self, text: &str) -> Result<Encoding> {
+        self.tokenizer
+            .encode(text, true)
+            .map_err(|error| anyhow!("Failed to tokenize text: {error}"))
+    }
+
+    pub fn embed_encodings(&self, encodings: &[Encoding]) -> Result<Vec<Vec<f32>>> {
+        if encodings.is_empty() {
             return Ok(Vec::new());
         }
 
-        let encodings = self
-            .tokenizer
-            .encode_batch(texts.to_vec(), true)
-            .map_err(|error| anyhow!("Failed to tokenize embedding batch: {error}"))?;
+        let target_length = encodings
+            .iter()
+            .map(Encoding::len)
+            .max()
+            .ok_or_else(|| anyhow!("Embedding batch returned no encodings"))?;
+        let mut padded_encodings = encodings.to_vec();
+        for encoding in &mut padded_encodings {
+            encoding.pad(
+                target_length,
+                self.padding.pad_id,
+                self.padding.pad_type_id,
+                &self.padding.pad_token,
+                self.padding.direction,
+            );
+        }
 
-        let input_ids = encodings
+        let input_ids = padded_encodings
             .iter()
             .map(|encoding| Tensor::new(encoding.get_ids(), &self.device))
             .collect::<candle_core::Result<Vec<_>>>()
             .context("Failed to create input ID tensors")?;
         let input_ids = Tensor::stack(&input_ids, 0).context("Failed to stack input ID tensors")?;
 
-        let token_type_ids = encodings
+        let token_type_ids = padded_encodings
             .iter()
             .map(|encoding| Tensor::new(encoding.get_type_ids(), &self.device))
             .collect::<candle_core::Result<Vec<_>>>()
@@ -124,7 +144,7 @@ impl Embedder {
         let token_type_ids =
             Tensor::stack(&token_type_ids, 0).context("Failed to stack token type ID tensors")?;
 
-        let attention_masks = encodings
+        let attention_masks = padded_encodings
             .iter()
             .map(|encoding| Tensor::new(encoding.get_attention_mask(), &self.device))
             .collect::<candle_core::Result<Vec<_>>>()
