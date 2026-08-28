@@ -22,10 +22,10 @@ pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
     ctx.defer().await?;
     match ctx.data().chronicle.start_llm().await {
         Ok(()) => {
-            ctx.say("Chronicle LLM is ready.").await?;
+            ctx.say("Chronicle is ready.").await?;
         }
         Err(_error) if ctx.data().chronicle.is_llm_loaded()? => {
-            ctx.say("Chronicle LLM is already loaded.").await?;
+            ctx.say("Chronicle is already ready.").await?;
         }
         Err(error) => return Err(error.into()),
     }
@@ -37,7 +37,7 @@ pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
 pub async fn chronicle_stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
     match ctx.data().chronicle.stop_llm().await {
         Ok(()) => {
-            ctx.say("Chronicle LLM unloaded.").await?;
+            ctx.say("Chronicle stopped.").await?;
         }
         Err(_error) if ctx.data().chronicle.is_llm_loaded()? => {
             ctx.say("Chronicle LLM cannot be unloaded while an operation is running.").await?;

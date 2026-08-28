@@ -87,7 +87,10 @@ async fn main() -> Result<(), Error> {
         "Chronicle index complete"
     );
 
-    let (index_db, embedder) = indexer.into_parts();
+    let index_db = {
+        let (index_db, _embedder) = indexer.into_parts();
+        index_db
+    };
 
     let runtime = GpuRuntime::new();
 
@@ -95,7 +98,6 @@ async fn main() -> Result<(), Error> {
 
     let chronicle = Chronicle::new(
         index_db,
-        embedder,
         llm,
         runtime.clone(),
         config.chronicle.retrieval_limit,
