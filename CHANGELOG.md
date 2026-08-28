@@ -1,6 +1,15 @@
 # Changelog
 
-## [2.2.0] — 2026-08-28
+## [2.2.1] — 2026-08-28
+
+### Bug Fixes
+
+- Cargo fmt run on codebase
+- Clear compiler dead code warnings with expects
+- Cargo clippy autofixes
+- Full clippy code quality pass with 0 remaining warnings
+
+## [v2.2.0] — 2026-08-28
 
 ### Features
 
