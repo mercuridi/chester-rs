@@ -9,7 +9,7 @@ use std::path::PathBuf;
 ////////////////////////////////////////////////////////////////////////////////
 use dotenv::dotenv;
 /// Imports
-use poise::serenity_prelude::{ClientBuilder, GatewayIntents};
+use poise::serenity_prelude::{ClientBuilder, Context as SerenityContext, GatewayIntents};
 use serenity::client::FullEvent;
 use songbird::{
     Config as SongbirdConfig, SerenityInit,
@@ -122,6 +122,96 @@ fn build_commands() -> Vec<poise::Command<Data, Error>> {
     ]
 }
 
+fn handle_event<'a>(
+    ctx: &'a SerenityContext,
+    event: &'a FullEvent,
+    _framework: poise::FrameworkContext<'a, Data, Error>,
+    data: &'a Data,
+) -> poise::BoxFuture<'a, Result<(), Error>> {
+    Box::pin(async move {
+        if let FullEvent::VoiceStateUpdate { old, new } = event {
+            let Some(guild_id) = new.guild_id else {
+                return Ok(());
+            };
+
+            let Some(recorder) = data.recorder.get(guild_id).await else {
+                return Ok(());
+            };
+
+            let Some((voice_channel_id, notification_channel_id, initiator)) =
+                recorder.recording_info().await
+            else {
+                return Ok(());
+            };
+
+            let user_id = new.user_id;
+            tracing::debug!(
+                ?guild_id,
+                ?user_id,
+                ?old,
+                ?new,
+                "Received voice state update"
+            );
+
+            // The initiator is deliberately excluded from notifications.
+            if user_id == initiator {
+                return Ok(());
+            }
+
+            // Only notify when the user enters the recording channel.
+            if new.channel_id != Some(voice_channel_id)
+                || old.as_ref().and_then(|state| state.channel_id) == Some(voice_channel_id)
+            {
+                return Ok(());
+            }
+
+            notify_recording_user(&ctx.http, notification_channel_id, user_id).await?;
+            tracing::info!(?guild_id, ?user_id, "Notified user about active recording");
+        }
+
+        Ok(())
+    })
+}
+
+fn build_framework(
+    pool: SqlitePool,
+    config: Config,
+    chronicle: Chronicle,
+    poise_commands: Vec<poise::Command<Data, Error>>,
+) -> poise::Framework<Data, Error> {
+    let poise_options = poise::FrameworkOptions {
+        commands: poise_commands,
+        prefix_options: poise::PrefixFrameworkOptions {
+            prefix: Some(">".into()),
+            ..Default::default()
+        },
+        on_error: |error| Box::pin(on_error(error)),
+        pre_command: |ctx| {
+            Box::pin(async move {
+                tracing::debug!("Executing command {}...", ctx.command().qualified_name);
+            })
+        },
+        post_command: |ctx| {
+            Box::pin(async move {
+                tracing::debug!(
+                    "Successfully executed command {}",
+                    ctx.command().qualified_name
+                );
+            })
+        },
+        skip_checks_for_owners: true,
+        event_handler: handle_event,
+        ..Default::default()
+    };
+
+    poise::Framework::builder()
+        .options(poise_options)
+        .setup(|_ctx, _ready, _framework| {
+            Box::pin(async move { Ok(Data::new(pool, config, chronicle)) })
+        })
+        .build()
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     dotenv().ok();
@@ -169,99 +259,7 @@ async fn main() -> Result<(), Error> {
         "Registering bot commands"
     );
 
-    let poise_options = poise::FrameworkOptions {
-        commands: poise_commands,
-        prefix_options: poise::PrefixFrameworkOptions {
-            prefix: Some(">".into()),
-            ..Default::default()
-        },
-        // The global error handler for all error cases that may occur
-        on_error: |error| Box::pin(on_error(error)),
-        // This code is run before every command
-        pre_command: |ctx| {
-            Box::pin(async move {
-                tracing::debug!("Executing command {}...", ctx.command().qualified_name);
-            })
-        },
-        // This code is run after a command if it was successful (returned Ok)
-        post_command: |ctx| {
-            Box::pin(async move {
-                tracing::debug!(
-                    "Successfully executed command {}",
-                    ctx.command().qualified_name
-                );
-            })
-        },
-        skip_checks_for_owners: true,
-        event_handler: |ctx, event, _framework, data| {
-            Box::pin(async move {
-                if let FullEvent::VoiceStateUpdate { old, new } = event {
-                    let Some(guild_id) = new.guild_id else {
-                        return Ok(());
-                    };
-
-                    let Some(recorder) = data.recorder.get(guild_id).await else {
-                        return Ok(());
-                    };
-
-                    let Some((voice_channel_id, notification_channel_id, initiator)) =
-                        recorder.recording_info().await
-                    else {
-                        return Ok(());
-                    };
-
-                    let user_id = new.user_id;
-                    tracing::debug!(
-                        ?guild_id,
-                        ?user_id,
-                        ?old,
-                        ?new,
-                        "Received voice state update"
-                    );
-
-                    // The initiator is deliberately excluded from notifications.
-                    if user_id == initiator {
-                        return Ok(());
-                    }
-
-                    // Only notify when the user enters the recording channel.
-                    //
-                    // This covers:
-                    //   None -> recording channel
-                    //   other VC -> recording channel
-                    //
-                    // It excludes:
-                    //   recording channel -> same channel
-                    //   recording channel -> other VC
-                    //   recording channel -> None
-                    if new.channel_id != Some(voice_channel_id) {
-                        return Ok(());
-                    }
-
-                    if old.as_ref().and_then(|state| state.channel_id) == Some(voice_channel_id) {
-                        return Ok(());
-                    }
-
-                    notify_recording_user(&ctx.http, notification_channel_id, user_id).await?;
-                    tracing::info!(?guild_id, ?user_id, "Notified user about active recording");
-                }
-
-                Ok(())
-            })
-        },
-        ..Default::default()
-    };
-
-    // 1) Build your Poise framework
-    let framework = poise::Framework::builder()
-        .options(poise_options)
-        .setup(|_ctx, _ready, _framework| {
-            Box::pin(async move {
-                // poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data::new(pool, config, chronicle))
-            })
-        })
-        .build();
+    let framework = build_framework(pool, config, chronicle, poise_commands);
 
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
 
