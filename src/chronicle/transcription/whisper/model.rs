@@ -108,7 +108,8 @@ impl WhisperTranscriber {
 
         let no_timestamps_token = token_id(&tokenizer, m::NO_TIMESTAMPS_TOKEN)?;
 
-        let suppress_tokens: Vec<f32> = (0..model.config().vocab_size as u32)
+        let vocab_size = u32::try_from(model.config().vocab_size)?;
+        let suppress_tokens: Vec<f32> = (0..vocab_size)
             .map(|token| {
                 if model.config().suppress_tokens.contains(&token) || token == no_timestamps_token {
                     f32::NEG_INFINITY

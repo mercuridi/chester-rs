@@ -35,7 +35,7 @@ impl PlayerService {
         let song_src =
             Compressed::new(SongbirdFile::new(track_path).into(), Bitrate::Bits(128_000))
                 .await
-                .expect("An error occurred constructing the track source");
+                ?;
 
         let _ = song_src.raw.spawn_loader();
 

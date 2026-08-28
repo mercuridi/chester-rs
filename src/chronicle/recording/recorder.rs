@@ -214,28 +214,27 @@ impl Recorder {
     }
 
     fn initiate_user_recording(
-        &self,
         guild_id: GuildId,
         user_id: UserId,
         started_at: DateTime<Local>,
-        session_name: String,
+        session_name: &str,
         initial_silence_ticks: u64,
-    ) -> Result<UserRecording, Error> {
+    ) -> UserRecording {
         let (producer, consumer) = RingBuffer::<i16>::new(RING_BUFFER_CAPACITY);
 
         let (stop_tx, stop_rx) = oneshot::channel();
 
-        let path = recording_path(guild_id, user_id, &session_name, started_at);
+        let path = recording_path(guild_id, user_id, session_name, started_at);
 
         let encoder = tokio::task::spawn_blocking(move || {
-            run_encoder(user_id, path, consumer, stop_rx, initial_silence_ticks)
+            run_encoder(user_id, &path, consumer, stop_rx, initial_silence_ticks)
         });
 
-        Ok(UserRecording {
+        UserRecording {
             producer,
             stop_tx,
             encoder,
-        })
+        }
     }
 
     pub async fn attach_to_call(&self, call: &Arc<Mutex<Call>>) -> Result<(), Error> {
@@ -318,9 +317,7 @@ impl EventHandler for Recorder {
 
                 let mut recording = self.recording_session.lock().await;
 
-                let Some(session) = recording.as_mut() else {
-                    return None;
-                };
+                let session = recording.as_mut()?;
 
                 // Create recordings for users who have just started speaking.
                 for &user_id in tick_audio.keys() {
@@ -328,25 +325,13 @@ impl EventHandler for Recorder {
                         continue;
                     }
 
-                    let user_recording = match self.initiate_user_recording(
+                    let user_recording = Self::initiate_user_recording(
                         session.guild_id,
                         user_id,
                         session.started_at,
-                        session.session_name.clone(),
+                        &session.session_name,
                         session.tick,
-                    ) {
-                        Ok(recording) => recording,
-
-                        Err(error) => {
-                            tracing::error!(
-                                %error,
-                                ?user_id,
-                                "Failed to create user recording"
-                            );
-
-                            continue;
-                        }
-                    };
+                    );
 
                     session.users.insert(user_id, user_recording);
                 }

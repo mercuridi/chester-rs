@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 
 use crate::discord::context::{Error, PoiseContext};
 
-pub async fn get_vc_id(ctx: PoiseContext<'_>) -> Result<ChannelId, Error> {
+pub fn get_vc_id(ctx: PoiseContext<'_>) -> Result<ChannelId, Error> {
     let guild_id = require_guild(ctx)?;
 
     let voice_state = ctx
@@ -15,9 +15,8 @@ pub async fn get_vc_id(ctx: PoiseContext<'_>) -> Result<ChannelId, Error> {
         .clone()
         .guild(guild_id)
         .and_then(|g| g.voice_states.get(&ctx.author().id).cloned());
-    let voice_channel_id = match voice_state.and_then(|vs| vs.channel_id) {
-        Some(c) => c,
-        None => return Err("The user is not in a voice channel.".into()),
+    let Some(voice_channel_id) = voice_state.and_then(|vs| vs.channel_id) else {
+        return Err("The user is not in a voice channel.".into());
     };
 
     Ok(voice_channel_id)
@@ -37,7 +36,7 @@ pub async fn join_vc(
 
     let manager = songbird::get(ctx.serenity_context())
         .await
-        .expect("Songbird was not initialized")
+        .ok_or_else(|| -> Error { "Songbird was not initialized".into() })?
         .clone();
 
     let (recorder, is_new) = ctx.data().recorder.get_or_create(guild_id).await;
@@ -74,7 +73,7 @@ pub async fn leave_vc(ctx: PoiseContext<'_>, guild_id: GuildId) -> Result<(), Er
 
     let manager = songbird::get(ctx.serenity_context())
         .await
-        .expect("Songbird was not initialized")
+        .ok_or_else(|| -> Error { "Songbird was not initialized".into() })?
         .clone();
 
     let voice_result = manager.remove(guild_id).await;
@@ -96,7 +95,7 @@ pub async fn ensure_vc(
     ctx: PoiseContext<'_>,
 ) -> Result<(GuildId, ChannelId, Arc<Mutex<Call>>), Error> {
     let guild_id = require_guild(ctx)?;
-    let vc_id = get_vc_id(ctx).await?;
+    let vc_id = get_vc_id(ctx)?;
     let call = join_vc(ctx, guild_id, vc_id).await?;
 
     Ok((guild_id, vc_id, call))

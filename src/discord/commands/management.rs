@@ -101,6 +101,7 @@ pub async fn add_tag(
     subcommands("title", "artist", "origin"),
     subcommand_required
 )]
+#[allow(clippy::unused_async)]
 pub async fn set_metadata(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }

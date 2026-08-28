@@ -31,6 +31,7 @@ use crate::{
     subcommands("chronicle_start", "ask", "chronicle_stop"),
     subcommand_required
 )]
+#[allow(clippy::unused_async)]
 pub async fn chronicle(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -68,6 +69,7 @@ pub async fn chronicle_stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
 }
 
 #[poise::command(slash_command, subcommands("start", "stop"), subcommand_required)]
+#[allow(clippy::unused_async)]
 pub async fn recording(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -170,6 +172,7 @@ pub async fn stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
 }
 
 #[poise::command(slash_command, subcommands("show", "generate"))]
+#[allow(clippy::unused_async)]
 pub async fn transcript(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -327,11 +330,13 @@ fn paginate_transcript(lines: Vec<String>) -> Vec<String> {
             let mut remaining = line.as_str();
 
             while remaining.chars().count() > TRANSCRIPT_PAGE_LIMIT {
-                let split_at = remaining
+                let Some(split_at) = remaining
                     .char_indices()
                     .nth(TRANSCRIPT_PAGE_LIMIT)
                     .map(|(idx, _)| idx)
-                    .unwrap();
+                else {
+                    break;
+                };
 
                 pages.push(remaining[..split_at].to_owned());
                 remaining = &remaining[split_at..];
@@ -399,37 +404,44 @@ fn validate_alias_group<'a>(
 
     config.validate_participants(alias_group_id, participants)?;
 
-    Ok(config
+    config
         .alias_group(alias_group_id)
-        .expect("alias group was validated"))
+        .ok_or_else(|| anyhow::anyhow!("Alias group `{alias_group_id}` was not found."))
 }
 
 fn build_transcript_entries(
     result: Vec<TranscribedSegment>,
     alias_group: &AliasGroup,
-) -> Vec<TranscriptEntry> {
+) -> anyhow::Result<Vec<TranscriptEntry>> {
     result
         .into_iter()
         .map(|segment| {
             let alias = alias_group
                 .aliases
                 .get(&segment.user_id)
-                .expect("participant aliases were validated")
+                .ok_or_else(|| anyhow::anyhow!("No alias configured for participant {}", segment.user_id))?
                 .clone();
 
-            TranscriptEntry {
+            Ok(TranscriptEntry {
                 start: segment.start,
                 end: segment.end,
                 user_id: segment.user_id,
                 alias,
                 text: segment.text,
-            }
+            })
         })
         .collect()
 }
 
+// The guard below defines the behavior for invalid timestamps; the remaining
+// cast is intentional because Rust has no checked `f64`-to-`u64` conversion.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn format_timestamp(seconds: f64) -> String {
-    let total_tenths = (seconds * 10.0).round() as u64;
+    let total_tenths = if seconds.is_finite() && seconds >= 0.0 {
+        (seconds * 10.0).round() as u64
+    } else {
+        0
+    };
 
     let hours = total_tenths / 36_000;
     let minutes = (total_tenths % 36_000) / 600;
@@ -484,8 +496,9 @@ fn build_transcript_document(
             schema_version: 1,
             recording_date: manifest.started_at,
             ended_at: manifest.ended_at,
-            duration_seconds: (manifest.ended_at - manifest.started_at).num_milliseconds() as f64
-                / 1000.0,
+            duration_seconds: (manifest.ended_at - manifest.started_at)
+                .to_std()
+                .map_or(0.0, |duration| duration.as_secs_f64()),
             participants,
             recording_count: recordings.len(),
             entry_count: entries.len(),
@@ -513,9 +526,10 @@ async fn generate_transcript(
         .await?;
 
     for segment in &result {
-        println!(
-            "TRANSCRIPTION: start={}, end={}",
-            segment.start, segment.end
+        tracing::debug!(
+            start = segment.start,
+            end = segment.end,
+            "Transcription segment"
         );
     }
 
@@ -523,7 +537,7 @@ async fn generate_transcript(
         return Err("No speech detected.".into());
     }
 
-    let entries = build_transcript_entries(result, alias_group);
+    let entries = build_transcript_entries(result, alias_group)?;
 
     if entries.is_empty() {
         return Err("No transcription results.".into());

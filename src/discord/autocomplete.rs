@@ -11,6 +11,10 @@ use crate::jester::db::metadata::MetadataKind;
 use crate::jester::db::repository::{search_incomplete_tracks, search_metadata, search_tracks};
 use crate::utils::format::{build_autocomplete_display, lightweight_trim};
 
+fn autocomplete_limit() -> i64 {
+    i64::try_from(AUTOCOMPLETE_MAX_CHOICES).unwrap_or(i64::MAX)
+}
+
 pub async fn autocomplete_artist(
     ctx: PoiseContext<'_>,
     partial: &str,
@@ -41,7 +45,7 @@ async fn autocomplete_metadata(
     let db_pool = &ctx.data().db_pool;
 
     let results =
-        match search_metadata(db_pool, kind, &needle, AUTOCOMPLETE_MAX_CHOICES as i64).await {
+        match search_metadata(db_pool, kind, &needle, autocomplete_limit()).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("Autocomplete metadata query failed: {}", e);
@@ -64,7 +68,7 @@ pub async fn autocomplete_track(
     let needle = partial.to_lowercase();
     let db_pool = &ctx.data().db_pool;
 
-    let results = match search_tracks(db_pool, &needle, AUTOCOMPLETE_MAX_CHOICES as i64).await {
+    let results = match search_tracks(db_pool, &needle, autocomplete_limit()).await {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("Autocomplete track query failed: {}", e);
@@ -98,7 +102,7 @@ pub async fn autocomplete_incomplete_track(
     let db_pool = &ctx.data().db_pool;
 
     let results =
-        match search_incomplete_tracks(db_pool, &needle, AUTOCOMPLETE_MAX_CHOICES as i64).await {
+        match search_incomplete_tracks(db_pool, &needle, autocomplete_limit()).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("Incomplete track autocomplete query failed: {}", e);

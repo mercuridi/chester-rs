@@ -35,7 +35,7 @@ where
 
     let mut decoder: Option<OpusDecoder> = None;
     let mut pre_skip = 0usize;
-    let mut decoded = Vec::<f32>::new();
+    let mut decoded_samples = Vec::<f32>::new();
 
     while let Some(packet) = packets.read_packet()? {
         let data = packet.data.as_slice();
@@ -52,7 +52,10 @@ where
 
             pre_skip = header.pre_skip as usize;
 
-            decoder = Some(OpusDecoder::new(OPUS_SAMPLE_RATE as u32, Channels::Mono)?);
+            decoder = Some(OpusDecoder::new(
+                u32::try_from(OPUS_SAMPLE_RATE)?,
+                Channels::Mono,
+            )?);
 
             continue;
         }
@@ -69,7 +72,7 @@ where
         let mut pcm = [0i16; OPUS_SAMPLE_RATE * 120 / 1000];
         let samples = decoder.decode(data, &mut pcm, false)?;
 
-        decoded.extend(pcm[..samples].iter().map(|&sample| f32::from(sample) / 32768.0));
+        decoded_samples.extend(pcm[..samples].iter().map(|&sample| f32::from(sample) / 32768.0));
     }
 
     if decoder.is_none() {
@@ -78,14 +81,14 @@ where
 
     // OpusHead's pre-skip is expressed in samples at the decoder's
     // 48 kHz output rate.
-    if pre_skip > decoded.len() {
+    if pre_skip > decoded_samples.len() {
         return Err(anyhow!(
             "Opus pre-skip ({pre_skip}) exceeds decoded audio length ({})",
-            decoded.len()
+            decoded_samples.len()
         ));
     }
 
-    decoded.drain(..pre_skip);
+    decoded_samples.drain(..pre_skip);
 
     // tracing::debug!(
     //     first = ?decoded.iter().take(10).collect::<Vec<_>>(),
@@ -98,9 +101,9 @@ where
     // );
 
     let samples = if OPUS_SAMPLE_RATE == WHISPER_SAMPLE_RATE {
-        decoded
+        decoded_samples
     } else {
-        resample_48k_to_16k(&decoded)?
+        resample_48k_to_16k(&decoded_samples)?
     };
 
     // {
@@ -125,7 +128,7 @@ where
 
     Ok(Audio {
         samples,
-        sample_rate: WHISPER_SAMPLE_RATE as u32,
+        sample_rate: u32::try_from(WHISPER_SAMPLE_RATE)?,
     })
 }
 

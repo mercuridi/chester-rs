@@ -5,7 +5,7 @@ use tokenizers::Tokenizer;
 
 use crate::chronicle::transcription::audio::Audio;
 use crate::chronicle::transcription::whisper::model::Model;
-use crate::constants::{MODEL_SAMPLE_RATE, STRIDE_SIZE_SECONDS};
+use crate::constants::MODEL_SAMPLE_RATE;
 
 pub struct TranscriptSegment {
     pub start: f64,
@@ -73,8 +73,9 @@ impl WhisperTranscriber {
     }
 
     fn decode_mel(&mut self, mel: &Tensor) -> Result<Vec<TranscriptSegment>> {
-        let stride_frames =
-            (STRIDE_SIZE_SECONDS * m::SAMPLE_RATE as f64 / m::HOP_LENGTH as f64) as usize;
+        let stride_frames = 25 * m::SAMPLE_RATE / m::HOP_LENGTH;
+        let sample_rate = f64::from(u32::try_from(m::SAMPLE_RATE)?);
+        let hop_length = f64::from(u32::try_from(m::HOP_LENGTH)?);
 
         let (_, _, content_frames) = mel.dims3()?;
 
@@ -86,9 +87,10 @@ impl WhisperTranscriber {
 
             let mel_segment = self.pad_mel_segment(mel, segment_size, seek)?;
 
-            let segment_start = (seek * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
+            let segment_start = f64::from(u32::try_from(seek)?) * hop_length / sample_rate;
 
-            let segment_duration = (segment_size * m::HOP_LENGTH) as f64 / m::SAMPLE_RATE as f64;
+            let segment_duration =
+                f64::from(u32::try_from(segment_size)?) * hop_length / sample_rate;
 
             let decoded = self.decode_segment(&mel_segment)?;
 

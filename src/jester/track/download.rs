@@ -51,7 +51,7 @@ pub async fn download_track(
         .into());
     }
 
-    let slim = process_ytdlp_json(video_id.as_str().to_string()).map_err(|e| {
+    let slim = process_ytdlp_json(video_id.as_str()).map_err(|e| {
         format!(
             "Failed to process metadata JSON for video ID `{}`: {}",
             video_id.as_str(),

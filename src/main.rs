@@ -21,7 +21,7 @@ use tracing::info;
 use crate::{
     chronicle::{
         config::Config,
-        indexer::{db::repository::IndexerDb, embedder::Embedder, indexer::Indexer},
+        indexer::{db::repository::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,
         recording::recorder::notify_recording_user,
         runtime::GpuRuntime,
@@ -38,11 +38,11 @@ use tracing_subscriber::EnvFilter;
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     // 1) Inspect & log any command errors without moving out of `error`
     match &error {
-        // Panic on setup failures
+        // Log setup failures before forwarding them to Poise's handler.
         poise::FrameworkError::Setup {
             error: setup_err, ..
         } => {
-            panic!("Failed to start bot: {setup_err:?}");
+            tracing::error!(error = ?setup_err, "Failed to start bot");
         }
         // Log command errors
         poise::FrameworkError::Command {
@@ -62,37 +62,14 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env()
-                .add_directive("chester_rs=debug".parse().unwrap())
-                .add_directive("warn".parse().unwrap()),
-        )
-        .init();
-
-    dotenv().ok();
-    // Initialize the SQLite connection pool
-    tracing::debug!("Initialising player database connection");
-    let database_url = "sqlite://database/jester/jester.sqlite3";
-    let pool = SqlitePool::connect(database_url).await?;
-    tracing::debug!("player database connection successful");
-
-    std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"))
-        .expect("Encountered an error setting the CWD to top-level");
-
-    let config = Config::load(".chronicle/config.toml")?;
-
+async fn build_chronicle(config: &Config) -> Result<Chronicle, Error> {
     tracing::info!(
         index_db = %config.chronicle.index_db,
         "Opening Chronicle index database"
     );
 
     let index_db = IndexerDb::open(&config.chronicle.index_db).await?;
-
     let embedder = Embedder::load(candle_core::Device::cuda_if_available(0)?)?;
-
     let indexer = Indexer::new(
         PathBuf::from(&config.chronicle.corpus_dir),
         index_db,
@@ -101,7 +78,6 @@ async fn main() -> Result<(), Error> {
     );
 
     let indexing_stats = indexer.index().await?;
-
     tracing::info!(
         added = indexing_stats.added,
         updated = indexing_stats.updated,
@@ -110,34 +86,20 @@ async fn main() -> Result<(), Error> {
         "Chronicle index complete"
     );
 
-    let index_db = {
-        let (index_db, _embedder) = indexer.into_parts();
-        index_db
-    };
-
+    let (index_db, _embedder) = indexer.into_parts();
     let runtime = GpuRuntime::new();
-
     let llm = Llm::new(&config.chronicle, runtime.clone());
 
-    let chronicle = Chronicle::new(
+    Ok(Chronicle::new(
         index_db,
         llm,
-        runtime.clone(),
+        runtime,
         config.chronicle.retrieval_limit,
-    );
+    ))
+}
 
-    let sync_stats = sync_audio_library(&pool).await?;
-
-    info!(
-        downloaded = sync_stats.downloaded,
-        failed = sync_stats.failed,
-        skipped = sync_stats.skipped,
-        "Library sync complete"
-    );
-
-    let token = std::env::var("DISCORD_TOKEN").expect("missing DISCORD_TOKEN in .env");
-
-    let poise_commands = vec![
+fn build_commands() -> Vec<poise::Command<Data, Error>> {
+    vec![
         discord::commands::admin::help(),
         discord::commands::admin::register(),
         discord::commands::controls::join(),
@@ -155,7 +117,44 @@ async fn main() -> Result<(), Error> {
         discord::commands::chronicle::recording(),
         discord::commands::chronicle::transcript(),
         discord::commands::chronicle::chronicle(),
-    ];
+    ]
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let env_filter = EnvFilter::from_default_env()
+        .add_directive("chester_rs=debug".parse()?)
+        .add_directive("warn".parse()?);
+
+    tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .init();
+
+    dotenv().ok();
+    // Initialize the SQLite connection pool
+    tracing::debug!("Initialising player database connection");
+    let database_url = "sqlite://database/jester/jester.sqlite3";
+    let pool = SqlitePool::connect(database_url).await?;
+    tracing::debug!("player database connection successful");
+
+    std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"))?;
+
+    let config = Config::load(".chronicle/config.toml")?;
+
+    let chronicle = build_chronicle(&config).await?;
+
+    let sync_stats = sync_audio_library(&pool).await?;
+
+    info!(
+        downloaded = sync_stats.downloaded,
+        failed = sync_stats.failed,
+        skipped = sync_stats.skipped,
+        "Library sync complete"
+    );
+
+    let token = std::env::var("DISCORD_TOKEN")?;
+
+    let poise_commands = build_commands();
 
     let poise_options = poise::FrameworkOptions {
         commands: poise_commands,

@@ -11,6 +11,7 @@ use crate::jester::db::repository::{
     slash_command,
     subcommands("all", "artist", "origin", "tags", "incomplete")
 )]
+#[allow(clippy::unused_async)]
 pub async fn library(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
@@ -69,7 +70,7 @@ async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error>
         (format_flat(raw_data), "flat")
     };
 
-    let pages = paginate(lines, page_mode);
+    let pages = paginate(&lines, page_mode);
     let page_refs: Vec<&str> = pages.iter().map(String::as_str).collect();
     poise::samples::paginate(ctx, &page_refs).await?;
 
@@ -179,7 +180,7 @@ fn format_grouped(rows: Vec<Vec<String>>) -> Vec<String> {
 /// For flat format, each entry is 2 lines; for grouped format, entries are 1
 /// line each (plus group headers). We paginate by *entry count* for flat, and
 /// by *line count* for grouped (since group headers don't count as entries).
-fn paginate(lines: Vec<String>, mode: &str) -> Vec<String> {
+fn paginate(lines: &[String], mode: &str) -> Vec<String> {
     if mode == "grouped" {
         // Split on blank separator lines to find logical page breaks.
         // We just chunk by MAX_RESULTS_PER_PAGE raw lines.

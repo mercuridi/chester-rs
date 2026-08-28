@@ -1,14 +1,12 @@
-use anyhow::Result;
-
 use super::document::{Chunk, Document};
 
-pub fn chunk(document: &Document, max_length: usize) -> Result<Vec<Chunk>> {
+pub fn chunk(document: &Document, max_length: usize) -> Vec<Chunk> {
     chunk_text(document, max_length)
 }
 
-fn chunk_text(document: &Document, max_length: usize) -> Result<Vec<Chunk>> {
+fn chunk_text(document: &Document, max_length: usize) -> Vec<Chunk> {
     if document.content.trim().is_empty() {
-        return Ok(Vec::new());
+        return Vec::new();
     }
 
     let paragraphs = document.content.split("\n\n");
@@ -25,7 +23,7 @@ fn chunk_text(document: &Document, max_length: usize) -> Result<Vec<Chunk>> {
 
         if paragraph.len() > max_length {
             if !current.is_empty() {
-                chunks.push(current);
+                chunks.push(std::mem::take(&mut current));
                 current = String::new();
             }
 
@@ -40,8 +38,8 @@ fn chunk_text(document: &Document, max_length: usize) -> Result<Vec<Chunk>> {
         };
 
         if candidate.len() > max_length {
-            chunks.push(current);
-            current = paragraph.to_owned();
+            chunks.push(std::mem::take(&mut current));
+            paragraph.clone_into(&mut current);
         } else {
             current = candidate;
         }
@@ -51,7 +49,7 @@ fn chunk_text(document: &Document, max_length: usize) -> Result<Vec<Chunk>> {
         chunks.push(current);
     }
 
-    Ok(chunks
+    chunks
         .into_iter()
         .enumerate()
         .map(|(index, content)| Chunk {
@@ -60,7 +58,7 @@ fn chunk_text(document: &Document, max_length: usize) -> Result<Vec<Chunk>> {
             content,
             heading: None,
         })
-        .collect())
+        .collect()
 }
 
 fn split_long_text(text: &str, max_length: usize) -> Vec<String> {
@@ -76,10 +74,10 @@ fn split_long_text(text: &str, max_length: usize) -> Vec<String> {
 
         if candidate.len() > max_length {
             if !current.is_empty() {
-                chunks.push(current);
+                chunks.push(std::mem::take(&mut current));
             }
 
-            current = word.to_owned();
+            word.clone_into(&mut current);
         } else {
             current = candidate;
         }

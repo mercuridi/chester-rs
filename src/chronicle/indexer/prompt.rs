@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use crate::chronicle::indexer::db::repository::SearchResult;
 
 pub fn build_prompt(question: &str, results: &[SearchResult]) -> String {
@@ -11,10 +13,10 @@ pub fn build_prompt(question: &str, results: &[SearchResult]) -> String {
     prompt.push_str("Context:\n");
 
     for (index, result) in results.iter().enumerate() {
-        prompt.push_str(&format!("[{}] {}", index + 1, result.document_path));
+        let _ = write!(prompt, "[{}] {}", index + 1, result.document_path);
 
         if let Some(heading) = &result.heading {
-            prompt.push_str(&format!(" — {heading}"));
+            let _ = write!(prompt, " — {heading}");
         }
 
         prompt.push('\n');

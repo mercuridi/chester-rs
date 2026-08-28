@@ -1,7 +1,6 @@
-use candle_transformers::models::whisper::{self as m};
 use serenity::model::id::UserId;
 
-pub const CHESTER_USER_ID: UserId = UserId::new(1407798091934863360);
+pub const CHESTER_USER_ID: UserId = UserId::new(1_407_798_091_934_863_360);
 
 // library display
 pub const ELLIPSIS: &str = "…";
@@ -27,8 +26,7 @@ pub const MODEL_REVISION: &str = "main";
 // pub const MODEL_REVISION: &str = "main";
 // pub const MODEL_ID: &str = "openai/whisper-small.en";
 // pub const MODEL_REVISION: &str = "refs/pr/10";
-pub const MODEL_SAMPLE_RATE: u32 = m::SAMPLE_RATE as u32;
-pub const STRIDE_SIZE_SECONDS: f64 = 25.0;
+pub const MODEL_SAMPLE_RATE: u32 = 16_000;
 pub const TRANSCRIPT_PAGE_LIMIT: usize = 1900;
 
 // library sync

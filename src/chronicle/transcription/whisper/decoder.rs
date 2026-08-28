@@ -49,12 +49,14 @@ impl WhisperTranscriber {
 
             let logits_vec = logits.to_vec1::<f32>()?;
 
-            let next_token = logits_vec
+            let next_token = u32::try_from(
+                logits_vec
                 .iter()
                 .enumerate()
                 .max_by(|(_, a), (_, b)| a.total_cmp(b))
-                .map(|(index, _)| index as u32)
-                .ok_or_else(|| anyhow!("Whisper produced no logits"))?;
+                .map(|(index, _)| index)
+                .ok_or_else(|| anyhow!("Whisper produced no logits"))?,
+            )?;
 
             let probability = softmax(&logits, 0)?
                 .i(next_token as usize)?
@@ -78,7 +80,8 @@ impl WhisperTranscriber {
             .decode(&tokens, true)
             .map_err(|error| anyhow!("Tokenizer decode failed: {error}"))?;
 
-        let avg_logprob = sum_logprob / tokens.len().max(1) as f64;
+        let token_count = u32::try_from(tokens.len().max(1))?;
+        let avg_logprob = sum_logprob / f64::from(token_count);
 
         Ok(Decoded {
             tokens,

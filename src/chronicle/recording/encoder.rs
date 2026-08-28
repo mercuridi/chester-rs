@@ -1,4 +1,4 @@
-use std::{fs::File, path::PathBuf};
+use std::{fs::File, path::Path};
 
 use ogg::{PacketWriteEndInfo, PacketWriter};
 use opus::{Application, Channels, Encoder as OpusEncoder};
@@ -15,12 +15,12 @@ use crate::{
 
 pub fn run_encoder(
     user_id: UserId,
-    path: PathBuf,
+    path: &Path,
     mut consumer: Consumer<i16>,
     mut stop_rx: oneshot::Receiver<()>,
     initial_silence_ticks: u64,
 ) -> Result<(), Error> {
-    let file = File::create(&path)?;
+    let file = File::create(path)?;
     let mut ogg = PacketWriter::new(file);
 
     let mut opus = OpusEncoder::new(SAMPLE_RATE, Channels::Mono, Application::Audio)?;
@@ -104,7 +104,7 @@ pub fn run_encoder(
         }
 
         match stop_rx.try_recv() {
-            Ok(()) => {
+            Ok(()) | Err(oneshot::error::TryRecvError::Closed) => {
                 stopping = true;
             }
 
@@ -112,9 +112,6 @@ pub fn run_encoder(
                 std::thread::yield_now();
             }
 
-            Err(oneshot::error::TryRecvError::Closed) => {
-                stopping = true;
-            }
         }
     }
 
@@ -134,10 +131,7 @@ fn downmix_stereo_frame(interleaved: &[i16], mono: &mut [i16; MONO_FRAME_SAMPLES
     debug_assert_eq!(interleaved.len(), STEREO_FRAME_SAMPLES);
 
     for (index, pair) in interleaved.chunks_exact(PCM_CHANNELS).enumerate() {
-        let left = i32::from(pair[0]);
-        let right = i32::from(pair[1]);
-
-        mono[index] = i32::midpoint(left, right) as i16;
+        mono[index] = i16::midpoint(pair[0], pair[1]);
     }
 }
 
@@ -167,10 +161,16 @@ fn write_opus_headers<W: std::io::Write>(
     let mut opus_tags = Vec::new();
 
     opus_tags.extend_from_slice(b"OpusTags");
-    opus_tags.extend_from_slice(&(vendor.len() as u32).to_le_bytes());
+    let vendor_len = u32::try_from(vendor.len()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Opus vendor string is too long")
+    })?;
+    opus_tags.extend_from_slice(&vendor_len.to_le_bytes());
     opus_tags.extend_from_slice(vendor);
     opus_tags.extend_from_slice(&1u32.to_le_bytes());
-    opus_tags.extend_from_slice(&(comment.len() as u32).to_le_bytes());
+    let comment_len = u32::try_from(comment.len()).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "Opus comment is too long")
+    })?;
+    opus_tags.extend_from_slice(&comment_len.to_le_bytes());
     opus_tags.extend_from_slice(comment.as_bytes());
 
     ogg.write_packet(opus_tags, serial, PacketWriteEndInfo::EndPage, 0)?;

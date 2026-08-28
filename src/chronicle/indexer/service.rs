@@ -96,8 +96,7 @@ impl Indexer {
     }
 
     async fn index_document(&self, document: &Document, path: &str) -> Result<()> {
-        let chunks = chunker::chunk(document, self.max_chunk_length)
-            .with_context(|| format!("Failed to chunk document: {path}"))?;
+        let chunks = chunker::chunk(document, self.max_chunk_length);
 
         let embeddings = chunks
             .iter()
@@ -110,12 +109,15 @@ impl Indexer {
 
         let indexed_chunks = chunks
             .into_iter()
-            .map(|chunk| IndexedChunk {
-                chunk_index: chunk.index as i64,
-                heading: chunk.heading,
-                text: chunk.content,
+            .map(|chunk| {
+                Ok(IndexedChunk {
+                    chunk_index: i64::try_from(chunk.index)
+                        .context("Chunk index does not fit in SQLite integer")?,
+                    heading: chunk.heading,
+                    text: chunk.content,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
 
         self.db
             .replace_document(path, &document.content_hash, &indexed_chunks, &embeddings)

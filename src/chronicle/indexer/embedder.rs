@@ -123,10 +123,10 @@ impl Embedder {
             .i((0, 0))
             .context("Failed to extract CLS embedding")?;
 
-        self.normalize(embedding)
+        Self::normalize(&embedding)
     }
 
-    fn normalize(&self, embedding: Tensor) -> Result<Vec<f32>> {
+    fn normalize(embedding: &Tensor) -> Result<Vec<f32>> {
         let norm = embedding
             .sqr()
             .context("Failed to square embedding")?
