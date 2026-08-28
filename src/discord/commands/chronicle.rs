@@ -5,7 +5,7 @@ use serenity::model::id::{GuildId, UserId};
 use titlecase::Titlecase;
 
 use crate::{
-    chronicle::{config::{AliasGroup, Config}, recording::recorder::{RecordingManifest, notify_recording_user}, transcription::{audio::load_opus, transcript::{TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant}, whisper::transcriber::WhisperTranscriber}}, constants::{CHESTER_USER_ID, TRANSCRIPT_PAGE_LIMIT}, discord::{autocomplete::{autocomplete_alias_group, autocomplete_existing_transcript, autocomplete_recording_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
+    chronicle::{config::{AliasGroup, Config}, recording::recorder::{RecordingManifest, notify_recording_user}, transcription::{service::{TranscribedSegment, TranscriptionService}, transcript::{TranscriptDocument, TranscriptEntry, TranscriptFrontmatter, TranscriptParticipant}}}, constants::{CHESTER_USER_ID, TRANSCRIPT_PAGE_LIMIT}, discord::{autocomplete::{autocomplete_alias_group, autocomplete_existing_transcript, autocomplete_recording_session}, context::{Error, PoiseContext}, voice::{ensure_vc, require_guild}}
 };
 
 #[poise::command(
@@ -275,7 +275,7 @@ pub async fn generate(
         recordings,
         alias_group,
         &transcript_path,
-        ctx.data().chronicle.runtime(),
+        ctx.data().chronicle.transcription_service(),
     )
     .await?;
 
@@ -436,89 +436,25 @@ fn validate_alias_group<'a>(
         .expect("alias group was validated"))
 }
 
-async fn transcribe_recordings(
-    recordings: Vec<PathBuf>,
-    runtime: crate::chronicle::runtime::GpuRuntime,
-) -> Result<
-    Vec<(f64, f64, UserId, String)>,
-    Error,
-> {
-    let _gpu_lease = runtime.acquire_transcription().map_err(|error| -> Error {
-        error.to_string().into()
-    })?;
-
-    tokio::task::spawn_blocking(move || {
-        let mut transcriber = WhisperTranscriber::new_cuda()?;
-        let mut output: Vec<(f64, f64, UserId, String)> = Vec::new();
-
-        for path in recordings {
-            let audio = load_opus(&path)?;
-            let segments = transcriber.transcribe(&audio)?;
-
-            let user_id = path
-                .file_stem()
-                .and_then(|name| name.to_str())
-                .and_then(|name| name.strip_prefix("recording-"))
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Invalid recording filename: {}",
-                        path.display()
-                    )
-                })?
-                .parse::<u64>()
-                .map(UserId::new)
-                .map_err(|error| {
-                    anyhow::anyhow!(
-                        "Invalid user ID in recording filename {}: {error}",
-                        path.display()
-                    )
-                })?;
-
-            for segment in segments {
-                output.push((
-                    segment.start,
-                    segment.end,
-                    user_id,
-                    segment.text,
-                ));
-            }
-        }
-
-        output.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        Ok::<_, anyhow::Error>(output)
-    })
-    .await
-    .map_err(|error| -> Error {
-        format!("Transcription task failed: {error}").into()
-    })?
-    .map_err(|error| -> Error {
-        format!("Transcription failed: {error}").into()
-    })
-}
-
 fn build_transcript_entries(
-    result: Vec<(f64, f64, UserId, String)>,
+    result: Vec<TranscribedSegment>,
     alias_group: &AliasGroup,
 ) -> Vec<TranscriptEntry> {
     result
         .into_iter()
-        .map(|(start, end, user_id, text)| {
+        .map(|segment| {
             let alias = alias_group
                 .aliases
-                .get(&user_id)
+                .get(&segment.user_id)
                 .expect("participant aliases were validated")
                 .clone();
 
             TranscriptEntry {
-                start,
-                end,
-                user_id,
+                start: segment.start,
+                end: segment.end,
+                user_id: segment.user_id,
                 alias,
-                text,
+                text: segment.text,
             }
         })
         .collect()
@@ -603,12 +539,15 @@ async fn generate_transcript(
     recordings: Vec<PathBuf>,
     alias_group: &AliasGroup,
     transcript_path: &Path,
-    runtime: crate::chronicle::runtime::GpuRuntime,
+    transcription: TranscriptionService,
 ) -> Result<TranscriptDocument, Error> {
-    let result = transcribe_recordings(recordings.clone(), runtime).await?;
+    let result = transcription.transcribe_recordings(recordings.clone()).await?;
 
-    for (start, end, _, _) in &result {
-        println!("TRANSCRIPTION: start={start}, end={end}");
+    for segment in &result {
+        println!(
+            "TRANSCRIPTION: start={}, end={}",
+            segment.start, segment.end
+        );
     }
 
     if result.is_empty() {

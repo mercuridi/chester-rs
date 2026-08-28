@@ -9,12 +9,14 @@ use super::{
     },
     llm::Llm,
     runtime::GpuRuntime,
+    transcription::service::TranscriptionService,
 };
 
 pub struct Chronicle {
     retriever: Retriever,
     llm: Llm,
     runtime: GpuRuntime,
+    transcription: TranscriptionService,
     retrieval_limit: usize,
 }
 
@@ -29,7 +31,8 @@ impl Chronicle {
         Self {
             retriever: Retriever::new(db, embedder),
             llm,
-            runtime,
+            runtime: runtime.clone(),
+            transcription: TranscriptionService::new(runtime),
             retrieval_limit,
         }
     }
@@ -44,10 +47,6 @@ impl Chronicle {
         self.llm.generate(&prompt).await
     }
 
-    pub fn runtime(&self) -> GpuRuntime {
-        self.runtime.clone()
-    }
-
     pub async fn start_llm(&self) -> Result<()> {
         self.llm.load().await
     }
@@ -59,4 +58,9 @@ impl Chronicle {
     pub fn is_llm_loaded(&self) -> Result<bool> {
         self.runtime.is_llm_loaded()
     }
+
+    pub fn transcription_service(&self) -> TranscriptionService {
+        self.transcription.clone()
+    }
+
 }
