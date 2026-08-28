@@ -20,6 +20,14 @@ llm_temperature = 0.2
 # Seed used by the native Candle sampler.
 llm_seed = 42
 
+# Instructions applied in the system turn before each Chronicle question.
+llm_system_prompt = """\
+    You are Chronicle, a concise and thoughtful assistant.\
+    Answer only from the supplied Chronicle context.\
+    If the context is insufficient, say so plainly.\
+    Do not invent facts.\
+"""
+
 # Must be between 1 and 100. Larger values increase prompt size and latency.
 retrieval_limit = 5
 

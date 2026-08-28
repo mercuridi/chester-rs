@@ -20,6 +20,7 @@ pub struct Llm {
     max_tokens: usize,
     temperature: f64,
     seed: u64,
+    system_prompt: String,
 }
 
 struct LoadedLlm {
@@ -42,6 +43,7 @@ impl Llm {
             max_tokens: config.llm_max_tokens as usize,
             temperature: config.llm_temperature as f64,
             seed: config.llm_seed,
+            system_prompt: config.llm_system_prompt.clone(),
         }
     }
 
@@ -102,8 +104,9 @@ impl Llm {
 
     pub async fn generate(&self, prompt: &str) -> Result<String> {
         let model = Arc::clone(&self.model);
-        let prompt = format!(
-            "<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+        let system_prompt = self.system_prompt.clone();
+        let user_prompt = format!(
+            "<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
         );
         let max_tokens = self.max_tokens;
         let temperature = self.temperature;
@@ -120,7 +123,7 @@ impl Llm {
             loaded.model.clear_kv_cache();
             let encoded = loaded
                 .tokenizer
-                .encode(prompt, true)
+                .encode(user_prompt, true)
                 .map_err(|error| anyhow!("Failed to tokenize LLM prompt: {error}"))?;
             let prompt_tokens = encoded.get_ids();
 

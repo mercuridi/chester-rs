@@ -18,6 +18,7 @@ const DEFAULT_LLM_TOKENIZER_FILE: &str = "tokenizer.json";
 const DEFAULT_LLM_MAX_TOKENS: u32 = 512;
 const DEFAULT_LLM_TEMPERATURE: f32 = 0.2;
 const DEFAULT_LLM_SEED: u64 = 42;
+const DEFAULT_LLM_SYSTEM_PROMPT: &str = "Answer only from the supplied Chronicle context. If the context is insufficient, say so plainly. Do not invent facts.";
 const DEFAULT_RETRIEVAL_LIMIT: usize = 5;
 const DEFAULT_MAX_CHUNK_LENGTH: usize = 2_000;
 
@@ -43,6 +44,10 @@ fn default_llm_tokenizer_repo() -> String {
 
 fn default_llm_tokenizer_file() -> String {
     DEFAULT_LLM_TOKENIZER_FILE.to_owned()
+}
+
+fn default_llm_system_prompt() -> String {
+    DEFAULT_LLM_SYSTEM_PROMPT.to_owned()
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +93,9 @@ pub struct RawChronicleConfig {
 
     #[serde(default = "default_llm_seed")]
     llm_seed: u64,
+
+    #[serde(default = "default_llm_system_prompt")]
+    llm_system_prompt: String,
 
     #[serde(default = "default_retrieval_limit")]
     retrieval_limit: usize,
@@ -136,6 +144,7 @@ pub struct ChronicleConfig {
     pub llm_max_tokens: u32,
     pub llm_temperature: f32,
     pub llm_seed: u64,
+    pub llm_system_prompt: String,
     pub retrieval_limit: usize,
     pub max_chunk_length: usize,
 }
@@ -238,6 +247,7 @@ impl Config {
             llm_max_tokens: raw.chronicle.llm_max_tokens,
             llm_temperature: raw.chronicle.llm_temperature,
             llm_seed: raw.chronicle.llm_seed,
+            llm_system_prompt: raw.chronicle.llm_system_prompt,
             retrieval_limit: raw.chronicle.retrieval_limit,
             max_chunk_length: raw.chronicle.max_chunk_length,
         };
@@ -326,6 +336,9 @@ impl ChronicleConfig {
             || self.llm_tokenizer_file.trim().is_empty()
         {
             bail!("Chronicle LLM repository and file settings cannot be empty");
+        }
+        if self.llm_system_prompt.trim().is_empty() {
+            bail!("Chronicle llm_system_prompt cannot be empty");
         }
         if self.llm_max_tokens == 0 || self.llm_max_tokens > 32_768 {
             bail!("Chronicle llm_max_tokens must be between 1 and 32768");
