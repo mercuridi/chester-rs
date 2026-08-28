@@ -10,7 +10,7 @@ docs/rebuild-plan
 # chronicle
 docs/chronicle/
 database/chronicle/chronicle.sqlite3
-interim/
+corpus/*
 
 config.toml
 manifest.toml
