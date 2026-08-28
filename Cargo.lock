@@ -441,7 +441,7 @@ dependencies = [
 
 [[package]]
 name = "chester-rs"
-version = "2.2.1"
+version = "2.2.2"
 dependencies = [
  "anyhow",
  "async-trait",
