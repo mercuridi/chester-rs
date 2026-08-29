@@ -1,6 +1,18 @@
 # Changelog
 
-## [2.3.1] — 2026-08-29
+## [2.4.0] — 2026-08-29
+
+### Features
+
+- Recording manifests are now persisted immediately and updated atomically as data changes
+- Recording scene functionality to split up transcripts
+
+
+### Refactor
+
+- Constants now live closer to their actual usage
+
+## [v2.3.1] — 2026-08-29
 
 ### Features
 
