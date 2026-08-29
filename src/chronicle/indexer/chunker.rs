@@ -12,13 +12,14 @@ enum BlockKind {
     Heading(HeadingLevel),
     BlockQuote,
     CodeBlock,
-    List,
+    ListItem,
     Table,
 }
 
 #[derive(Debug)]
 struct ParsedBlock {
     range: Range<usize>,
+    kind: BlockKind,
     heading: Option<String>,
 }
 
@@ -37,6 +38,12 @@ pub fn chunk(document: &Document, tokenizer: &Tokenizer, max_tokens: usize) -> R
     let mut current = None::<(usize, usize, Option<String>)>;
 
     for block in blocks {
+        if matches!(block.kind, BlockKind::Heading(_))
+            && let Some(chunk) = current.take()
+        {
+            chunks.push(chunk);
+        }
+
         let candidate_start = current
             .as_ref()
             .map_or(block.range.start, |(start, _, _)| *start);
@@ -55,17 +62,21 @@ pub fn chunk(document: &Document, tokenizer: &Tokenizer, max_tokens: usize) -> R
         if encoded_len(tokenizer, text)? <= max_tokens {
             current = Some((block.range.start, block.range.end, block.heading));
         } else {
-            chunks.extend(
-                split_long_text(text, tokenizer, max_tokens)?
-                    .into_iter()
-                    .map(|range| {
-                        (
-                            block.range.start + range.start,
-                            block.range.start + range.end,
-                            block.heading.clone(),
-                        )
-                    }),
-            );
+            let split = match block.kind {
+                BlockKind::Paragraph | BlockKind::BlockQuote | BlockKind::ListItem => {
+                    split_semantic_text(text, tokenizer, max_tokens)?
+                }
+                BlockKind::Heading(_) | BlockKind::CodeBlock | BlockKind::Table => {
+                    split_long_text(text, tokenizer, max_tokens)?
+                }
+            };
+            chunks.extend(split.into_iter().map(|range| {
+                (
+                    block.range.start + range.start,
+                    block.range.start + range.end,
+                    block.heading.clone(),
+                )
+            }));
         }
     }
 
@@ -139,6 +150,7 @@ fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
                     };
                     blocks.push(ParsedBlock {
                         range: start..range.end,
+                        kind,
                         heading,
                     });
                 }
@@ -150,6 +162,7 @@ fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
             }
             Event::Rule => blocks.push(ParsedBlock {
                 range,
+                kind: BlockKind::Paragraph,
                 heading: Some(format_heading_path(&heading_path)).filter(|path| !path.is_empty()),
             }),
             _ => {}
@@ -166,7 +179,7 @@ fn block_kind(tag: &Tag<'_>) -> Option<BlockKind> {
         Tag::Heading(level, ..) => Some(BlockKind::Heading(*level)),
         Tag::BlockQuote => Some(BlockKind::BlockQuote),
         Tag::CodeBlock(_) => Some(BlockKind::CodeBlock),
-        Tag::List(_) => Some(BlockKind::List),
+        Tag::Item => Some(BlockKind::ListItem),
         Tag::Table(_) => Some(BlockKind::Table),
         _ => None,
     }
@@ -190,6 +203,121 @@ fn encoded_len(tokenizer: &Tokenizer, text: &str) -> Result<usize> {
         .encode(text, true)
         .map(|encoding| encoding.len())
         .map_err(|error| anyhow!("Failed to tokenize chunk: {error}"))
+}
+
+fn split_semantic_text(
+    text: &str,
+    tokenizer: &Tokenizer,
+    max_tokens: usize,
+) -> Result<Vec<Range<usize>>> {
+    let mut ranges = Vec::new();
+    let mut sentence_units = Vec::new();
+
+    for sentence in sentence_ranges(text) {
+        if encoded_len(tokenizer, &text[sentence.clone()])? <= max_tokens {
+            sentence_units.push(sentence);
+        } else {
+            ranges.extend(pack_units(
+                text,
+                std::mem::take(&mut sentence_units),
+                tokenizer,
+                max_tokens,
+            )?);
+            ranges.extend(pack_units(
+                text,
+                word_ranges(&text[sentence.clone()]),
+                tokenizer,
+                max_tokens,
+            )?);
+        }
+    }
+
+    ranges.extend(pack_units(text, sentence_units, tokenizer, max_tokens)?);
+    Ok(ranges)
+}
+
+fn pack_units(
+    text: &str,
+    units: Vec<Range<usize>>,
+    tokenizer: &Tokenizer,
+    max_tokens: usize,
+) -> Result<Vec<Range<usize>>> {
+    let mut ranges = Vec::new();
+    let mut current = None::<Range<usize>>;
+
+    for unit in units {
+        if encoded_len(tokenizer, &text[unit.clone()])? > max_tokens {
+            if let Some(range) = current.take() {
+                ranges.push(range);
+            }
+            ranges.extend(
+                split_long_text(&text[unit.clone()], tokenizer, max_tokens)?
+                    .into_iter()
+                    .map(|range| unit.start + range.start..unit.start + range.end),
+            );
+            continue;
+        }
+
+        let candidate = current
+            .as_ref()
+            .map_or_else(|| unit.clone(), |range| range.start..unit.end);
+        if encoded_len(tokenizer, &text[candidate.clone()])? <= max_tokens {
+            current = Some(candidate);
+        } else {
+            if let Some(range) = current.take() {
+                ranges.push(range);
+            }
+            current = Some(unit);
+        }
+    }
+
+    if let Some(range) = current {
+        ranges.push(range);
+    }
+    Ok(ranges)
+}
+
+fn sentence_ranges(text: &str) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+
+    for (index, character) in text.char_indices() {
+        if !matches!(character, '.' | '!' | '?') {
+            continue;
+        }
+
+        let end = index + character.len_utf8();
+        if text[end..].chars().next().is_some_and(char::is_whitespace) {
+            ranges.push(start..end);
+            start = end;
+        }
+    }
+
+    if start < text.len() {
+        ranges.push(start..text.len());
+    }
+    ranges
+}
+
+fn word_ranges(text: &str) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
+    let mut in_word = false;
+
+    for (index, character) in text.char_indices() {
+        if !in_word && !character.is_whitespace() {
+            in_word = true;
+        } else if in_word && character.is_whitespace() {
+            ranges.push(start..index);
+            start = index;
+            in_word = false;
+        }
+    }
+
+    if start < text.len() {
+        ranges.push(start..text.len());
+    }
+    ranges
 }
 
 fn split_long_text(
@@ -255,7 +383,7 @@ mod tests {
 
         let blocks = parse_blocks(source);
 
-        assert_eq!(blocks.len(), 8);
+        assert_eq!(blocks.len(), 9);
         assert_eq!(&source[blocks[0].range.clone()], "# Top\n");
         assert_eq!(blocks[0].heading.as_deref(), Some("Top"));
         assert_eq!(
@@ -265,11 +393,12 @@ mod tests {
         assert_eq!(blocks[1].heading.as_deref(), Some("Top"));
         assert_eq!(&source[blocks[2].range.clone()], "## Nested\n");
         assert_eq!(blocks[2].heading.as_deref(), Some("Top > Nested"));
-        assert!(source[blocks[3].range.clone()].starts_with("- one\n- two"));
-        assert!(source[blocks[4].range.clone()].starts_with("> quoted"));
-        assert!(source[blocks[5].range.clone()].starts_with("| Name | Value |"));
-        assert_eq!(&source[blocks[6].range.clone()], "---\n");
-        assert!(source[blocks[7].range.clone()].starts_with("```rust\n"));
-        assert_eq!(blocks[7].heading.as_deref(), Some("Top > Nested"));
+        assert!(source[blocks[3].range.clone()].starts_with("- one"));
+        assert!(source[blocks[4].range.clone()].starts_with("- two"));
+        assert!(source[blocks[5].range.clone()].starts_with("> quoted"));
+        assert!(source[blocks[6].range.clone()].starts_with("| Name | Value |"));
+        assert_eq!(&source[blocks[7].range.clone()], "---\n");
+        assert!(source[blocks[8].range.clone()].starts_with("```rust\n"));
+        assert_eq!(blocks[8].heading.as_deref(), Some("Top > Nested"));
     }
 }
