@@ -48,7 +48,11 @@ impl Llm {
             max_tokens: config.llm_max_tokens as usize,
             temperature: f64::from(config.llm_temperature),
             seed: config.llm_seed,
-            system_prompt: config.llm_system_prompt.clone(),
+            system_prompt: format!(
+                "{}\n\nKeep every answer at or below {} characters.",
+                config.llm_system_prompt.trim_end(),
+                config.llm_max_reply_length
+            ),
         }
     }
 

@@ -6,6 +6,8 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serenity::all::{GuildId, UserId};
 
+use crate::constants::DISCORD_MESSAGE_MAX_CHARS;
+
 pub type AliasGroupId = String;
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +51,8 @@ pub struct RawChronicleConfig {
     llm_seed: u64,
 
     llm_system_prompt: String,
+
+    llm_max_reply_length: usize,
 
     retrieval_limit: usize,
 
@@ -95,6 +99,7 @@ pub struct ChronicleConfig {
     pub llm_temperature: f32,
     pub llm_seed: u64,
     pub llm_system_prompt: String,
+    pub llm_max_reply_length: usize,
     pub retrieval_limit: usize,
     pub max_chunk_length: usize,
 }
@@ -226,6 +231,7 @@ impl Config {
             llm_temperature: raw.chronicle.llm_temperature,
             llm_seed: raw.chronicle.llm_seed,
             llm_system_prompt: raw.chronicle.llm_system_prompt,
+            llm_max_reply_length: raw.chronicle.llm_max_reply_length,
             retrieval_limit: raw.chronicle.retrieval_limit,
             max_chunk_length: raw.chronicle.max_chunk_length,
         };
@@ -319,6 +325,11 @@ impl ChronicleConfig {
         }
         if self.llm_max_tokens == 0 || self.llm_max_tokens > 32_768 {
             bail!("Chronicle llm_max_tokens must be between 1 and 32768");
+        }
+        if self.llm_max_reply_length == 0 || self.llm_max_reply_length > DISCORD_MESSAGE_MAX_CHARS {
+            bail!(
+                "Chronicle llm_max_reply_length must be between 1 and {DISCORD_MESSAGE_MAX_CHARS}"
+            );
         }
         if !self.llm_temperature.is_finite() || !(0.0..=2.0).contains(&self.llm_temperature) {
             bail!("Chronicle llm_temperature must be finite and between 0.0 and 2.0");

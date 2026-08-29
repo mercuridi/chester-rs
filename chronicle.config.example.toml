@@ -31,6 +31,9 @@ llm_system_prompt = """\
     Do not invent facts.\
 """
 
+# Maximum number of Unicode characters in a generated Discord reply.
+llm_max_reply_length = 1900
+
 # Must be between 1 and 100. Larger values increase prompt size and latency.
 retrieval_limit = 5
 

@@ -108,6 +108,7 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
         llm,
         runtime,
         config.chronicle.retrieval_limit,
+        config.chronicle.llm_max_reply_length,
     ))
 }
 
@@ -269,6 +270,7 @@ async fn run() -> Result<()> {
         corpus_dir = %config.chronicle.corpus_dir,
         retrieval_limit = config.chronicle.retrieval_limit,
         max_chunk_length = config.chronicle.max_chunk_length,
+        max_reply_length = config.chronicle.llm_max_reply_length,
         "Loaded configuration"
     );
 

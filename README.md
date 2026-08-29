@@ -131,11 +131,13 @@ Answer only from the supplied Chronicle context.
 If the context is insufficient, say so plainly.
 Do not invent facts.
 """
+# Maximum number of Unicode characters in a generated Discord reply.
+llm_max_reply_length = 1900
 retrieval_limit = 5
 max_chunk_length = 2000
 ```
 
-The loader validates `llm_max_tokens` (1–32768), `llm_temperature` (0.0–2.0), `retrieval_limit` (1–100), and requires non-empty repository, file, database, corpus, and prompt values. Startup downloads the BGE embedding model if it is not already cached. The first `/chronicle start` downloads the configured LLM model and tokenizer into the Hugging Face cache.
+The loader validates `llm_max_tokens` (1–32768), `llm_temperature` (0.0–2.0), `llm_max_reply_length` (1–2000), `retrieval_limit` (1–100), and requires non-empty repository, file, database, corpus, and prompt values. Startup downloads the BGE embedding model if it is not already cached. The first `/chronicle start` downloads the configured LLM model and tokenizer into the Hugging Face cache.
 
 ### Alias and guild configuration
 

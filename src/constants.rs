@@ -45,3 +45,6 @@ pub const AUTOCOMPLETE_MAX_CHOICES: usize = 25; // capped by Discord
 pub const AUTOCOMPLETE_MAX_LENGTH: usize = 100;
 pub const AUTOCOMPLETE_SEPARATOR: &str = " | ";
 pub const AUTOCOMPLETE_SEPARATOR_LEN: usize = AUTOCOMPLETE_SEPARATOR.len();
+
+// discord
+pub const DISCORD_MESSAGE_MAX_CHARS: usize = 2_000;
