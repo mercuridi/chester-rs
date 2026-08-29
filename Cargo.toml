@@ -1,6 +1,6 @@
 [package]
 name = "chester-rs"
-version = "2.2.3"
+version = "2.3.0"
 edition = "2024"
 publish = false
 
