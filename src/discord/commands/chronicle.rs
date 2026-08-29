@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use chrono::Local;
 use serenity::model::id::{GuildId, UserId};
-use titlecase::Titlecase;
 use tracing::{debug, info};
 
 use crate::{
@@ -130,7 +129,7 @@ pub async fn start(
         return Ok(());
     }
 
-    let session_name = session_name.replace(' ', "-").titlecase();
+    let session_slug = session_name.replace(' ', "-").to_lowercase();
 
     let started = recorder
         .start_recording(
@@ -139,6 +138,7 @@ pub async fn start(
             notification_channel_id,
             ctx.author().id,
             session_name.clone(),
+            session_slug,
             initial_scene.clone(),
         )
         .await?;
@@ -579,10 +579,10 @@ fn build_transcript_document(
         manifest,
         entries,
         include_scenes,
-        if manifest.session_name.is_empty() {
+        if manifest.session_title.is_empty() {
             fallback_title
         } else {
-            &manifest.session_name
+            &manifest.session_title
         },
     )
     .join("\n");

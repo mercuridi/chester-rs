@@ -1,7 +1,7 @@
 use chrono::NaiveDateTime;
 use poise::serenity_prelude::AutocompleteChoice;
-use titlecase::Titlecase;
 
+use crate::chronicle::recording::recorder::RecordingManifest;
 use crate::discord::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
 use crate::discord::context::PoiseContext;
 use crate::discord::voice::require_guild;
@@ -171,11 +171,19 @@ pub async fn autocomplete_existing_transcript(
             continue;
         };
 
-        if !session.to_lowercase().contains(&needle) {
+        let manifest = RecordingManifest::load(path.join("manifest.toml")).ok();
+        let title = manifest
+            .as_ref()
+            .map(|manifest| manifest.session_title.as_str())
+            .filter(|title| !title.is_empty());
+
+        if !session.to_lowercase().contains(&needle)
+            && !title.is_some_and(|title| title.to_lowercase().contains(&needle))
+        {
             continue;
         }
 
-        let display = format_session_display_name(session);
+        let display = format_session_display_name(session, title);
 
         sessions.push((session.to_owned(), display));
     }
@@ -237,7 +245,15 @@ pub async fn autocomplete_recording_session(
             continue;
         };
 
-        if !session.to_lowercase().contains(&needle) {
+        let manifest = RecordingManifest::load(path.join("manifest.toml")).ok();
+        let title = manifest
+            .as_ref()
+            .map(|manifest| manifest.session_title.as_str())
+            .filter(|title| !title.is_empty());
+
+        if !session.to_lowercase().contains(&needle)
+            && !title.is_some_and(|title| title.to_lowercase().contains(&needle))
+        {
             continue;
         }
 
@@ -246,7 +262,7 @@ pub async fn autocomplete_recording_session(
             continue;
         }
 
-        let display = format_session_display_name(session);
+        let display = format_session_display_name(session, title);
 
         // Push the raw session path and the display to the vec
         sessions.push((session.to_owned(), display));
@@ -303,7 +319,7 @@ pub async fn autocomplete_alias_group(
         .into_iter()
 }
 
-fn format_session_display_name(session: &str) -> String {
+fn format_session_display_name(session: &str, title: Option<&str>) -> String {
     // Construct pretty-printed displays
     // first 15 chars are always the timestamp due to consistent formatting
     // anything after that is the session name
@@ -313,7 +329,8 @@ fn format_session_display_name(session: &str) -> String {
                 match NaiveDateTime::parse_from_str(&format!("{date}-{time}"), "%Y%m%d-%H%M%S") {
                     Ok(datetime) => {
                         let display_date = datetime.format("%d %b %Y, %H:%M").to_string();
-                        let display_name = name.replace('-', " ").titlecase();
+                        let display_name =
+                            title.map_or_else(|| name.replace('-', " "), str::to_owned);
 
                         format!("{display_name} ({display_date})")
                     }

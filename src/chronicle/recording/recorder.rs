@@ -34,8 +34,8 @@ pub struct RecordingManifest {
     #[serde(default = "default_manifest_status")]
     pub status: ManifestStatus,
     pub guild_id: GuildId,
-    #[serde(default)]
-    pub session_name: String,
+    #[serde(default, alias = "session_name")]
+    pub session_title: String,
     pub started_at: DateTime<Local>,
     #[serde(default)]
     pub ended_at: Option<DateTime<Local>>,
@@ -97,7 +97,7 @@ pub struct RecordingSession {
     pub notification_channel_id: ChannelId,
     pub initiator: UserId,
     pub started_at: DateTime<Local>,
-    pub session_name: String,
+    pub session_slug: String,
     pub manifest_path: PathBuf,
     pub manifest: RecordingManifest,
     pub started_instant: Instant,
@@ -157,22 +157,24 @@ impl Recorder {
         }
     }
 
-    #[instrument(skip(self), fields(session = %session_name))]
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(skip(self), fields(session = %session_title))]
     pub async fn start_recording(
         &self,
         guild_id: GuildId,
         voice_channel_id: ChannelId,
         notification_channel_id: ChannelId,
         initiator: UserId,
-        session_name: String,
+        session_title: String,
+        session_slug: String,
         initial_scene: Option<String>,
     ) -> Result<bool, Error> {
         let started_at = Local::now();
         let started_instant = Instant::now();
 
         let recording_directory =
-            recording_directory(&self.recordings_dir, guild_id, &session_name, started_at);
-        ensure_recording_directory(&self.recordings_dir, guild_id, &session_name, started_at)?;
+            recording_directory(&self.recordings_dir, guild_id, &session_slug, started_at);
+        ensure_recording_directory(&self.recordings_dir, guild_id, &session_slug, started_at)?;
 
         let mut recording = self.recording_session.lock().await;
 
@@ -184,7 +186,7 @@ impl Recorder {
         let mut manifest = RecordingManifest {
             status: ManifestStatus::Recording,
             guild_id,
-            session_name: session_name.clone(),
+            session_title,
             started_at,
             ended_at: None,
             participants: Vec::new(),
@@ -208,7 +210,7 @@ impl Recorder {
             notification_channel_id,
             initiator,
             started_at,
-            session_name,
+            session_slug,
             manifest_path,
             manifest,
             started_instant,
@@ -270,8 +272,8 @@ impl Recorder {
 
         let participants: Vec<UserId> = session.users.keys().copied().collect();
         let guild_id = session.guild_id;
-        let session_name = session.session_name.clone();
-        info!(%guild_id, session = %session_name, participant_count = participants.len(), "Stopping recording");
+        let session_slug = session.session_slug.clone();
+        info!(%guild_id, session = %session_slug, participant_count = participants.len(), "Stopping recording");
 
         for (_, user_recording) in session.users {
             let UserRecording {
@@ -310,7 +312,7 @@ impl Recorder {
             "Recording manifest written"
         );
 
-        info!(%guild_id, session = %session_name, "Recording stopped");
+        info!(%guild_id, session = %session_slug, "Recording stopped");
         Ok(true)
     }
 
@@ -443,7 +445,7 @@ impl EventHandler for Recorder {
                         session.guild_id,
                         user_id,
                         session.started_at,
-                        &session.session_name,
+                        &session.session_slug,
                         session.tick,
                     );
 
