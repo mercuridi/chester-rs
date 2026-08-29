@@ -8,7 +8,7 @@ use serenity::all::{GuildId, UserId};
 
 pub type AliasGroupId = String;
 
-const DEFAULT_INDEX_DB: &str = "sqlite://database/chronicle/chronicle.sqlite3";
+const DEFAULT_INDEX_DB: &str = "sqlite://data/chronicle.sqlite3";
 const DEFAULT_CORPUS_DIR: &str = "corpus";
 const DEFAULT_LLM_REPO: &str = "Qwen/Qwen2.5-7B-Instruct-GGUF";
 const DEFAULT_LLM_REVISION: &str = "main";

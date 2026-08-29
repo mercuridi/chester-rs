@@ -226,8 +226,12 @@ async fn main() -> Result<(), Error> {
     tracing::info!("Starting Chester");
     // Initialize the SQLite connection pool
     tracing::debug!("Initialising player database connection");
-    let database_url = "sqlite://database/jester/jester.sqlite3";
+    let database_url = "sqlite://data/jester.sqlite3";
     let pool = SqlitePool::connect(database_url).await?;
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await?;
+    jester::db::initialise(&pool).await?;
     tracing::debug!("player database connection successful");
 
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"))?;

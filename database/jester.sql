@@ -1,11 +1,9 @@
-DROP TABLE IF EXISTS tags;
-DROP TABLE IF EXISTS track_tags;
-DROP TABLE IF EXISTS artists;
-DROP TABLE IF EXISTS origins;
-DROP TABLE IF EXISTS tracks;
+CREATE TABLE IF NOT EXISTS metadata (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 
-
-CREATE TABLE tracks (
+CREATE TABLE IF NOT EXISTS tracks (
     id TEXT PRIMARY KEY,
     upload_date TEXT NOT NULL,
     yt_title TEXT NOT NULL,
@@ -16,22 +14,22 @@ CREATE TABLE tracks (
     FOREIGN KEY (origin_id) REFERENCES origins (id) ON DELETE CASCADE
 );
 
-CREATE TABLE tags (
+CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT, -- Unique identifier for each tag
     tag TEXT NOT NULL UNIQUE              -- The tag name (must be unique)
 );
 
-CREATE TABLE artists (
+CREATE TABLE IF NOT EXISTS artists (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     artist TEXT NOT NULL UNIQUE
 );
 
-CREATE TABLE origins (
+CREATE TABLE IF NOT EXISTS origins (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     origin TEXT NOT NULL UNIQUE
 );
 
-CREATE TABLE track_tags (
+CREATE TABLE IF NOT EXISTS track_tags (
     track_id TEXT NOT NULL,               -- Foreign key referencing `tracks.id`
     tag_id INTEGER NOT NULL,              -- Foreign key referencing `tags.id`
     PRIMARY KEY (track_id, tag_id),       -- Composite primary key to prevent duplicates
@@ -44,5 +42,5 @@ CREATE INDEX IF NOT EXISTS idx_origins_lower ON origins(LOWER(origin));
 CREATE INDEX IF NOT EXISTS idx_tags_lower ON tags(LOWER(tag));
 CREATE INDEX IF NOT EXISTS idx_tracks_lower_title ON tracks(LOWER(track_title));
 
-INSERT INTO artists (artist) VALUES ("No artist provided");
-INSERT INTO origins (origin) VALUES ("No origin provided");
+INSERT OR IGNORE INTO artists (artist) VALUES ("No artist provided");
+INSERT OR IGNORE INTO origins (origin) VALUES ("No origin provided");

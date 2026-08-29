@@ -9,7 +9,8 @@ docs/rebuild-plan
 
 # chronicle
 docs/chronicle/
-database/chronicle/chronicle.sqlite3
+/data/*.sqlite3
+/data/*.sqlite3-*
 corpus/*
 
 config.toml

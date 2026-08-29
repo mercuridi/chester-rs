@@ -7,14 +7,17 @@ This document describes a Linux deployment from an empty machine. Windows and ma
 ## What runs where
 
 - Chester itself is a Rust binary started from the repository root.
-- `database/jester/jester.sqlite3` stores the music library and metadata.
+- `data/jester.sqlite3` stores the local music library and metadata.
 - `audio/` stores downloaded MP3 files.
-- `.chronicle/` stores Chronicle's index database and voice recordings.
+- `data/chronicle.sqlite3` stores Chronicle's local index database.
+- `.chronicle/` stores voice recordings and Chronicle configuration.
 - `corpus/` contains the documents indexed by Chronicle.
 - `yt-dlp` must be an executable file in the repository root. The bot does not search `PATH` for it.
-- SQLite is bundled into the Rust binary. The `sqlite3` command-line program is still required by `download.sh` and `migrate.sh`.
+- SQLite is bundled into the Rust binary.
 
-Chronicle uses Candle with CUDA. A CUDA-capable NVIDIA GPU is therefore required for Chronicle's embedding, transcription, and LLM features. The music functionality does not need a GPU.
+Chronicle uses Candle with CUDA. A CUDA-capable NVIDIA GPU is therefore required for Chronicle's embedding, transcription, and LLM features.
+
+Music functionality does not need a GPU.
 
 ## Requirements
 
@@ -41,7 +44,7 @@ sudo apt install -y \
 
 You also need:
 
-- Rust and Cargo, installed with `rustup`.
+- Rust and Cargo, ideally installed with `rustup`.
 - An NVIDIA driver and CUDA toolkit visible to the build and runtime. Verify with `nvidia-smi` and `nvcc --version`.
 - A Discord application and bot token.
 
@@ -77,7 +80,7 @@ cargo build --release
 
 Keep `yt-dlp` beside `Cargo.toml`; both the bot and `download.sh` use `./yt-dlp`.
 
-The checked-in SQLite databases and schemas are used by default. Do not delete them during first setup. If starting with a new music database, initialize it from `database/jester/schema.sql` before adding tracks; the bot expects the `tracks` table to exist.
+The Jester and Chronicle SQLite databases are local runtime state and are not committed. If starting with a new music database, initialize it from `database/jester.sql` before adding tracks; the bot expects the `tracks` table to exist.
 
 ## Discord setup
 
@@ -107,7 +110,7 @@ The example's Chronicle-only configuration is enough for a basic deployment. Pat
 
 ```toml
 [chronicle]
-index_db = "sqlite://database/chronicle/chronicle.sqlite3"
+index_db = "sqlite://data/chronicle.sqlite3"
 corpus_dir = "corpus"
 
 llm_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
@@ -197,7 +200,7 @@ The bot automatically synchronizes tracks in the Jester database at startup. To 
 ./download.sh --parallel
 ```
 
-The script reads IDs from `database/jester/jester.sqlite3`, writes MP3 files to `audio/`, and skips existing files. Parallel mode uses eight jobs; edit `PARALLEL_JOBS` in the script if the host or network needs a lower limit.
+The script reads IDs from `data/jester.sqlite3`, writes MP3 files to `audio/`, and skips existing files. Parallel mode uses eight jobs; edit `PARALLEL_JOBS` in the script if the host or network needs a lower limit.
 
 ## Troubleshooting
 
@@ -207,7 +210,7 @@ The script reads IDs from `database/jester/jester.sqlite3`, writes MP3 files to 
 - **`DISCORD_TOKEN` missing:** create `.env` in the repository root or export the variable in the service environment.
 - **`Failed to read config file`:** ensure `.chronicle/config.toml` exists and is valid TOML.
 - **No slash commands:** run `>register` and register commands in guild.
-- **Startup fails around SQLite:** the Rust application uses bundled SQLite, but `database/jester/jester.sqlite3` must exist and contain the expected schema.
+- **Startup fails around SQLite:** the Rust application uses bundled SQLite, but `data/jester.sqlite3` must exist and contain the expected schema.
 
 ## License
 

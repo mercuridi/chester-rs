@@ -1,7 +1,7 @@
 # Copy this file to .chronicle/config.toml and adjust it for the deployment.
 
 [chronicle]
-index_db = "sqlite://database/chronicle/chronicle.sqlite3"
+index_db = "sqlite://data/chronicle.sqlite3"
 corpus_dir = "corpus"
 
 # The first `/chronicle start` downloads these files into the Hugging Face cache.
