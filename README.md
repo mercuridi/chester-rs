@@ -136,10 +136,12 @@ llm_max_reply_length = 1900
 retrieval_limit = 5
 retrieval_candidate_limit = 15
 retrieval_distance_threshold = 0.8
+retrieval_near_duplicate_threshold = 0.85
+retrieval_max_chunks_per_document = 2
 max_chunk_length = 2000
 ```
 
-The loader validates `llm_max_tokens` (1–32768), `llm_temperature` (0.0–2.0), `llm_max_reply_length` (1–2000), `retrieval_limit` (1–100), `retrieval_candidate_limit` (at least `retrieval_limit`, up to 1000), and a finite non-negative `retrieval_distance_threshold`. Retrieval examines the candidate limit, discards chunks beyond the distance threshold, and sends at most `retrieval_limit` accepted chunks to the LLM. If the question is blank, the corpus is empty, or no chunk meets the threshold, Chronicle returns a short-circuit message instead of invoking the LLM. Startup downloads the BGE embedding model if it is not already cached. The first `/chronicle start` downloads the configured LLM model and tokenizer into the Hugging Face cache.
+The loader validates `llm_max_tokens` (1–32768), `llm_temperature` (0.0–2.0), `llm_max_reply_length` (1–2000), `retrieval_limit` (1–100), `retrieval_candidate_limit` (at least `retrieval_limit`, up to 1000), a finite non-negative `retrieval_distance_threshold`, a `retrieval_near_duplicate_threshold` between 0.0 and 1.0, and a positive `retrieval_max_chunks_per_document`. Retrieval examines the candidate limit, discards chunks beyond the distance threshold, removes exact and near-duplicate chunks, limits the number of chunks from each document, and sends at most `retrieval_limit` accepted chunks to the LLM. Adjacent chunks are retained because future chunker improvements may introduce intentional overlap. If the question is blank, the corpus is empty, or no chunk meets the threshold, Chronicle returns a short-circuit message instead of invoking the LLM. Startup downloads the BGE embedding model if it is not already cached. The first `/chronicle start` downloads the configured LLM model and tokenizer into the Hugging Face cache.
 
 ### Alias and guild configuration
 

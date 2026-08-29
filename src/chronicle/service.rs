@@ -20,6 +20,8 @@ pub struct Chronicle {
     retrieval_limit: usize,
     retrieval_candidate_limit: usize,
     retrieval_distance_threshold: f32,
+    retrieval_near_duplicate_threshold: f32,
+    retrieval_max_chunks_per_document: usize,
     max_reply_length: usize,
     lifecycle: tokio::sync::Mutex<()>,
 }
@@ -32,6 +34,8 @@ impl Chronicle {
         retrieval_limit: usize,
         retrieval_candidate_limit: usize,
         retrieval_distance_threshold: f32,
+        retrieval_near_duplicate_threshold: f32,
+        retrieval_max_chunks_per_document: usize,
         max_reply_length: usize,
     ) -> Self {
         Self {
@@ -42,6 +46,8 @@ impl Chronicle {
             retrieval_limit,
             retrieval_candidate_limit,
             retrieval_distance_threshold,
+            retrieval_near_duplicate_threshold,
+            retrieval_max_chunks_per_document,
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
         }
@@ -60,6 +66,8 @@ impl Chronicle {
                 self.retrieval_limit,
                 self.retrieval_candidate_limit,
                 self.retrieval_distance_threshold,
+                self.retrieval_near_duplicate_threshold,
+                self.retrieval_max_chunks_per_document,
             )
             .await
         {

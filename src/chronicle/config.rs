@@ -62,6 +62,12 @@ pub struct RawChronicleConfig {
     #[serde(default = "default_retrieval_distance_threshold")]
     retrieval_distance_threshold: f32,
 
+    #[serde(default = "default_retrieval_near_duplicate_threshold")]
+    retrieval_near_duplicate_threshold: f32,
+
+    #[serde(default = "default_retrieval_max_chunks_per_document")]
+    retrieval_max_chunks_per_document: usize,
+
     max_chunk_length: usize,
 }
 
@@ -116,6 +122,8 @@ pub struct ChronicleConfig {
     pub retrieval_limit: usize,
     pub retrieval_candidate_limit: usize,
     pub retrieval_distance_threshold: f32,
+    pub retrieval_near_duplicate_threshold: f32,
+    pub retrieval_max_chunks_per_document: usize,
     pub max_chunk_length: usize,
 }
 
@@ -136,6 +144,14 @@ fn default_retrieval_candidate_limit() -> usize {
 
 fn default_retrieval_distance_threshold() -> f32 {
     0.8
+}
+
+fn default_retrieval_near_duplicate_threshold() -> f32 {
+    0.85
+}
+
+fn default_retrieval_max_chunks_per_document() -> usize {
+    2
 }
 
 fn resolve_path(project_root: &Path, path: &str) -> String {
@@ -258,6 +274,8 @@ impl Config {
             retrieval_limit: raw.chronicle.retrieval_limit,
             retrieval_candidate_limit: raw.chronicle.retrieval_candidate_limit,
             retrieval_distance_threshold: raw.chronicle.retrieval_distance_threshold,
+            retrieval_near_duplicate_threshold: raw.chronicle.retrieval_near_duplicate_threshold,
+            retrieval_max_chunks_per_document: raw.chronicle.retrieval_max_chunks_per_document,
             max_chunk_length: raw.chronicle.max_chunk_length,
         };
 
@@ -367,16 +385,21 @@ impl ChronicleConfig {
         if self.retrieval_candidate_limit < self.retrieval_limit
             || self.retrieval_candidate_limit > 1000
         {
-            bail!(
-                "Chronicle retrieval_candidate_limit must be between retrieval_limit and 1000"
-            );
+            bail!("Chronicle retrieval_candidate_limit must be between retrieval_limit and 1000");
         }
-        if !self.retrieval_distance_threshold.is_finite()
-            || self.retrieval_distance_threshold < 0.0
+        if !self.retrieval_distance_threshold.is_finite() || self.retrieval_distance_threshold < 0.0
+        {
+            bail!("Chronicle retrieval_distance_threshold must be finite and non-negative");
+        }
+        if !self.retrieval_near_duplicate_threshold.is_finite()
+            || !(0.0..=1.0).contains(&self.retrieval_near_duplicate_threshold)
         {
             bail!(
-                "Chronicle retrieval_distance_threshold must be finite and non-negative"
+                "Chronicle retrieval_near_duplicate_threshold must be finite and between 0.0 and 1.0"
             );
+        }
+        if self.retrieval_max_chunks_per_document == 0 {
+            bail!("Chronicle retrieval_max_chunks_per_document must be greater than zero");
         }
         if self.max_chunk_length == 0 {
             bail!("Chronicle max_chunk_length must be greater than zero");

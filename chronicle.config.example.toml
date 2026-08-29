@@ -44,6 +44,13 @@ retrieval_candidate_limit = 15
 # Maximum vector distance accepted as relevant context. Lower values are stricter.
 retrieval_distance_threshold = 0.8
 
+# Jaccard overlap threshold for suppressing near-duplicate word-pair shingles.
+# Must be between 0.0 and 1.0; higher values require more overlap.
+retrieval_near_duplicate_threshold = 0.85
+
+# Maximum accepted chunks from any one document.
+retrieval_max_chunks_per_document = 2
+
 # Must be greater than zero. This is a character/byte-oriented chunk limit;
 # the embedding tokenizer still truncates each chunk at 512 tokens.
 max_chunk_length = 2000
