@@ -5,7 +5,10 @@ edition = "2024"
 publish = false
 
 [patch.crates-io]
-candle-kernels = { path = "../candle/candle-kernels" }
+candle-kernels = {
+    git = "https://github.com/mercuridi/candle-cuda-13-compat-patch.git",
+    rev = "d511973fbfad5f9329a55058aa246fc8f71a9f67"
+}
 
 [dependencies]
 dotenv = "0.15.0"
