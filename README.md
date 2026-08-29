@@ -106,11 +106,14 @@ Chester loads `.chronicle/config.toml` relative to the repository root. Start wi
 cp chronicle.config.example.toml .chronicle/config.toml
 ```
 
-The example's Chronicle-only configuration is enough for a basic deployment. Paths are relative to the repository root:
+The example configuration is enough for a basic deployment. Paths are relative to the repository root:
 
 ```toml
+[database]
+jester = "sqlite://data/jester.sqlite3"
+chronicle = "sqlite://data/chronicle.sqlite3"
+
 [chronicle]
-index_db = "sqlite://data/chronicle.sqlite3"
 corpus_dir = "corpus"
 
 llm_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"

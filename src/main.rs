@@ -1,5 +1,6 @@
 mod chronicle;
 mod constants;
+mod database;
 mod discord;
 mod jester;
 mod utils;
@@ -64,16 +65,16 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
 
 async fn build_chronicle(config: &Config) -> Result<Chronicle, Error> {
     tracing::info!(
-        index_db = %config.chronicle.index_db,
+        chronicle_db = %config.database.chronicle,
         "Opening Chronicle index database"
     );
 
-    let index_db = IndexerDb::open(&config.chronicle.index_db).await?;
+    let chronicle_db = IndexerDb::open(&config.database.chronicle).await?;
     tracing::info!("Loading Chronicle embedding model");
     let embedder = Embedder::load(candle_core::Device::cuda_if_available(0)?)?;
     let indexer = Indexer::new(
         PathBuf::from(&config.chronicle.corpus_dir),
-        index_db,
+        chronicle_db,
         embedder,
         config.chronicle.max_chunk_length,
     );
@@ -87,13 +88,13 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle, Error> {
         "Chronicle index complete"
     );
 
-    let (index_db, _embedder) = indexer.into_parts();
+    let (chronicle_db, _embedder) = indexer.into_parts();
     let runtime = GpuRuntime::new();
     let llm = Llm::new(&config.chronicle, runtime.clone());
     tracing::info!("Chronicle services initialized");
 
     Ok(Chronicle::new(
-        index_db,
+        chronicle_db,
         llm,
         runtime,
         config.chronicle.retrieval_limit,
@@ -224,16 +225,6 @@ async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt().with_env_filter(env_filter).init();
 
     tracing::info!("Starting Chester");
-    // Initialize the SQLite connection pool
-    tracing::debug!("Initialising player database connection");
-    let database_url = "sqlite://data/jester.sqlite3";
-    let pool = SqlitePool::connect(database_url).await?;
-    sqlx::query("PRAGMA foreign_keys = ON")
-        .execute(&pool)
-        .await?;
-    jester::db::initialise(&pool).await?;
-    tracing::debug!("player database connection successful");
-
     std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"))?;
 
     let config = Config::load(".chronicle/config.toml")?;
@@ -244,6 +235,8 @@ async fn main() -> Result<(), Error> {
         "Loaded configuration"
     );
 
+    let pool = database::pool::open_sqlite_pool(&config.database.jester, "Jester").await?;
+    jester::db::schema::initialise(&pool).await?;
     let chronicle = build_chronicle(&config).await?;
 
     let sync_stats = sync_audio_library(&pool).await?;

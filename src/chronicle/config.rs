@@ -8,7 +8,8 @@ use serenity::all::{GuildId, UserId};
 
 pub type AliasGroupId = String;
 
-const DEFAULT_INDEX_DB: &str = "sqlite://data/chronicle.sqlite3";
+const DEFAULT_JESTER_DB: &str = "sqlite://data/jester.sqlite3";
+const DEFAULT_CHRONICLE_DB: &str = "sqlite://data/chronicle.sqlite3";
 const DEFAULT_CORPUS_DIR: &str = "corpus";
 const DEFAULT_LLM_REPO: &str = "Qwen/Qwen2.5-7B-Instruct-GGUF";
 const DEFAULT_LLM_REVISION: &str = "main";
@@ -22,8 +23,12 @@ const DEFAULT_LLM_SYSTEM_PROMPT: &str = "Answer only from the supplied Chronicle
 const DEFAULT_RETRIEVAL_LIMIT: usize = 5;
 const DEFAULT_MAX_CHUNK_LENGTH: usize = 2_000;
 
-fn default_index_db() -> String {
-    DEFAULT_INDEX_DB.to_owned()
+fn default_jester_db() -> String {
+    DEFAULT_JESTER_DB.to_owned()
+}
+
+fn default_chronicle_db() -> String {
+    DEFAULT_CHRONICLE_DB.to_owned()
 }
 
 fn default_llm_repo() -> String {
@@ -60,13 +65,31 @@ struct RawConfig {
 
     #[serde(default)]
     chronicle: RawChronicleConfig,
+
+    #[serde(default)]
+    database: RawDatabaseConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawDatabaseConfig {
+    #[serde(default = "default_jester_db")]
+    jester: String,
+
+    #[serde(default = "default_chronicle_db")]
+    chronicle: String,
+}
+
+impl Default for RawDatabaseConfig {
+    fn default() -> Self {
+        Self {
+            jester: default_jester_db(),
+            chronicle: default_chronicle_db(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
 pub struct RawChronicleConfig {
-    #[serde(default = "default_index_db")]
-    index_db: String,
-
     #[serde(default = "default_llm_repo")]
     llm_repo: String,
 
@@ -141,12 +164,18 @@ struct RawGuildConfig {
 pub struct Config {
     alias_groups: HashMap<AliasGroupId, AliasGroup>,
     guilds: HashMap<GuildId, GuildConfig>,
+    pub database: DatabaseConfig,
     pub chronicle: ChronicleConfig,
+}
+
+#[derive(Debug)]
+pub struct DatabaseConfig {
+    pub jester: String,
+    pub chronicle: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct ChronicleConfig {
-    pub index_db: String,
     pub llm_repo: String,
     pub llm_revision: String,
     pub llm_model_file: String,
@@ -244,7 +273,6 @@ impl Config {
         }
 
         let chronicle = ChronicleConfig {
-            index_db: raw.chronicle.index_db,
             llm_repo: raw.chronicle.llm_repo,
             llm_revision: raw.chronicle.llm_revision,
             llm_model_file: raw.chronicle.llm_model_file,
@@ -261,9 +289,17 @@ impl Config {
 
         chronicle.validate()?;
 
+        if raw.database.jester.trim().is_empty() || raw.database.chronicle.trim().is_empty() {
+            bail!("Database URLs cannot be empty");
+        }
+
         Ok(Self {
             alias_groups,
             guilds,
+            database: DatabaseConfig {
+                jester: raw.database.jester,
+                chronicle: raw.database.chronicle,
+            },
             chronicle,
         })
     }
@@ -324,8 +360,8 @@ impl Config {
 
 impl ChronicleConfig {
     fn validate(&self) -> Result<()> {
-        if self.index_db.trim().is_empty() || self.corpus_dir.trim().is_empty() {
-            bail!("Chronicle index_db and corpus_dir cannot be empty");
+        if self.corpus_dir.trim().is_empty() {
+            bail!("Chronicle corpus_dir cannot be empty");
         }
         if self.llm_repo.trim().is_empty()
             || self.llm_revision.trim().is_empty()

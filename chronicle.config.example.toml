@@ -1,7 +1,10 @@
 # Copy this file to .chronicle/config.toml and adjust it for the deployment.
 
+[database]
+jester = "sqlite://data/jester.sqlite3"
+chronicle = "sqlite://data/chronicle.sqlite3"
+
 [chronicle]
-index_db = "sqlite://data/chronicle.sqlite3"
 corpus_dir = "corpus"
 
 # The first `/chronicle start` downloads these files into the Hugging Face cache.

@@ -1,8 +1,3 @@
-CREATE TABLE IF NOT EXISTS metadata (
-    key   TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS tracks (
     id TEXT PRIMARY KEY,
     upload_date TEXT NOT NULL,

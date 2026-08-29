@@ -4,8 +4,6 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use sqlx::{Row, sqlite::SqlitePool};
 
-use super::metadata;
-
 #[derive(Debug, Clone)]
 pub struct IndexedDocument {
     pub id: i64,
@@ -39,32 +37,9 @@ impl IndexerDb {
     pub async fn open(path: &str) -> Result<Self> {
         register_sqlite_vec();
 
-        let pool = SqlitePool::connect(path)
-            .await
-            .with_context(|| format!("Failed to open Chronicle index database: {path}"))?;
+        let pool = crate::database::pool::open_sqlite_pool(path, "Chronicle").await?;
 
-        let rows = sqlx::query("PRAGMA database_list")
-            .fetch_all(&pool)
-            .await
-            .context("Failed to inspect Chronicle database")?;
-
-        for row in rows {
-            let name: String = row.get("name");
-            let file: String = row.get("file");
-
-            tracing::info!(
-                database = %name,
-                file = %file,
-                "Chronicle SQLite database"
-            );
-        }
-
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&pool)
-            .await
-            .context("Failed to enable SQLite foreign keys")?;
-
-        metadata::initialise(&pool).await?;
+        super::schema::initialise(&pool).await?;
 
         Ok(Self { pool })
     }
