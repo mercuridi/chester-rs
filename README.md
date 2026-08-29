@@ -80,7 +80,7 @@ cargo build --release
 
 Keep `yt-dlp` beside `Cargo.toml`; both the bot and `download.sh` use `./yt-dlp`.
 
-The Jester and Chronicle SQLite databases are local runtime state and are not committed. If starting with a new music database, initialize it from `database/jester.sql` before adding tracks; the bot expects the `tracks` table to exist.
+The Jester and Chronicle SQLite databases are local runtime state and are not committed. Chester creates their parent directories, database files, and schemas automatically on first startup.
 
 ## Discord setup
 
@@ -213,7 +213,7 @@ The script reads IDs from `data/jester.sqlite3`, writes MP3 files to `audio/`, a
 - **`DISCORD_TOKEN` missing:** create `.env` in the repository root or export the variable in the service environment.
 - **`Failed to read config file`:** ensure `.chronicle/config.toml` exists and is valid TOML.
 - **No slash commands:** run `>register` and register commands in guild.
-- **Startup fails around SQLite:** the Rust application uses bundled SQLite, but `data/jester.sqlite3` must exist and contain the expected schema.
+- **Startup fails around SQLite:** verify that the configured database parent directory is writable and that the database URLs point to valid SQLite locations. Chester creates missing database files and schemas automatically.
 
 ## License
 

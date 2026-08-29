@@ -1,8 +1,24 @@
 use anyhow::{Context, Result};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
+use std::{path::Path, str::FromStr};
 
 pub async fn open_sqlite_pool(database_url: &str, database_name: &str) -> Result<SqlitePool> {
-    let pool = SqlitePool::connect(database_url)
+    let options = SqliteConnectOptions::from_str(database_url)
+        .with_context(|| format!("Failed to parse {database_name} database URL: {database_url}"))?;
+
+    if let Some(parent) = options.get_filename().parent()
+        && !parent.as_os_str().is_empty()
+        && parent != Path::new(".")
+    {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create {database_name} database directory: {}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let pool = SqlitePool::connect_with(options.create_if_missing(true))
         .await
         .with_context(|| format!("Failed to open {database_name} database: {database_url}"))?;
 
