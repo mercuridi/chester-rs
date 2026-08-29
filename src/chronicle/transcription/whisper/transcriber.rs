@@ -97,7 +97,13 @@ impl WhisperTranscriber {
             if decoded.no_speech_prob > m::NO_SPEECH_THRESHOLD
                 && decoded.avg_logprob < m::LOGPROB_THRESHOLD
             {
-                //tracing::info!("Whisper rejected segment");
+                // Advance past rejected windows as well. Otherwise a silent
+                // window causes the decoder to process the same window forever.
+                if segment_size == content_frames - seek {
+                    break;
+                }
+
+                seek += stride_frames;
                 continue;
             }
 
@@ -189,14 +195,57 @@ fn load_mel_filters() -> Result<Vec<f32>> {
     Ok(filters)
 }
 
-fn normalize_text(text: &str) -> String {
-    text.chars()
-        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+fn normalized_tokens(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(|word| {
+            word.chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect::<String>()
+                .to_lowercase()
+        })
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+fn raw_words(text: &str) -> Vec<&str> {
+    text.split_whitespace().collect()
+}
+
+fn has_temporal_overlap(a: &TranscriptSegment, b: &TranscriptSegment) -> bool {
+    a.start < b.end && b.start < a.end
+}
+
+fn contains_tokens(container: &[String], contained: &[String]) -> bool {
+    contained.len() >= 3
+        && container
+            .windows(contained.len())
+            .any(|window| window == contained)
+}
+
+fn suffix_prefix_overlap(left: &[String], right: &[String]) -> usize {
+    (1..=left.len().min(right.len()))
+        .rev()
+        .find(|&length| left[left.len() - length..] == right[..length])
+        .unwrap_or(0)
+}
+
+fn merge_overlapping_text(left: &str, right: &str) -> Option<String> {
+    let left_tokens = normalized_tokens(left);
+    let right_tokens = normalized_tokens(right);
+    let overlap = suffix_prefix_overlap(&left_tokens, &right_tokens);
+
+    if overlap < 3 {
+        return None;
+    }
+
+    let right_words = raw_words(right);
+    let suffix = right_words.get(overlap..)?.join(" ");
+
+    Some(if suffix.is_empty() {
+        left.trim().to_owned()
+    } else {
+        format!("{} {}", left.trim(), suffix)
+    })
 }
 
 pub fn deduplicate_segments(mut segments: Vec<TranscriptSegment>) -> Vec<TranscriptSegment> {
@@ -209,24 +258,57 @@ pub fn deduplicate_segments(mut segments: Vec<TranscriptSegment>) -> Vec<Transcr
     let mut output: Vec<TranscriptSegment> = Vec::new();
 
     for segment in segments {
-        let Some(previous) = output.last_mut() else {
+        let segment_tokens = normalized_tokens(&segment.text);
+        let mut duplicate_index = None;
+
+        // A duplicate can be hidden behind another segment, so inspect every
+        // retained segment whose time range overlaps this candidate.
+        for index in (0..output.len()).rev() {
+            let existing = &output[index];
+
+            if !has_temporal_overlap(existing, &segment) {
+                continue;
+            }
+
+            let existing_tokens = normalized_tokens(&existing.text);
+            let same_text = existing_tokens == segment_tokens;
+            let contained = contains_tokens(&existing_tokens, &segment_tokens)
+                || contains_tokens(&segment_tokens, &existing_tokens);
+
+            if same_text || contained {
+                duplicate_index = Some(index);
+                break;
+            }
+
+            if merge_overlapping_text(&existing.text, &segment.text).is_some() {
+                duplicate_index = Some(index);
+                break;
+            }
+        }
+
+        let Some(index) = duplicate_index else {
             output.push(segment);
             continue;
         };
 
-        let overlaps = segment.start < previous.end;
-        let same_text = normalize_text(&segment.text) == normalize_text(&previous.text);
+        let existing = &mut output[index];
+        let existing_tokens = normalized_tokens(&existing.text);
 
-        if overlaps && same_text {
-            // Keep the shorter version.
-            if (segment.end - segment.start) < (previous.end - previous.start) {
-                *previous = segment;
+        if existing_tokens == segment_tokens {
+            // Identical text is usually emitted with padded timestamps in one
+            // window, so retain the tighter interval.
+            if (segment.end - segment.start) < (existing.end - existing.start) {
+                *existing = segment;
             }
-
-            continue;
+        } else if contains_tokens(&segment_tokens, &existing_tokens) {
+            // A later overlapping window often completes a truncated phrase.
+            // Keep the richer candidate, as in "you can, um" -> "you can
+            // swap your helmet in this menu".
+            *existing = segment;
+        } else if let Some(text) = merge_overlapping_text(&existing.text, &segment.text) {
+            existing.end = existing.end.max(segment.end);
+            existing.text = text;
         }
-
-        output.push(segment);
     }
 
     output
