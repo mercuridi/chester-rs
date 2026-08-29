@@ -55,9 +55,9 @@ retrieval_near_duplicate_threshold = 0.85
 # Maximum accepted chunks from any one document.
 retrieval_max_chunks_per_document = 2
 
-# Must be greater than zero. This is a character/byte-oriented chunk limit;
-# the embedding tokenizer still truncates each chunk at 512 tokens.
-max_chunk_length = 2000
+# Maximum number of BGE embedding tokens per chunk, including special tokens.
+# Must be between 3 and 512.
+max_chunk_tokens = 480
 
 # Optional: map Discord users to names used in transcripts.
 # Replace the example IDs with real Discord user IDs.

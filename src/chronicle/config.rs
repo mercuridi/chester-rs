@@ -71,7 +71,7 @@ pub struct RawChronicleConfig {
     #[serde(default = "default_retrieval_max_chunks_per_document")]
     retrieval_max_chunks_per_document: usize,
 
-    max_chunk_length: usize,
+    max_chunk_tokens: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -128,7 +128,7 @@ pub struct ChronicleConfig {
     pub retrieval_distance_threshold: f32,
     pub retrieval_near_duplicate_threshold: f32,
     pub retrieval_max_chunks_per_document: usize,
-    pub max_chunk_length: usize,
+    pub max_chunk_tokens: usize,
 }
 
 #[derive(Debug)]
@@ -285,7 +285,7 @@ impl Config {
             retrieval_distance_threshold: raw.chronicle.retrieval_distance_threshold,
             retrieval_near_duplicate_threshold: raw.chronicle.retrieval_near_duplicate_threshold,
             retrieval_max_chunks_per_document: raw.chronicle.retrieval_max_chunks_per_document,
-            max_chunk_length: raw.chronicle.max_chunk_length,
+            max_chunk_tokens: raw.chronicle.max_chunk_tokens,
         };
 
         chronicle.validate()?;
@@ -417,8 +417,8 @@ impl ChronicleConfig {
         if self.retrieval_max_chunks_per_document == 0 {
             bail!("Chronicle retrieval_max_chunks_per_document must be greater than zero");
         }
-        if self.max_chunk_length == 0 {
-            bail!("Chronicle max_chunk_length must be greater than zero");
+        if !(3..=512).contains(&self.max_chunk_tokens) {
+            bail!("Chronicle max_chunk_tokens must be between 3 and 512");
         }
         Ok(())
     }

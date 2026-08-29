@@ -28,16 +28,16 @@ pub struct Indexer {
     root: PathBuf,
     db: IndexerDb,
     embedder: Embedder,
-    max_chunk_length: usize,
+    max_chunk_tokens: usize,
 }
 
 impl Indexer {
-    pub fn new(root: PathBuf, db: IndexerDb, embedder: Embedder, max_chunk_length: usize) -> Self {
+    pub fn new(root: PathBuf, db: IndexerDb, embedder: Embedder, max_chunk_tokens: usize) -> Self {
         Self {
             root,
             db,
             embedder,
-            max_chunk_length,
+            max_chunk_tokens,
         }
     }
 
@@ -75,7 +75,7 @@ impl Indexer {
             seen_paths.insert(path.clone());
 
             if let Some(indexed) = indexed_by_path.get(path.as_str()) {
-                if indexed.content_hash == document.content_hash {
+                if indexed.content_hash == index_fingerprint(&document, self.max_chunk_tokens) {
                     stats.unchanged += 1;
                     continue;
                 }
@@ -124,14 +124,14 @@ impl Indexer {
             documents = pending.len(),
             "Building embeddings for pending documents"
         );
-        let mut chunks = pending
+        let mut chunks: Vec<(usize, usize, _, Encoding)> = pending
             .iter()
             .enumerate()
-            .flat_map(|(document_index, (document, _, _))| {
-                chunker::chunk(document, self.max_chunk_length)
+            .map(|(document_index, (document, _, _))| -> Result<Vec<_>> {
+                chunker::chunk(document, self.embedder.tokenizer(), self.max_chunk_tokens)?
                     .into_iter()
                     .enumerate()
-                    .map(move |(chunk_index, chunk)| {
+                    .map(|(chunk_index, chunk)| {
                         let encoding = self
                             .embedder
                             .encode(&chunk.content)
@@ -139,8 +139,12 @@ impl Indexer {
 
                         Ok((document_index, chunk_index, chunk, encoding))
                     })
+                    .collect()
             })
-            .collect::<Result<Vec<(usize, usize, _, Encoding)>>>()?;
+            .collect::<Result<Vec<Vec<(usize, usize, _, Encoding)>>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
 
         let total_chunks = chunks.len();
         let total_tokens = chunks
@@ -165,10 +169,18 @@ impl Indexer {
 
         let mut embeddings = pending
             .iter()
-            .map(|(document, _, _)| {
-                vec![None; chunker::chunk(document, self.max_chunk_length).len()]
+            .map(|(document, _, _)| -> Result<Vec<Option<Vec<f32>>>> {
+                Ok(vec![
+                    None;
+                    chunker::chunk(
+                        document,
+                        self.embedder.tokenizer(),
+                        self.max_chunk_tokens,
+                    )?
+                    .len()
+                ])
             })
-            .collect::<Vec<Vec<Option<Vec<f32>>>>>();
+            .collect::<Result<Vec<Vec<Option<Vec<f32>>>>>>()?;
         let batch_count = chunks.len().div_ceil(EMBEDDING_BATCH_SIZE);
         for batch in chunks.chunks(EMBEDDING_BATCH_SIZE) {
             debug!(batch_size = batch.len(), "Embedding chunk batch");
@@ -230,7 +242,7 @@ impl Indexer {
         path: &str,
         embeddings: &[Vec<f32>],
     ) -> Result<()> {
-        let chunks = chunker::chunk(document, self.max_chunk_length);
+        let chunks = chunker::chunk(document, self.embedder.tokenizer(), self.max_chunk_tokens)?;
 
         let indexed_chunks = chunks
             .into_iter()
@@ -245,10 +257,22 @@ impl Indexer {
             .collect::<Result<Vec<_>>>()?;
 
         self.db
-            .replace_document(path, &document.content_hash, &indexed_chunks, embeddings)
+            .replace_document(
+                path,
+                &index_fingerprint(document, self.max_chunk_tokens),
+                &indexed_chunks,
+                embeddings,
+            )
             .await
             .with_context(|| format!("Failed to persist document: {path}"))?;
 
         Ok(())
     }
+}
+
+fn index_fingerprint(document: &Document, max_chunk_tokens: usize) -> String {
+    format!(
+        "{}:chunker-v2-token-budget:{max_chunk_tokens}",
+        document.content_hash
+    )
 }

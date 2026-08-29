@@ -81,7 +81,7 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
         PathBuf::from(&config.chronicle.corpus_dir),
         chronicle_db,
         embedder,
-        config.chronicle.max_chunk_length,
+        config.chronicle.max_chunk_tokens,
     );
 
     let indexing_stats = indexer
@@ -271,7 +271,7 @@ async fn run() -> Result<()> {
     tracing::debug!(
         corpus_dir = %config.chronicle.corpus_dir,
         retrieval_limit = config.chronicle.retrieval_limit,
-        max_chunk_length = config.chronicle.max_chunk_length,
+        max_chunk_tokens = config.chronicle.max_chunk_tokens,
         max_reply_length = config.chronicle.llm_max_reply_length,
         "Loaded configuration"
     );

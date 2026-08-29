@@ -108,6 +108,10 @@ impl Embedder {
             .map_err(|error| anyhow!("Failed to tokenize text: {error}"))
     }
 
+    pub fn tokenizer(&self) -> &Tokenizer {
+        &self.tokenizer
+    }
+
     pub fn embed_encodings(&self, encodings: &[Encoding]) -> Result<Vec<Vec<f32>>> {
         if encodings.is_empty() {
             return Ok(Vec::new());

@@ -1,91 +1,137 @@
+use anyhow::{Result, anyhow};
+use tokenizers::Tokenizer;
+
 use super::document::{Chunk, Document};
 
-pub fn chunk(document: &Document, max_length: usize) -> Vec<Chunk> {
-    chunk_text(document, max_length)
-}
+/// Split a document into chunks whose encoded representation fits the embedding model.
+///
+/// Source ranges are used when a long paragraph must be split, so chunk text is never
+/// reconstructed from decoded tokens (which can change whitespace or Unicode text).
+pub fn chunk(document: &Document, tokenizer: &Tokenizer, max_tokens: usize) -> Result<Vec<Chunk>> {
+    if max_tokens < 3 {
+        return Err(anyhow!("Chunk token budget must be at least 3"));
+    }
 
-fn chunk_text(document: &Document, max_length: usize) -> Vec<Chunk> {
     if document.content.trim().is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
-    let paragraphs = document.content.split("\n\n");
+    let paragraphs = document
+        .content
+        .split_inclusive("\n\n")
+        .scan(0, |start, paragraph| {
+            let range = (*start, *start + paragraph.len());
+            *start = range.1;
+            Some(range)
+        })
+        .filter(|(start, end)| !document.content[*start..*end].trim().is_empty())
+        .collect::<Vec<_>>();
 
-    let mut chunks = Vec::new();
-    let mut current = String::new();
+    let mut ranges = Vec::new();
+    let mut current = None::<(usize, usize)>;
 
-    for paragraph in paragraphs {
-        let paragraph = paragraph.trim();
+    for (start, end) in paragraphs {
+        let candidate = current.map_or_else(
+            || document.content[start..end].to_owned(),
+            |(current_start, _)| document.content[current_start..end].to_owned(),
+        );
 
-        if paragraph.is_empty() {
+        if encoded_len(tokenizer, &candidate)? <= max_tokens {
+            current = Some((
+                current.map_or(start, |(current_start, _)| current_start),
+                end,
+            ));
             continue;
         }
 
-        if paragraph.len() > max_length {
-            if !current.is_empty() {
-                chunks.push(std::mem::take(&mut current));
-                current = String::new();
-            }
-
-            chunks.extend(split_long_text(paragraph, max_length));
-            continue;
+        if let Some((current_start, current_end)) = current.take() {
+            ranges.push((current_start, current_end));
         }
 
-        let candidate = if current.is_empty() {
-            paragraph.to_owned()
+        let paragraph = &document.content[start..end];
+        if encoded_len(tokenizer, paragraph)? <= max_tokens {
+            current = Some((start, end));
         } else {
-            format!("{current}\n\n{paragraph}")
-        };
-
-        if candidate.len() > max_length {
-            chunks.push(std::mem::take(&mut current));
-            paragraph.clone_into(&mut current);
-        } else {
-            current = candidate;
+            ranges.extend(
+                split_long_text(paragraph, tokenizer, max_tokens)?
+                    .into_iter()
+                    .map(|(local_start, local_end)| (start + local_start, start + local_end)),
+            );
         }
     }
 
-    if !current.is_empty() {
-        chunks.push(current);
+    if let Some(range) = current {
+        ranges.push(range);
     }
 
-    chunks
+    Ok(ranges
         .into_iter()
         .enumerate()
-        .map(|(index, content)| Chunk {
+        .map(|(index, (start, end))| Chunk {
             document_path: document.path.clone(),
             index,
-            content,
+            content: document.content[start..end].to_owned(),
             heading: None,
         })
-        .collect()
+        .collect())
 }
 
-fn split_long_text(text: &str, max_length: usize) -> Vec<String> {
-    let mut chunks = Vec::new();
-    let mut current = String::new();
+fn encoded_len(tokenizer: &Tokenizer, text: &str) -> Result<usize> {
+    tokenizer
+        .encode(text, true)
+        .map(|encoding| encoding.len())
+        .map_err(|error| anyhow!("Failed to tokenize chunk: {error}"))
+}
 
-    for word in text.split_whitespace() {
-        let candidate = if current.is_empty() {
-            word.to_owned()
-        } else {
-            format!("{current} {word}")
-        };
+fn split_long_text(
+    text: &str,
+    tokenizer: &Tokenizer,
+    max_tokens: usize,
+) -> Result<Vec<(usize, usize)>> {
+    let mut ranges = Vec::new();
+    let mut start = 0;
 
-        if candidate.len() > max_length {
-            if !current.is_empty() {
-                chunks.push(std::mem::take(&mut current));
-            }
-
-            word.clone_into(&mut current);
-        } else {
-            current = candidate;
+    while start < text.len() {
+        let remaining = &text[start..];
+        if encoded_len(tokenizer, remaining)? <= max_tokens {
+            ranges.push((start, text.len()));
+            break;
         }
+
+        let encoding = tokenizer
+            .encode(remaining, true)
+            .map_err(|error| anyhow!("Failed to tokenize long chunk: {error}"))?;
+        let offsets = encoding
+            .get_offsets()
+            .iter()
+            .copied()
+            .filter(|(offset_start, offset_end)| offset_end > offset_start)
+            .collect::<Vec<_>>();
+
+        let content_budget = max_tokens.saturating_sub(encoding.len() - offsets.len());
+        let mut end = offsets
+            .iter()
+            .take(content_budget.max(1))
+            .next_back()
+            .map_or(remaining.len(), |(_, offset_end)| *offset_end);
+
+        while end > 0 && encoded_len(tokenizer, &remaining[..end])? > max_tokens {
+            end = offsets
+                .iter()
+                .take_while(|(_, offset_end)| *offset_end < end)
+                .last()
+                .map_or(0, |(_, offset_end)| *offset_end);
+        }
+
+        if end == 0 {
+            return Err(anyhow!(
+                "Unable to split text into a chunk of {max_tokens} tokens"
+            ));
+        }
+
+        ranges.push((start, start + end));
+        start += end;
     }
 
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-
-    chunks
+    Ok(ranges)
 }
