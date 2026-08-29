@@ -9,6 +9,14 @@ use super::{
     embedder::Embedder,
 };
 
+#[derive(Debug)]
+pub enum RetrievalOutcome {
+    Results(Vec<SearchResult>),
+    BadQuestion,
+    CorpusEmpty,
+    NoResultMeetsThreshold,
+}
+
 pub struct Retriever {
     db: IndexerDb,
     embedder: Mutex<Option<Embedder>>,
@@ -53,12 +61,27 @@ impl Retriever {
         Ok(())
     }
 
-    #[instrument(skip(self, query), fields(query_len = query.len(), limit))]
-    pub async fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+    #[instrument(skip(self, query), fields(query_len = query.len(), limit, candidate_limit, distance_threshold))]
+    pub async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        candidate_limit: usize,
+        distance_threshold: f32,
+    ) -> Result<RetrievalOutcome> {
         let query = query.trim();
 
         if query.is_empty() {
-            return Ok(Vec::new());
+            return Ok(RetrievalOutcome::BadQuestion);
+        }
+
+        if !self
+            .db
+            .has_chunks()
+            .await
+            .context("Failed to inspect Chronicle corpus")?
+        {
+            return Ok(RetrievalOutcome::CorpusEmpty);
         }
 
         let embedding = {
@@ -76,14 +99,28 @@ impl Retriever {
         };
 
         self.db
-            .search_similar(&embedding, limit)
+            .search_similar(&embedding, candidate_limit)
             .await
             .context("Failed to search index")
-            .inspect(|results| {
+            .map(|results| {
+                let results = results
+                    .into_iter()
+                    .filter(|result| result.distance <= distance_threshold)
+                    .take(limit)
+                    .collect::<Vec<_>>();
+
                 debug!(
                     result_count = results.len(),
+                    candidate_limit,
+                    distance_threshold,
                     "Completed Chronicle retrieval"
                 );
+
+                if results.is_empty() {
+                    RetrievalOutcome::NoResultMeetsThreshold
+                } else {
+                    RetrievalOutcome::Results(results)
+                }
             })
     }
 }

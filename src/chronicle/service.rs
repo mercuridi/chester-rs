@@ -2,7 +2,11 @@ use anyhow::Result;
 use tracing::{debug, info, instrument};
 
 use super::{
-    indexer::{db::repository::IndexerDb, prompt, retriever::Retriever},
+    indexer::{
+        db::repository::IndexerDb,
+        prompt,
+        retriever::{RetrievalOutcome, Retriever},
+    },
     llm::Llm,
     runtime::GpuRuntime,
     transcription::service::TranscriptionService,
@@ -14,6 +18,8 @@ pub struct Chronicle {
     runtime: GpuRuntime,
     transcription: TranscriptionService,
     retrieval_limit: usize,
+    retrieval_candidate_limit: usize,
+    retrieval_distance_threshold: f32,
     max_reply_length: usize,
     lifecycle: tokio::sync::Mutex<()>,
 }
@@ -24,6 +30,8 @@ impl Chronicle {
         llm: Llm,
         runtime: GpuRuntime,
         retrieval_limit: usize,
+        retrieval_candidate_limit: usize,
+        retrieval_distance_threshold: f32,
         max_reply_length: usize,
     ) -> Self {
         Self {
@@ -32,6 +40,8 @@ impl Chronicle {
             runtime: runtime.clone(),
             transcription: TranscriptionService::new(runtime),
             retrieval_limit,
+            retrieval_candidate_limit,
+            retrieval_distance_threshold,
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
         }
@@ -43,10 +53,35 @@ impl Chronicle {
         let _lifecycle = self.lifecycle.lock().await;
         let _gpu_lease = self.runtime.acquire_inference()?;
 
-        let results = self
+        let outcome = match self
             .retriever
-            .search(question, self.retrieval_limit)
-            .await?;
+            .search(
+                question,
+                self.retrieval_limit,
+                self.retrieval_candidate_limit,
+                self.retrieval_distance_threshold,
+            )
+            .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                tracing::warn!(%error, "Chronicle retrieval failed");
+                return Ok("Chronicle retrieval failed.".to_owned());
+            }
+        };
+
+        let results = match outcome {
+            RetrievalOutcome::Results(results) => results,
+            RetrievalOutcome::BadQuestion => {
+                return Ok("Please provide a non-empty question.".to_owned());
+            }
+            RetrievalOutcome::CorpusEmpty => {
+                return Ok("Chronicle corpus is empty.".to_owned());
+            }
+            RetrievalOutcome::NoResultMeetsThreshold => {
+                return Ok("No relevant Chronicle context was found.".to_owned());
+            }
+        };
 
         let prompt = prompt::build_prompt(question, &results);
         debug!(

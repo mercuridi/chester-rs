@@ -56,6 +56,12 @@ pub struct RawChronicleConfig {
 
     retrieval_limit: usize,
 
+    #[serde(default = "default_retrieval_candidate_limit")]
+    retrieval_candidate_limit: usize,
+
+    #[serde(default = "default_retrieval_distance_threshold")]
+    retrieval_distance_threshold: f32,
+
     max_chunk_length: usize,
 }
 
@@ -108,6 +114,8 @@ pub struct ChronicleConfig {
     pub llm_system_prompt: String,
     pub llm_max_reply_length: usize,
     pub retrieval_limit: usize,
+    pub retrieval_candidate_limit: usize,
+    pub retrieval_distance_threshold: f32,
     pub max_chunk_length: usize,
 }
 
@@ -120,6 +128,14 @@ pub struct AliasGroup {
 #[derive(Debug)]
 pub struct GuildConfig {
     pub alias_groups: Vec<AliasGroupId>,
+}
+
+fn default_retrieval_candidate_limit() -> usize {
+    15
+}
+
+fn default_retrieval_distance_threshold() -> f32 {
+    0.8
 }
 
 fn resolve_path(project_root: &Path, path: &str) -> String {
@@ -240,6 +256,8 @@ impl Config {
             llm_system_prompt: raw.chronicle.llm_system_prompt,
             llm_max_reply_length: raw.chronicle.llm_max_reply_length,
             retrieval_limit: raw.chronicle.retrieval_limit,
+            retrieval_candidate_limit: raw.chronicle.retrieval_candidate_limit,
+            retrieval_distance_threshold: raw.chronicle.retrieval_distance_threshold,
             max_chunk_length: raw.chronicle.max_chunk_length,
         };
 
@@ -345,6 +363,20 @@ impl ChronicleConfig {
         }
         if self.retrieval_limit == 0 || self.retrieval_limit > 100 {
             bail!("Chronicle retrieval_limit must be between 1 and 100");
+        }
+        if self.retrieval_candidate_limit < self.retrieval_limit
+            || self.retrieval_candidate_limit > 1000
+        {
+            bail!(
+                "Chronicle retrieval_candidate_limit must be between retrieval_limit and 1000"
+            );
+        }
+        if !self.retrieval_distance_threshold.is_finite()
+            || self.retrieval_distance_threshold < 0.0
+        {
+            bail!(
+                "Chronicle retrieval_distance_threshold must be finite and non-negative"
+            );
         }
         if self.max_chunk_length == 0 {
             bail!("Chronicle max_chunk_length must be greater than zero");

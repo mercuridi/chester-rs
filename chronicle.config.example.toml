@@ -37,6 +37,13 @@ llm_max_reply_length = 1900
 # Must be between 1 and 100. Larger values increase prompt size and latency.
 retrieval_limit = 5
 
+# Number of vector candidates to inspect before applying the distance threshold.
+# Must be at least retrieval_limit and no greater than 1000.
+retrieval_candidate_limit = 15
+
+# Maximum vector distance accepted as relevant context. Lower values are stricter.
+retrieval_distance_threshold = 0.8
+
 # Must be greater than zero. This is a character/byte-oriented chunk limit;
 # the embedding tokenizer still truncates each chunk at 512 tokens.
 max_chunk_length = 2000

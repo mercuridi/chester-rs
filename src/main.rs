@@ -106,6 +106,8 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
         llm,
         runtime,
         config.chronicle.retrieval_limit,
+        config.chronicle.retrieval_candidate_limit,
+        config.chronicle.retrieval_distance_threshold,
         config.chronicle.llm_max_reply_length,
     ))
 }

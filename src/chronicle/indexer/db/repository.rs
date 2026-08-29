@@ -25,7 +25,6 @@ pub struct SearchResult {
     pub chunk_index: i64,
     pub heading: Option<String>,
     pub text: String,
-    #[expect(dead_code, reason = "Retained for future result display and reranking")]
     pub distance: f32,
 }
 
@@ -64,6 +63,13 @@ impl IndexerDb {
                 content_hash: row.get("content_hash"),
             })
             .collect())
+    }
+
+    pub async fn has_chunks(&self) -> Result<bool> {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM chunks)")
+            .fetch_one(&self.pool)
+            .await
+            .context("Failed to check whether the Chronicle corpus is empty")
     }
 
     pub async fn delete_document(&self, document_id: i64) -> Result<()> {
