@@ -1,6 +1,14 @@
 # Changelog
 
-## [2.4.0] — 2026-08-29
+## [2.5.0] — 2026-08-29
+
+### Features
+
+- Improve llm chunk retrieval with threshold relevance system
+- Added deduplication and diversification systems to the llm chunk retriever
+- Llm prompting is now token-aware and will avoid overloading context
+
+## [v2.4.0] — 2026-08-29
 
 ### Features
 
