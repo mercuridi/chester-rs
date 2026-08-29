@@ -8,53 +8,6 @@ use serenity::all::{GuildId, UserId};
 
 pub type AliasGroupId = String;
 
-const DEFAULT_JESTER_DB: &str = "sqlite://data/jester.sqlite3";
-const DEFAULT_CHRONICLE_DB: &str = "sqlite://data/chronicle.sqlite3";
-const DEFAULT_CORPUS_DIR: &str = "corpus";
-const DEFAULT_LLM_REPO: &str = "Qwen/Qwen2.5-7B-Instruct-GGUF";
-const DEFAULT_LLM_REVISION: &str = "main";
-const DEFAULT_LLM_MODEL_FILE: &str = "qwen2.5-7b-instruct-q3_k_m.gguf";
-const DEFAULT_LLM_TOKENIZER_REPO: &str = "Qwen/Qwen2.5-7B-Instruct";
-const DEFAULT_LLM_TOKENIZER_FILE: &str = "tokenizer.json";
-const DEFAULT_LLM_MAX_TOKENS: u32 = 512;
-const DEFAULT_LLM_TEMPERATURE: f32 = 0.2;
-const DEFAULT_LLM_SEED: u64 = 42;
-const DEFAULT_LLM_SYSTEM_PROMPT: &str = "Answer only from the supplied Chronicle context. If the context is insufficient, say so plainly. Do not invent facts.";
-const DEFAULT_RETRIEVAL_LIMIT: usize = 5;
-const DEFAULT_MAX_CHUNK_LENGTH: usize = 2_000;
-
-fn default_jester_db() -> String {
-    DEFAULT_JESTER_DB.to_owned()
-}
-
-fn default_chronicle_db() -> String {
-    DEFAULT_CHRONICLE_DB.to_owned()
-}
-
-fn default_llm_repo() -> String {
-    DEFAULT_LLM_REPO.to_owned()
-}
-
-fn default_llm_revision() -> String {
-    DEFAULT_LLM_REVISION.to_owned()
-}
-
-fn default_llm_model_file() -> String {
-    DEFAULT_LLM_MODEL_FILE.to_owned()
-}
-
-fn default_llm_tokenizer_repo() -> String {
-    DEFAULT_LLM_TOKENIZER_REPO.to_owned()
-}
-
-fn default_llm_tokenizer_file() -> String {
-    DEFAULT_LLM_TOKENIZER_FILE.to_owned()
-}
-
-fn default_llm_system_prompt() -> String {
-    DEFAULT_LLM_SYSTEM_PROMPT.to_owned()
-}
-
 #[derive(Debug, Deserialize)]
 struct RawConfig {
     #[serde(default)]
@@ -63,87 +16,43 @@ struct RawConfig {
     #[serde(default)]
     guilds: HashMap<String, RawGuildConfig>,
 
-    #[serde(default)]
     chronicle: RawChronicleConfig,
 
-    #[serde(default)]
     database: RawDatabaseConfig,
 }
 
 #[derive(Debug, Deserialize)]
 struct RawDatabaseConfig {
-    #[serde(default = "default_jester_db")]
     jester: String,
 
-    #[serde(default = "default_chronicle_db")]
     chronicle: String,
 }
 
-impl Default for RawDatabaseConfig {
-    fn default() -> Self {
-        Self {
-            jester: default_jester_db(),
-            chronicle: default_chronicle_db(),
-        }
-    }
-}
-
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize)]
 pub struct RawChronicleConfig {
-    #[serde(default = "default_llm_repo")]
     llm_repo: String,
 
-    #[serde(default = "default_llm_revision")]
     llm_revision: String,
 
-    #[serde(default = "default_llm_model_file")]
     llm_model_file: String,
 
-    #[serde(default = "default_llm_tokenizer_repo")]
     llm_tokenizer_repo: String,
 
-    #[serde(default = "default_llm_tokenizer_file")]
     llm_tokenizer_file: String,
 
-    #[serde(default = "default_corpus_dir")]
     corpus_dir: String,
 
-    #[serde(default = "default_llm_max_tokens")]
     llm_max_tokens: u32,
 
-    #[serde(default = "default_llm_temperature")]
     llm_temperature: f32,
 
-    #[serde(default = "default_llm_seed")]
     llm_seed: u64,
 
-    #[serde(default = "default_llm_system_prompt")]
     llm_system_prompt: String,
 
-    #[serde(default = "default_retrieval_limit")]
     retrieval_limit: usize,
 
-    #[serde(default = "default_max_chunk_length")]
     max_chunk_length: usize,
-}
-
-fn default_corpus_dir() -> String {
-    DEFAULT_CORPUS_DIR.to_owned()
-}
-fn default_llm_max_tokens() -> u32 {
-    DEFAULT_LLM_MAX_TOKENS
-}
-fn default_llm_temperature() -> f32 {
-    DEFAULT_LLM_TEMPERATURE
-}
-fn default_llm_seed() -> u64 {
-    DEFAULT_LLM_SEED
-}
-fn default_retrieval_limit() -> usize {
-    DEFAULT_RETRIEVAL_LIMIT
-}
-fn default_max_chunk_length() -> usize {
-    DEFAULT_MAX_CHUNK_LENGTH
 }
 
 #[derive(Debug, Deserialize, Clone)]
