@@ -17,6 +17,10 @@ llm_tokenizer_file = "tokenizer.json"
 # Must be between 1 and 32768.
 llm_max_tokens = 512
 
+# Total model context budget, including prompt and generated tokens.
+# Must be greater than llm_max_tokens and no greater than 32768.
+llm_context_limit = 32768
+
 # Must be finite and between 0.0 and 2.0.
 llm_temperature = 0.2
 

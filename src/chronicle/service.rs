@@ -91,9 +91,19 @@ impl Chronicle {
             }
         };
 
-        let prompt = prompt::build_prompt(question, &results);
+        let assembly = prompt::build_prompt_with_budget(
+            question,
+            &results,
+            self.llm.prompt_token_budget(),
+            |candidate| self.llm.count_input_tokens(candidate),
+        )?;
+        let prompt = assembly.prompt;
         debug!(
             result_count = results.len(),
+            selected_result_count = assembly.selected_results,
+            omitted_result_count = assembly.omitted_results,
+            prompt_tokens = assembly.prompt_tokens,
+            truncated_result = assembly.truncated_result,
             prompt_len = prompt.len(),
             "Built Chronicle prompt"
         );

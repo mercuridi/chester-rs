@@ -46,6 +46,9 @@ pub struct RawChronicleConfig {
 
     llm_max_tokens: u32,
 
+    #[serde(default = "default_llm_context_limit")]
+    llm_context_limit: usize,
+
     llm_temperature: f32,
 
     llm_seed: u64,
@@ -115,6 +118,7 @@ pub struct ChronicleConfig {
     pub llm_tokenizer_file: String,
     pub corpus_dir: String,
     pub llm_max_tokens: u32,
+    pub llm_context_limit: usize,
     pub llm_temperature: f32,
     pub llm_seed: u64,
     pub llm_system_prompt: String,
@@ -140,6 +144,10 @@ pub struct GuildConfig {
 
 fn default_retrieval_candidate_limit() -> usize {
     15
+}
+
+fn default_llm_context_limit() -> usize {
+    32_768
 }
 
 fn default_retrieval_distance_threshold() -> f32 {
@@ -267,6 +275,7 @@ impl Config {
             llm_tokenizer_file: raw.chronicle.llm_tokenizer_file,
             corpus_dir: resolve_path(project_root, &raw.chronicle.corpus_dir),
             llm_max_tokens: raw.chronicle.llm_max_tokens,
+            llm_context_limit: raw.chronicle.llm_context_limit,
             llm_temperature: raw.chronicle.llm_temperature,
             llm_seed: raw.chronicle.llm_seed,
             llm_system_prompt: raw.chronicle.llm_system_prompt,
@@ -372,6 +381,13 @@ impl ChronicleConfig {
         }
         if self.llm_max_tokens == 0 || self.llm_max_tokens > 32_768 {
             bail!("Chronicle llm_max_tokens must be between 1 and 32768");
+        }
+        let llm_max_tokens = usize::try_from(self.llm_max_tokens)
+            .context("Chronicle llm_max_tokens does not fit in usize")?;
+        if self.llm_context_limit <= llm_max_tokens || self.llm_context_limit > 32_768 {
+            bail!(
+                "Chronicle llm_context_limit must be greater than llm_max_tokens and no greater than 32768"
+            );
         }
         if self.llm_max_reply_length == 0 || self.llm_max_reply_length > MESSAGE_MAX_CHARS {
             bail!("Chronicle llm_max_reply_length must be between 1 and {MESSAGE_MAX_CHARS}");

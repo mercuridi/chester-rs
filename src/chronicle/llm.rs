@@ -23,6 +23,7 @@ pub struct Llm {
     tokenizer_repo: String,
     tokenizer_file: String,
     max_tokens: usize,
+    context_limit: usize,
     temperature: f64,
     seed: u64,
     system_prompt: String,
@@ -46,6 +47,7 @@ impl Llm {
             tokenizer_repo: config.llm_tokenizer_repo.clone(),
             tokenizer_file: config.llm_tokenizer_file.clone(),
             max_tokens: config.llm_max_tokens as usize,
+            context_limit: config.llm_context_limit,
             temperature: f64::from(config.llm_temperature),
             seed: config.llm_seed,
             system_prompt: format!(
@@ -118,6 +120,26 @@ impl Llm {
         Ok(())
     }
 
+    pub fn prompt_token_budget(&self) -> usize {
+        self.context_limit - self.max_tokens
+    }
+
+    pub fn count_input_tokens(&self, prompt: &str) -> Result<usize> {
+        let model = self
+            .model
+            .lock()
+            .map_err(|_| anyhow!("LLM model state is poisoned"))?;
+        let loaded = model
+            .as_ref()
+            .ok_or_else(|| anyhow!("Chronicle LLM is not loaded; run /chronicle start first"))?;
+        let user_prompt = self.format_input_prompt(prompt);
+        let encoded = loaded
+            .tokenizer
+            .encode(user_prompt, true)
+            .map_err(|error| anyhow!("Failed to tokenize LLM prompt: {error}"))?;
+        Ok(encoded.len())
+    }
+
     #[instrument(skip(self, prompt), fields(prompt_len = prompt.len()))]
     pub async fn generate(&self, prompt: &str) -> Result<String> {
         debug!(
@@ -126,11 +148,9 @@ impl Llm {
             "Starting LLM inference"
         );
         let model = Arc::clone(&self.model);
-        let system_prompt = self.system_prompt.clone();
-        let user_prompt = format!(
-            "<|im_start|>system\n{system_prompt}<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
-        );
+        let user_prompt = self.format_input_prompt(prompt);
         let max_tokens = self.max_tokens;
+        let context_limit = self.context_limit;
         let temperature = self.temperature;
         let seed = self.seed;
 
@@ -151,6 +171,14 @@ impl Llm {
 
             if prompt_tokens.is_empty() {
                 bail!("LLM tokenizer produced an empty prompt");
+            }
+            if prompt_tokens.len().saturating_add(max_tokens) > context_limit {
+                bail!(
+                    "LLM prompt and generation budget exceed context limit: {} + {} > {}",
+                    prompt_tokens.len(),
+                    max_tokens,
+                    context_limit
+                );
             }
 
             let mut logits_processor = LogitsProcessor::new(seed, Some(temperature), None);
@@ -194,6 +222,13 @@ impl Llm {
         })
         .await
         .context("Native LLM inference task failed")?
+    }
+
+    fn format_input_prompt(&self, prompt: &str) -> String {
+        format!(
+            "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n",
+            self.system_prompt
+        )
     }
 }
 
