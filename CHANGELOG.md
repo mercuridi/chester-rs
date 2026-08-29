@@ -2,6 +2,12 @@
 
 ## [2.3.0] — 2026-08-29
 
+### Features
+
+- Database parity pass part 1
+- Database parity pass part 2
+
+
 ### Bug Fixes
 
 - Rewrite readme
@@ -9,13 +15,12 @@
 - Delete download.sh as its functionality is integrated in rust
 - Databases are created automatically if they do not exist
 
+## [v2.2.3] — 2026-08-28
 
 ### Features
 
-- Database parity pass part 1
-- Database parity pass part 2
+- Tracing rework with proper warn/info/debug traces
 
-## [v2.2.3] — 2026-08-28
 
 ### Bug Fixes
 
@@ -23,22 +28,17 @@
 - Extract framework building out of main to satisfy clippy
 - Add extra tracing for scanning and tokenising statistics
 
-
-### Features
-
-- Tracing rework with proper warn/info/debug traces
-
 ## [v2.2.2] — 2026-08-28
-
-### Bug Fixes
-
-- Rustfmt fixes
-
 
 ### Features
 
 - Batch initial embedding processing on startup for performance
 - Batched embedding now groups chunks by token length to improve gpu efficiency
+
+
+### Bug Fixes
+
+- Rustfmt fixes
 
 ## [v2.2.1] — 2026-08-28
 
@@ -58,11 +58,6 @@
 
 ## [v2.1.0] — 2026-08-28
 
-### Bug Fixes
-
-- Change corpus gitignore
-
-
 ### Features
 
 - New GpuRuntime state machine to define the gpu processing state with RAII
@@ -70,11 +65,39 @@
 - Rework transcription into a proper service and enforce correct raii gpu leasing
 
 
+### Bug Fixes
+
+- Change corpus gitignore
+
+
 ### Refactor
 
 - Ask is now a subcommand under chronicle; introduced explicit start and stop commands
 
 ## [v2.0.0] — 2026-08-28
+
+### Features
+
+- Project scaffolding for chronicle
+- Set up chronicle db
+- Set up initial call listening and command framework
+- Audio is now saveable to .wav per-user
+- Stereo to mono downmixing function and cargo.toml reorganisation
+- Rework recording to use ringbuffers and instantly write frames to opus-compressed output
+- Add silence to user recordings when not speaking and backfill silence for late joiners
+- Properly separate out recordings per-guild with a recorder manager
+- Opus to raw data audio module for whisper transcription
+- Minimal implementation of whisper transcription
+- Overlapping segments for whisper transcription for improved accuracy
+- Add basic deduplication on transcripts
+- Configurable name replacement for outputted transcripts
+- Autocompletes for transcribe command
+- Split out chronicle command and improve session autocomplete display
+- Transcript pagination
+- Transcript caching
+- Rework transcribe into transcript; split generate/show commands for clarity
+- Llm mvp; chunker, embedder, indexer, scanner, db, command
+
 
 ### Bug Fixes
 
@@ -101,29 +124,6 @@
 - Delete empty ask.rs
 
 
-### Features
-
-- Project scaffolding for chronicle
-- Set up chronicle db
-- Set up initial call listening and command framework
-- Audio is now saveable to .wav per-user
-- Stereo to mono downmixing function and cargo.toml reorganisation
-- Rework recording to use ringbuffers and instantly write frames to opus-compressed output
-- Add silence to user recordings when not speaking and backfill silence for late joiners
-- Properly separate out recordings per-guild with a recorder manager
-- Opus to raw data audio module for whisper transcription
-- Minimal implementation of whisper transcription
-- Overlapping segments for whisper transcription for improved accuracy
-- Add basic deduplication on transcripts
-- Configurable name replacement for outputted transcripts
-- Autocompletes for transcribe command
-- Split out chronicle command and improve session autocomplete display
-- Transcript pagination
-- Transcript caching
-- Rework transcribe into transcript; split generate/show commands for clarity
-- Llm mvp; chunker, embedder, indexer, scanner, db, command
-
-
 ### Refactor
 
 - Rename player/music layer to "jester"
@@ -147,6 +147,13 @@
 
 ## [v0.3.0] — 2026-06-07
 
+### Features
+
+- New `library incomplete` mode to find tracks which someone has added but not filled out the information for
+- Implement new /fix command for tidying up tracks with bad metadata
+- Automatically ensure library integrity upon every startup
+
+
 ### Bug Fixes
 
 - Rework project structure
@@ -154,13 +161,6 @@
 - Reworked library command backends for maintainability
 - Add indexes to sqlite db and slightly improve metadata autocomplete lookup speed
 - Add newline at end of each changelog section
-
-
-### Features
-
-- New `library incomplete` mode to find tracks which someone has added but not filled out the information for
-- Implement new /fix command for tidying up tracks with bad metadata
-- Automatically ensure library integrity upon every startup
 
 ## [v0.2.1] — 2026-06-07
 
@@ -181,10 +181,5 @@
 ### Bug Fixes
 
 - Initialise changelog & ensure no publish
-
-
-### Features
-
-- Add changelog generator and semver convention to repo
 
 

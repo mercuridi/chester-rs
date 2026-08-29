@@ -7,7 +7,7 @@ body = """
 ## [Unreleased]
 {% endif %}\
 {% for group, commits in commits | group_by(attribute="group") %}
-### {{ group | upper_first }}
+### {{ group | striptags | trim | upper_first }}
 {% for commit in commits %}
 - {{ commit.message | upper_first }}
 {%- endfor %}
@@ -23,11 +23,11 @@ filter_unconventional = true
 since_commit = "2a7d5851"
 
 commit_parsers = [
-    { message = "^feat", group = "Features" },
-    { message = "^fix", group = "Bug Fixes" },
-    { message = "^refactor", group = "Refactor" },
-    { message = "^perf", group = "Performance" },
-    { message = "^docs", group = "Documentation" },
+    { message = "^feat", group = "<!-- 0 -->Features" },
+    { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
+    { message = "^refactor", group = "<!-- 2 -->Refactor" },
+    { message = "^perf", group = "<!-- 3 -->Performance" },
+    { message = "^docs", group = "<!-- 4 -->Documentation" },
     { message = "^chore\\(release\\)", skip = true },
     { message = "^chore", skip = true },
 ]
