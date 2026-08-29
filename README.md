@@ -189,8 +189,9 @@ The main application commands are:
 | `/set_metadata title`, `artist`, `origin` | Edit track metadata |
 | `/fix` | Fill missing metadata |
 | `/add_tag`, `/reset_tags` | Manage track tags |
-| `/recording start`, `/recording stop` | Record a voice session |
-| `/transcript generate`, `/transcript show` | Create or display a transcript |
+| `/recording start`, `/recording stop` | Record a voice session; start accepts an optional initial scene |
+| `/chronicle scene` | Add a scene marker to an active recording |
+| `/transcript generate`, `/transcript show` | Create or display a transcript; generation can ignore scene markers |
 | `/chronicle start`, `/chronicle stop`, `/chronicle ask` | Load, unload, or query the local assistant |
 | `/help` | Show command help |
 

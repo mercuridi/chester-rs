@@ -30,7 +30,7 @@ use crate::{
 /// Top-level Chronicle command
 #[poise::command(
     slash_command,
-    subcommands("chronicle_start", "ask", "chronicle_stop"),
+    subcommands("chronicle_start", "ask", "chronicle_stop", "scene"),
     subcommand_required
 )]
 #[allow(clippy::unused_async)]
@@ -74,6 +74,31 @@ pub async fn chronicle_stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Add a scene marker to the active recording.
+#[poise::command(slash_command)]
+pub async fn scene(
+    ctx: PoiseContext<'_>,
+    #[description = "The scene name"] name: String,
+) -> Result<(), Error> {
+    info!(user = %ctx.author().id, scene = %name, "Recording scene requested");
+    let guild_id = require_guild(ctx)?;
+    let recorder = ctx
+        .data()
+        .recorder
+        .get(guild_id)
+        .await
+        .ok_or_else(|| -> Error { "Failed to initialize the guild recorder.".into() })?;
+
+    let event = recorder.add_scene(name).await?;
+    ctx.say(format!(
+        "Scene `{}` recorded at `{}`.",
+        event.name,
+        format_timestamp(scene_offset_seconds(event.offset_ms))
+    ))
+    .await?;
+    Ok(())
+}
+
 /// Top-level recording command
 #[poise::command(slash_command, subcommands("start", "stop"), subcommand_required)]
 #[allow(clippy::unused_async)]
@@ -86,6 +111,7 @@ pub async fn recording(_ctx: PoiseContext<'_>) -> Result<(), Error> {
 pub async fn start(
     ctx: PoiseContext<'_>,
     #[description = "The session name"] session_name: String,
+    #[description = "Optional initial scene name"] initial_scene: Option<String>,
 ) -> Result<(), Error> {
     info!(user = %ctx.author().id, session = %session_name, "Recording start command requested");
     let (guild_id, voice_channel_id, _call) = ensure_vc(ctx).await?;
@@ -112,6 +138,7 @@ pub async fn start(
             notification_channel_id,
             ctx.author().id,
             session_name.clone(),
+            initial_scene.clone(),
         )
         .await?;
 
@@ -121,8 +148,11 @@ pub async fn start(
     }
 
     ctx.say(format!(
-        "Recording session `{}` started by <@{}>.",
+        "Recording session `{}`{} started by <@{}>.",
         session_name,
+        initial_scene
+            .as_deref()
+            .map_or(String::new(), |scene| format!(" in scene `{scene}`")),
         ctx.author().id
     ))
     .await?;
@@ -236,8 +266,11 @@ pub async fn generate(
     #[description = "The alias group to use for transcription"]
     #[autocomplete = "autocomplete_alias_group"]
     alias_group_id: String,
+
+    #[description = "Do not include recorded scene headings"] ignore_scenes: Option<bool>,
 ) -> Result<(), Error> {
-    info!(user = %ctx.author().id, session = %session, alias_group = %alias_group_id, "Transcript generation requested");
+    let ignore_scenes = ignore_scenes.unwrap_or(false);
+    info!(user = %ctx.author().id, session = %session, alias_group = %alias_group_id, ignore_scenes, "Transcript generation requested");
     let guild_id = require_guild(ctx)?;
 
     let recording_dir = PathBuf::from(RECORDINGS_DIR)
@@ -286,6 +319,8 @@ pub async fn generate(
         &manifest,
         recordings,
         alias_group,
+        !ignore_scenes,
+        &session,
         &transcript_path,
         ctx.data().chronicle.transcription_service(),
     )
@@ -476,27 +511,70 @@ fn format_timestamp(seconds: f64) -> String {
     format!("{hours:02}:{minutes:02}:{seconds:02}.{tenths}")
 }
 
-fn format_transcript(entries: &[TranscriptEntry]) -> Vec<String> {
-    entries
-        .iter()
-        .map(|entry| {
-            format!(
-                "`[{}–{}]` `{}`: {}",
-                format_timestamp(entry.start),
-                format_timestamp(entry.end),
-                entry.alias,
-                entry.text
-            )
-        })
-        .collect()
+#[allow(clippy::cast_precision_loss)]
+fn scene_offset_seconds(offset_ms: u64) -> f64 {
+    offset_ms as f64 / 1_000.0
+}
+
+fn format_transcript(
+    manifest: &RecordingManifest,
+    entries: &[TranscriptEntry],
+    include_scenes: bool,
+    title: &str,
+) -> Vec<String> {
+    let mut lines = vec![format!("# {title}")];
+    lines.push(String::new());
+    let mut scenes = if include_scenes {
+        manifest.scenes.iter().collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    scenes.sort_by_key(|scene| scene.sequence);
+
+    let mut entry_index = 0;
+    for scene in scenes {
+        while entry_index < entries.len()
+            && entries[entry_index].start < scene_offset_seconds(scene.offset_ms)
+        {
+            lines.push(format_entry(&entries[entry_index]));
+            entry_index += 1;
+        }
+
+        lines.push(format!("## {}", scene.name));
+    }
+
+    lines.extend(entries[entry_index..].iter().map(format_entry));
+    lines
+}
+
+fn format_entry(entry: &TranscriptEntry) -> String {
+    format!(
+        "`[{}–{}]` `{}`: {}",
+        format_timestamp(entry.start),
+        format_timestamp(entry.end),
+        entry.alias,
+        entry.text
+    )
 }
 
 fn build_transcript_document(
     manifest: &RecordingManifest,
     recordings: &[PathBuf],
     entries: &[TranscriptEntry],
+    include_scenes: bool,
+    fallback_title: &str,
 ) -> TranscriptDocument {
-    let body = format_transcript(entries).join("\n");
+    let body = format_transcript(
+        manifest,
+        entries,
+        include_scenes,
+        if manifest.session_name.is_empty() {
+            fallback_title
+        } else {
+            &manifest.session_name
+        },
+    )
+    .join("\n");
 
     let word_count = body.split_whitespace().count();
     let character_count = body.chars().count();
@@ -544,6 +622,8 @@ async fn generate_transcript(
     manifest: &RecordingManifest,
     recordings: Vec<PathBuf>,
     alias_group: &AliasGroup,
+    include_scenes: bool,
+    fallback_title: &str,
     transcript_path: &Path,
     transcription: TranscriptionService,
 ) -> Result<TranscriptDocument, Error> {
@@ -569,7 +649,13 @@ async fn generate_transcript(
         return Err("No transcription results.".into());
     }
 
-    let transcript = build_transcript_document(manifest, &recordings, &entries);
+    let transcript = build_transcript_document(
+        manifest,
+        &recordings,
+        &entries,
+        include_scenes,
+        fallback_title,
+    );
 
     transcript.save(transcript_path).map_err(|error| -> Error {
         format!("Transcription succeeded, but failed to save transcript: {error}").into()

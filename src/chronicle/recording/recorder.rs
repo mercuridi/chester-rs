@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, hash_map::Entry},
     path::{Path, PathBuf},
     sync::Arc,
+    time::Instant,
 };
 
 use chrono::{DateTime, prelude::Local};
@@ -33,10 +34,22 @@ pub struct RecordingManifest {
     #[serde(default = "default_manifest_status")]
     pub status: ManifestStatus,
     pub guild_id: GuildId,
+    #[serde(default)]
+    pub session_name: String,
     pub started_at: DateTime<Local>,
     #[serde(default)]
     pub ended_at: Option<DateTime<Local>>,
     pub participants: Vec<UserId>,
+    #[serde(default)]
+    pub scenes: Vec<SceneEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SceneEvent {
+    pub name: String,
+    pub offset_ms: u64,
+    pub submitted_at: DateTime<Local>,
+    pub sequence: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,6 +100,7 @@ pub struct RecordingSession {
     pub session_name: String,
     pub manifest_path: PathBuf,
     pub manifest: RecordingManifest,
+    pub started_instant: Instant,
     pub tick: u64,
     pub users: HashMap<UserId, UserRecording>,
 }
@@ -147,8 +161,10 @@ impl Recorder {
         notification_channel_id: ChannelId,
         initiator: UserId,
         session_name: String,
+        initial_scene: Option<String>,
     ) -> Result<bool, Error> {
         let started_at = Local::now();
+        let started_instant = Instant::now();
 
         let recording_directory = recording_directory(guild_id, &session_name, started_at);
         ensure_recording_directory(guild_id, &session_name, started_at)?;
@@ -160,13 +176,24 @@ impl Recorder {
         }
 
         let manifest_path = recording_directory.join("manifest.toml");
-        let manifest = RecordingManifest {
+        let mut manifest = RecordingManifest {
             status: ManifestStatus::Recording,
             guild_id,
+            session_name: session_name.clone(),
             started_at,
             ended_at: None,
             participants: Vec::new(),
+            scenes: Vec::new(),
         };
+
+        if let Some(name) = initial_scene {
+            manifest.scenes.push(SceneEvent {
+                name: validate_scene_name(name)?,
+                offset_ms: 0,
+                submitted_at: started_at,
+                sequence: 0,
+            });
+        }
 
         manifest.save_atomically(&manifest_path)?;
 
@@ -179,6 +206,7 @@ impl Recorder {
             session_name,
             manifest_path,
             manifest,
+            started_instant,
             tick: 0,
             users: HashMap::new(),
         });
@@ -193,6 +221,35 @@ impl Recorder {
         );
 
         Ok(true)
+    }
+
+    pub async fn add_scene(&self, name: String) -> Result<SceneEvent, Error> {
+        let mut recording = self.recording_session.lock().await;
+        let session = recording
+            .as_mut()
+            .ok_or_else(|| -> Error { "There is no recording in progress.".into() })?;
+
+        let event = SceneEvent {
+            name: validate_scene_name(name)?,
+            offset_ms: u64::try_from(
+                session
+                    .started_instant
+                    .elapsed()
+                    .as_millis()
+                    .min(u128::from(u64::MAX)),
+            )
+            .unwrap_or(u64::MAX),
+            submitted_at: Local::now(),
+            sequence: session.manifest.scenes.len() as u64,
+        };
+
+        session.manifest.scenes.push(event.clone());
+        if let Err(error) = session.manifest.save_atomically(&session.manifest_path) {
+            session.manifest.scenes.pop();
+            return Err(error.into());
+        }
+
+        Ok(event)
     }
 
     pub async fn stop_recording(&self) -> Result<bool, Error> {
@@ -383,14 +440,14 @@ impl EventHandler for Recorder {
                     manifest_changed = true;
                 }
 
-                if manifest_changed {
-                    if let Err(error) = session.manifest.save_atomically(&session.manifest_path) {
-                        tracing::error!(
-                            %error,
-                            path = %session.manifest_path.display(),
-                            "Failed to persist recording manifest after participant discovery"
-                        );
-                    }
+                if manifest_changed
+                    && let Err(error) = session.manifest.save_atomically(&session.manifest_path)
+                {
+                    tracing::error!(
+                        %error,
+                        path = %session.manifest_path.display(),
+                        "Failed to persist recording manifest after participant discovery"
+                    );
                 }
 
                 // Every user gets exactly one 20 ms PCM frame per VoiceTick.
@@ -478,6 +535,16 @@ fn ensure_recording_directory(
     started_at: DateTime<Local>,
 ) -> Result<(), std::io::Error> {
     std::fs::create_dir_all(recording_directory(guild_id, session_name, started_at))
+}
+
+fn validate_scene_name(name: String) -> Result<String, Error> {
+    if name.trim().is_empty() {
+        return Err("Scene name cannot be empty.".into());
+    }
+    if name.contains(['\r', '\n']) {
+        return Err("Scene name cannot contain line breaks.".into());
+    }
+    Ok(name)
 }
 
 /// Report manifests left in the active state by a previous process lifetime.
