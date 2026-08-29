@@ -203,9 +203,7 @@ fn is_near_duplicate(candidate: &SearchResult, accepted: &[SearchResult], thresh
     }
 
     accepted.iter().any(|result| {
-        if result.document_path == candidate.document_path
-            && result.chunk_index.abs_diff(candidate.chunk_index) == 1
-        {
+        if is_adjacent_chunk(candidate, result) {
             return false;
         }
 
@@ -217,6 +215,13 @@ fn is_near_duplicate(candidate: &SearchResult, accepted: &[SearchResult], thresh
         let overlap = intersection as f32 / union as f32;
         overlap >= threshold
     })
+}
+
+/// Overlap makes neighboring chunks intentionally similar. Keep them both available so
+/// retrieval can return context spanning a chunk boundary; exact duplicates are still removed
+/// before this check.
+fn is_adjacent_chunk(left: &SearchResult, right: &SearchResult) -> bool {
+    left.document_path == right.document_path && left.chunk_index.abs_diff(right.chunk_index) == 1
 }
 
 fn shingles(text: &str) -> HashSet<String> {
@@ -233,4 +238,51 @@ fn shingles(text: &str) -> HashSet<String> {
         .windows(2)
         .map(|window| format!("{} {}", window[0], window[1]))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(document_path: &str, chunk_index: i64, text: &str) -> SearchResult {
+        SearchResult {
+            document_path: document_path.to_owned(),
+            chunk_index,
+            heading: None,
+            text: text.to_owned(),
+            distance: 0.0,
+        }
+    }
+
+    #[test]
+    fn preserves_similar_adjacent_chunks_from_the_same_document() {
+        let candidates = vec![
+            result("notes.md", 0, "alpha beta gamma delta"),
+            result("notes.md", 1, "beta gamma delta epsilon"),
+        ];
+
+        let (accepted, exact_duplicates, near_duplicates, document_cap) =
+            deduplicate_and_diversify(candidates, 2, 0.5, 2);
+
+        assert_eq!(accepted.len(), 2);
+        assert_eq!(exact_duplicates, 0);
+        assert_eq!(near_duplicates, 0);
+        assert_eq!(document_cap, 0);
+    }
+
+    #[test]
+    fn filters_similar_non_adjacent_chunks() {
+        let candidates = vec![
+            result("notes.md", 0, "alpha beta gamma delta"),
+            result("notes.md", 2, "beta gamma delta epsilon"),
+        ];
+
+        let (accepted, exact_duplicates, near_duplicates, document_cap) =
+            deduplicate_and_diversify(candidates, 2, 0.5, 2);
+
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(exact_duplicates, 0);
+        assert_eq!(near_duplicates, 1);
+        assert_eq!(document_cap, 0);
+    }
 }
