@@ -4,8 +4,8 @@ use candle_transformers::models::whisper::{self as m, audio};
 use tokenizers::Tokenizer;
 
 use crate::chronicle::transcription::audio::Audio;
+use crate::chronicle::transcription::constants::MODEL_SAMPLE_RATE;
 use crate::chronicle::transcription::whisper::model::Model;
-use crate::constants::MODEL_SAMPLE_RATE;
 
 pub struct TranscriptSegment {
     pub start: f64,

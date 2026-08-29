@@ -1,4 +1,4 @@
-use crate::constants::{
+use crate::discord::constants::{
     AUTOCOMPLETE_MAX_LENGTH, AUTOCOMPLETE_SEPARATOR, AUTOCOMPLETE_SEPARATOR_LEN, ELLIPSIS,
     ELLIPSIS_DISPLAY_WIDTH, ELLIPSIS_LEN,
 };
@@ -8,7 +8,10 @@ pub fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
     let content_max_length =
         AUTOCOMPLETE_MAX_LENGTH - (AUTOCOMPLETE_SEPARATOR_LEN * to_display.len()) + 1;
 
-    let mut lens: Vec<usize> = to_display.iter().map(std::string::String::len).collect();
+    let mut lens: Vec<usize> = to_display
+        .iter()
+        .map(|value| value.chars().count())
+        .collect();
     let total_len: usize = lens.iter().sum();
     let mut excess = total_len.saturating_sub(content_max_length);
 
@@ -32,19 +35,18 @@ pub fn build_autocomplete_display(mut to_display: Vec<String>) -> String {
         // get the mutable String reference
         let s: &mut String = &mut to_display[max_idx];
 
-        // back up to a valid UTF-8 boundary
-        let mut adjust = new_len;
-        while adjust > 0 && !s.is_char_boundary(adjust) {
-            adjust -= 1;
-        }
-        s.truncate(adjust);
+        let byte_len = s
+            .char_indices()
+            .nth(new_len)
+            .map_or(s.len(), |(index, _)| index);
+        s.truncate(byte_len);
 
         // append ellipsis if we cut something
         if needs_ellipsis {
             s.push_str(ELLIPSIS);
-            lens[max_idx] = adjust + ELLIPSIS_LEN;
+            lens[max_idx] = new_len + ELLIPSIS_LEN;
         } else {
-            lens[max_idx] = adjust;
+            lens[max_idx] = new_len;
         }
 
         excess = excess.saturating_sub(chop);
@@ -58,18 +60,32 @@ pub fn lightweight_trim(mut choice: String, max_width: usize) -> String {
         return ELLIPSIS.to_string();
     }
 
-    if choice.len() > max_width {
-        let cutoff = max_width - 1;
+    if choice.chars().count() > max_width {
         let safe_cutoff = choice
             .char_indices()
-            .take_while(|(idx, _)| *idx <= cutoff)
-            .map(|(idx, _)| idx)
-            .last()
-            .unwrap_or(0);
+            .nth(max_width - ELLIPSIS_DISPLAY_WIDTH)
+            .map_or(choice.len(), |(index, _)| index);
 
         choice.truncate(safe_cutoff);
         choice.push_str(ELLIPSIS);
     }
 
     choice
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_autocomplete_display, lightweight_trim};
+
+    #[test]
+    fn trims_unicode_by_character_count() {
+        assert_eq!(lightweight_trim("ééé".to_owned(), 2), "é…");
+    }
+
+    #[test]
+    fn autocomplete_display_respects_unicode_character_count() {
+        let display = build_autocomplete_display(vec!["é".repeat(110)]);
+        assert!(display.chars().count() <= 100);
+        assert!(display.ends_with('…'));
+    }
 }

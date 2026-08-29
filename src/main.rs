@@ -1,11 +1,10 @@
 mod chronicle;
-mod constants;
 mod database;
 mod discord;
 mod jester;
 mod utils;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 ////////////////////////////////////////////////////////////////////////////////
 use dotenv::from_path;
@@ -28,7 +27,6 @@ use crate::{
         runtime::GpuRuntime,
         service::Chronicle,
     },
-    constants::PROJECT_ROOT,
     discord::context::{Data, Error},
     jester::library::sync::sync_audio_library,
 };
@@ -254,7 +252,7 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    let project_root = Path::new(PROJECT_ROOT);
+    let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     from_path(project_root.join(".env")).ok();
 
     tracing::info!("Starting Chester");
@@ -274,7 +272,7 @@ async fn run() -> Result<()> {
         "Loaded configuration"
     );
 
-    scan_incomplete_manifests(crate::constants::RECORDINGS_DIR)
+    scan_incomplete_manifests(&config.paths.recordings_dir)
         .context("Failed to scan recording manifests")?;
 
     let token = std::env::var("DISCORD_TOKEN").context("DISCORD_TOKEN is not set")?;

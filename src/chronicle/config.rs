@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serenity::all::{GuildId, UserId};
 
-use crate::constants::DISCORD_MESSAGE_MAX_CHARS;
+use crate::discord::constants::MESSAGE_MAX_CHARS;
 
 pub type AliasGroupId = String;
 
@@ -79,6 +79,13 @@ pub struct Config {
     guilds: HashMap<GuildId, GuildConfig>,
     pub database: DatabaseConfig,
     pub chronicle: ChronicleConfig,
+    pub paths: AppPaths,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppPaths {
+    pub recordings_dir: PathBuf,
+    pub audio_dir: PathBuf,
 }
 
 #[derive(Debug)]
@@ -250,6 +257,10 @@ impl Config {
                 chronicle: resolve_sqlite_url(project_root, &raw.database.chronicle),
             },
             chronicle,
+            paths: AppPaths {
+                recordings_dir: project_root.join(".chronicle/recordings"),
+                audio_dir: project_root.join("audio"),
+            },
         })
     }
 
@@ -326,10 +337,8 @@ impl ChronicleConfig {
         if self.llm_max_tokens == 0 || self.llm_max_tokens > 32_768 {
             bail!("Chronicle llm_max_tokens must be between 1 and 32768");
         }
-        if self.llm_max_reply_length == 0 || self.llm_max_reply_length > DISCORD_MESSAGE_MAX_CHARS {
-            bail!(
-                "Chronicle llm_max_reply_length must be between 1 and {DISCORD_MESSAGE_MAX_CHARS}"
-            );
+        if self.llm_max_reply_length == 0 || self.llm_max_reply_length > MESSAGE_MAX_CHARS {
+            bail!("Chronicle llm_max_reply_length must be between 1 and {MESSAGE_MAX_CHARS}");
         }
         if !self.llm_temperature.is_finite() || !(0.0..=2.0).contains(&self.llm_temperature) {
             bail!("Chronicle llm_temperature must be finite and between 0.0 and 2.0");

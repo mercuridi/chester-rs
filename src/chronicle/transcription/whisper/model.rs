@@ -1,6 +1,6 @@
 use crate::{
+    chronicle::transcription::constants::{MODEL_ID, MODEL_REVISION},
     chronicle::transcription::whisper::{tokens::token_id, transcriber::WhisperTranscriber},
-    constants::{MODEL_ID, MODEL_REVISION},
 };
 use std::path::PathBuf;
 

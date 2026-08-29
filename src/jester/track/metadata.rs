@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::fs;
 
-use crate::constants::AUDIO_DIR;
+use crate::jester::library::constants::AUDIO_DIR;
 
 pub fn process_ytdlp_json(file_id: &str) -> Result<serde_json::Value> {
     let path = format!("{AUDIO_DIR}/{file_id}.info.json");

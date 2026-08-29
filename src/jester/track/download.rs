@@ -3,12 +3,12 @@ use sqlx::SqlitePool;
 use std::process::Command;
 
 use crate::{
-    constants::{AUDIO_DIR, COOKIES_PATH, YTDLP_PATH},
     discord::context::Error,
     jester::db::{
         metadata::MetadataKind,
         repository::{get_or_insert_metadata_id, insert_new_track, lookup_track},
     },
+    jester::library::constants::{AUDIO_DIR, COOKIES_PATH, YTDLP_PATH},
     jester::track::{
         metadata::process_ytdlp_json,
         types::{TrackInfo, VideoId},

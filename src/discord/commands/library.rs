@@ -1,4 +1,4 @@
-use crate::constants::{ELLIPSIS, MAX_RESULTS_PER_PAGE, META_MAX_CHARS, TITLE_MAX_CHARS};
+use crate::discord::constants::{ELLIPSIS, MAX_RESULTS_PER_PAGE, META_MAX_CHARS, TITLE_MAX_CHARS};
 
 use crate::discord::context::{Error, PoiseContext};
 use crate::jester::db::repository::{

@@ -9,7 +9,8 @@ use ogg::PacketReader;
 use opus::{Channels, Decoder as OpusDecoder};
 use rubato::{FftFixedIn, Resampler};
 
-const OPUS_SAMPLE_RATE: usize = 48_000;
+use crate::chronicle::recording::constants::OPUS_SAMPLE_RATE;
+
 const WHISPER_SAMPLE_RATE: usize = 16_000;
 
 /// Decoded audio ready for Whisper.

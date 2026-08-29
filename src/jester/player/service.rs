@@ -7,7 +7,6 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::{
-    constants::AUDIO_DIR,
     discord::context::Error,
     jester::track::types::{NowPlaying, TrackInfo},
 };
@@ -15,12 +14,14 @@ use tracing::{debug, info, instrument};
 
 pub struct PlayerService {
     now_playing: RwLock<HashMap<GuildId, NowPlaying>>,
+    audio_dir: PathBuf,
 }
 
 impl PlayerService {
-    pub fn new() -> Self {
+    pub fn new(audio_dir: PathBuf) -> Self {
         Self {
             now_playing: RwLock::new(HashMap::new()),
+            audio_dir,
         }
     }
 
@@ -33,7 +34,9 @@ impl PlayerService {
     ) -> Result<(), Error> {
         let mut handler = call.lock().await;
 
-        let track_path = PathBuf::from(AUDIO_DIR).join(format!("{}.mp3", track_info.id.as_str()));
+        let track_path = self
+            .audio_dir
+            .join(format!("{}.mp3", track_info.id.as_str()));
 
         let song_src =
             Compressed::new(SongbirdFile::new(track_path).into(), Bitrate::Bits(128_000)).await?;

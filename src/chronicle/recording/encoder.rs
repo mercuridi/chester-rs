@@ -7,8 +7,9 @@ use serenity::all::UserId;
 use tokio::sync::oneshot;
 
 use crate::{
-    constants::{
-        MAX_OPUS_PACKET_SIZE, MONO_FRAME_SAMPLES, PCM_CHANNELS, SAMPLE_RATE, STEREO_FRAME_SAMPLES,
+    chronicle::recording::constants::{
+        MAX_OPUS_PACKET_SIZE, MONO_FRAME_SAMPLES, OPUS_SAMPLE_RATE, PCM_CHANNELS,
+        STEREO_FRAME_SAMPLES,
     },
     discord::context::Error,
 };
@@ -23,7 +24,11 @@ pub fn run_encoder(
     let file = File::create(path)?;
     let mut ogg = PacketWriter::new(file);
 
-    let mut opus = OpusEncoder::new(SAMPLE_RATE, Channels::Mono, Application::Audio)?;
+    let mut opus = OpusEncoder::new(
+        u32::try_from(OPUS_SAMPLE_RATE)?,
+        Channels::Mono,
+        Application::Audio,
+    )?;
 
     let mut stereo_buffer = Vec::<i16>::with_capacity(STEREO_FRAME_SAMPLES);
     let mut mono_buffer = [0i16; MONO_FRAME_SAMPLES];
@@ -35,7 +40,13 @@ pub fn run_encoder(
 
     let pre_skip = u16::try_from(opus.get_lookahead()?)?;
 
-    write_opus_headers(&mut ogg, serial, user_id, SAMPLE_RATE, pre_skip)?;
+    write_opus_headers(
+        &mut ogg,
+        serial,
+        user_id,
+        u32::try_from(OPUS_SAMPLE_RATE)?,
+        pre_skip,
+    )?;
 
     for _ in 0..initial_silence_ticks {
         mono_buffer.fill(0);

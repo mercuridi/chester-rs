@@ -16,10 +16,11 @@ pub struct Data {
 
 impl Data {
     pub fn new(db_pool: SqlitePool, config: Config, chronicle: Chronicle) -> Self {
+        let paths = config.paths.clone();
         Self {
             db_pool,
-            player: PlayerService::new(),
-            recorder: RecorderManager::new(),
+            player: PlayerService::new(paths.audio_dir),
+            recorder: RecorderManager::new(paths.recordings_dir),
             config,
             chronicle,
         }

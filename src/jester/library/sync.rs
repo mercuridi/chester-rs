@@ -5,7 +5,7 @@ use std::{path::PathBuf, time::Duration};
 use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
 
-use crate::constants::{AUDIO_DIR, DOWNLOAD_CONCURRENCY, MAX_RETRIES, YTDLP_PATH};
+use crate::jester::library::constants::{AUDIO_DIR, DOWNLOAD_CONCURRENCY, MAX_RETRIES, YTDLP_PATH};
 
 #[derive(Debug)]
 pub struct SyncStats {

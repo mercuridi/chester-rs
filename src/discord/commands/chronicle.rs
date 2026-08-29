@@ -6,6 +6,7 @@ use titlecase::Titlecase;
 use tracing::{debug, info};
 
 use crate::{
+    chronicle::transcription::constants::TRANSCRIPT_PAGE_LIMIT,
     chronicle::{
         config::{AliasGroup, Config},
         recording::recorder::{RecordingManifest, notify_recording_user},
@@ -16,7 +17,7 @@ use crate::{
             },
         },
     },
-    constants::{CHESTER_USER_ID, RECORDINGS_DIR, TRANSCRIPT_PAGE_LIMIT},
+    discord::constants::CHESTER_USER_ID,
     discord::{
         autocomplete::{
             autocomplete_alias_group, autocomplete_existing_transcript,
@@ -231,7 +232,12 @@ pub async fn show(
     info!(user = %ctx.author().id, session = %session, "Transcript display requested");
     let guild_id = require_guild(ctx)?;
 
-    let recording_dir = PathBuf::from(RECORDINGS_DIR)
+    let recording_dir = ctx
+        .data()
+        .config
+        .paths
+        .recordings_dir
+        .clone()
         .join(guild_id.to_string())
         .join(&session);
 
@@ -273,7 +279,12 @@ pub async fn generate(
     info!(user = %ctx.author().id, session = %session, alias_group = %alias_group_id, ignore_scenes, "Transcript generation requested");
     let guild_id = require_guild(ctx)?;
 
-    let recording_dir = PathBuf::from(RECORDINGS_DIR)
+    let recording_dir = ctx
+        .data()
+        .config
+        .paths
+        .recordings_dir
+        .clone()
         .join(guild_id.to_string())
         .join(&session);
 

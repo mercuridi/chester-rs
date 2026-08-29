@@ -1,10 +1,8 @@
-use std::path::PathBuf;
-
 use chrono::NaiveDateTime;
 use poise::serenity_prelude::AutocompleteChoice;
 use titlecase::Titlecase;
 
-use crate::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH, RECORDINGS_DIR};
+use crate::discord::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
 use crate::discord::context::PoiseContext;
 use crate::discord::voice::require_guild;
 use crate::jester::db::metadata::MetadataKind;
@@ -140,7 +138,13 @@ pub async fn autocomplete_existing_transcript(
 
     let needle = partial.to_lowercase();
 
-    let recording_dir = PathBuf::from(RECORDINGS_DIR).join(guild_id.to_string());
+    let recording_dir = ctx
+        .data()
+        .config
+        .paths
+        .recordings_dir
+        .clone()
+        .join(guild_id.to_string());
 
     let entries = match std::fs::read_dir(&recording_dir) {
         Ok(entries) => entries,
@@ -200,7 +204,13 @@ pub async fn autocomplete_recording_session(
 
     let needle = partial.to_lowercase();
 
-    let recording_dir = PathBuf::from(RECORDINGS_DIR).join(guild_id.to_string());
+    let recording_dir = ctx
+        .data()
+        .config
+        .paths
+        .recordings_dir
+        .clone()
+        .join(guild_id.to_string());
 
     let entries = match std::fs::read_dir(&recording_dir) {
         Ok(entries) => entries,
@@ -256,8 +266,6 @@ pub async fn autocomplete_alias_group(
     ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = AutocompleteChoice> {
-    const MAX_CHOICES: usize = 25;
-
     let guild_id = match require_guild(ctx) {
         Ok(guild_id) => guild_id,
         Err(error) => {
@@ -286,7 +294,7 @@ pub async fn autocomplete_alias_group(
 
     choices.sort_unstable_by(|(display_a, _), (display_b, _)| display_a.cmp(display_b));
 
-    choices.truncate(MAX_CHOICES);
+    choices.truncate(AUTOCOMPLETE_MAX_CHOICES);
 
     choices
         .into_iter()
