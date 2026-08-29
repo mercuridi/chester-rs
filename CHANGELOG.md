@@ -6,6 +6,8 @@
 
 - Recording manifests are now persisted immediately and updated atomically as data changes
 - Recording scene functionality to split up transcripts
+- Improve transcription deduplication with a token-aware approach
+- Recording now persists original formatting of session name
 
 
 ### Refactor
