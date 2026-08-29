@@ -147,6 +147,7 @@ impl Indexer {
             .iter()
             .map(|(_, _, _, encoding)| encoding.len())
             .sum::<usize>();
+        #[allow(clippy::cast_precision_loss)]
         let average_chunk_tokens = if total_chunks == 0 {
             0.0
         } else {

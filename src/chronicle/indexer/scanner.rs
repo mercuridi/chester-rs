@@ -10,10 +10,10 @@ use crate::chronicle::indexer::document::Document;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CorpusStats {
-    pub directory_count: usize,
-    pub file_count: usize,
-    pub word_count: usize,
-    pub character_count: usize,
+    pub directories: usize,
+    pub files: usize,
+    pub words: usize,
+    pub characters: usize,
 }
 
 #[instrument(skip(root))]
@@ -29,22 +29,23 @@ pub fn scan_directory_with_stats(root: impl AsRef<Path>) -> Result<(Vec<Document
 
     let mut documents = Vec::new();
     let mut stats = CorpusStats {
-        directory_count: 1,
+        directories: 1,
         ..CorpusStats::default()
     };
     scan_directory_recursive(root, &mut documents, &mut stats)?;
 
     documents.sort_by(|a, b| a.path.cmp(&b.path));
-    let average_words_per_file = if stats.file_count == 0 {
+    #[allow(clippy::cast_precision_loss)]
+    let average_words_per_file = if stats.files == 0 {
         0.0
     } else {
-        stats.word_count as f64 / stats.file_count as f64
+        stats.words as f64 / stats.files as f64
     };
     info!(
-        directory_count = stats.directory_count,
-        file_count = stats.file_count,
-        word_count = stats.word_count,
-        character_count = stats.character_count,
+        directory_count = stats.directories,
+        file_count = stats.files,
+        word_count = stats.words,
+        character_count = stats.characters,
         average_words_per_file,
         "Scanned Chronicle corpus"
     );
@@ -67,7 +68,7 @@ fn scan_directory_recursive(
         let path = entry.path();
 
         if path.is_dir() {
-            stats.directory_count += 1;
+            stats.directories += 1;
             scan_directory_recursive(&path, documents, stats)?;
             continue;
         }
@@ -77,9 +78,9 @@ fn scan_directory_recursive(
         }
 
         let document = scan_file(&path)?;
-        stats.file_count += 1;
-        stats.word_count += document.content.split_whitespace().count();
-        stats.character_count += document.content.chars().count();
+        stats.files += 1;
+        stats.words += document.content.split_whitespace().count();
+        stats.characters += document.content.chars().count();
         documents.push(document);
     }
 

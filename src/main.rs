@@ -232,6 +232,7 @@ async fn main() {
         Err(error) => (EnvFilter::new("chester_rs=info,warn"), Some(error)),
     };
 
+    #[allow(clippy::print_stderr)]
     if let Err(error) = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .try_init()

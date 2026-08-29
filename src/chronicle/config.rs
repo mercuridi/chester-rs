@@ -201,8 +201,8 @@ pub struct GuildConfig {
     pub alias_groups: Vec<AliasGroupId>,
 }
 
-fn resolve_path(project_root: &Path, path: String) -> String {
-    let path = Path::new(&path);
+fn resolve_path(project_root: &Path, path: &str) -> String {
+    let path = Path::new(path);
     if path.is_absolute() {
         path.to_string_lossy().into_owned()
     } else {
@@ -223,7 +223,7 @@ fn resolve_sqlite_url(project_root: &Path, url: &str) -> String {
         return url.to_owned();
     }
 
-    let resolved = resolve_path(project_root, path.to_owned());
+    let resolved = resolve_path(project_root, path);
     match query {
         Some(query) => format!("sqlite://{resolved}?{query}"),
         None => format!("sqlite://{resolved}"),
@@ -312,7 +312,7 @@ impl Config {
             llm_model_file: raw.chronicle.llm_model_file,
             llm_tokenizer_repo: raw.chronicle.llm_tokenizer_repo,
             llm_tokenizer_file: raw.chronicle.llm_tokenizer_file,
-            corpus_dir: resolve_path(project_root, raw.chronicle.corpus_dir),
+            corpus_dir: resolve_path(project_root, &raw.chronicle.corpus_dir),
             llm_max_tokens: raw.chronicle.llm_max_tokens,
             llm_temperature: raw.chronicle.llm_temperature,
             llm_seed: raw.chronicle.llm_seed,
