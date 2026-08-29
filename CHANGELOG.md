@@ -1,6 +1,21 @@
 # Changelog
 
-## [2.3.0] — 2026-08-29
+## [2.3.1] — 2026-08-29
+
+### Features
+
+- Startup has better error handling and operation ordering
+
+
+### Bug Fixes
+
+- All commands have help tooltips
+- 7 clippy fixes
+- Config must now be configured correctly
+- Changelog section ordering (feat -> bugfix -> refactor -> perf -> docs)
+- Ensure llm replies fit in discord character limit
+
+## [v2.3.0] — 2026-08-29
 
 ### Features
 
@@ -177,6 +192,11 @@
 - Updated changelog format
 
 ## [v0.2.0] — 2026-06-07
+
+### Features
+
+- Add changelog generator and semver convention to repo
+
 
 ### Bug Fixes
 
