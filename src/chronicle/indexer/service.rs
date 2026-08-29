@@ -29,15 +29,23 @@ pub struct Indexer {
     db: IndexerDb,
     embedder: Embedder,
     max_chunk_tokens: usize,
+    chunk_overlap_tokens: usize,
 }
 
 impl Indexer {
-    pub fn new(root: PathBuf, db: IndexerDb, embedder: Embedder, max_chunk_tokens: usize) -> Self {
+    pub fn new(
+        root: PathBuf,
+        db: IndexerDb,
+        embedder: Embedder,
+        max_chunk_tokens: usize,
+        chunk_overlap_tokens: usize,
+    ) -> Self {
         Self {
             root,
             db,
             embedder,
             max_chunk_tokens,
+            chunk_overlap_tokens,
         }
     }
 
@@ -75,7 +83,13 @@ impl Indexer {
             seen_paths.insert(path.clone());
 
             if let Some(indexed) = indexed_by_path.get(path.as_str()) {
-                if indexed.content_hash == index_fingerprint(&document, self.max_chunk_tokens) {
+                if indexed.content_hash
+                    == index_fingerprint(
+                        &document,
+                        self.max_chunk_tokens,
+                        self.chunk_overlap_tokens,
+                    )
+                {
                     stats.unchanged += 1;
                     continue;
                 }
@@ -128,18 +142,23 @@ impl Indexer {
             .iter()
             .enumerate()
             .map(|(document_index, (document, _, _))| -> Result<Vec<_>> {
-                chunker::chunk(document, self.embedder.tokenizer(), self.max_chunk_tokens)?
-                    .into_iter()
-                    .enumerate()
-                    .map(|(chunk_index, chunk)| {
-                        let encoding = self
-                            .embedder
-                            .encode(&chunk.content)
-                            .with_context(|| format!("Failed to tokenize chunk {chunk_index}"))?;
+                chunker::chunk(
+                    document,
+                    self.embedder.tokenizer(),
+                    self.max_chunk_tokens,
+                    self.chunk_overlap_tokens,
+                )?
+                .into_iter()
+                .enumerate()
+                .map(|(chunk_index, chunk)| {
+                    let encoding = self
+                        .embedder
+                        .encode(&chunk.content)
+                        .with_context(|| format!("Failed to tokenize chunk {chunk_index}"))?;
 
-                        Ok((document_index, chunk_index, chunk, encoding))
-                    })
-                    .collect()
+                    Ok((document_index, chunk_index, chunk, encoding))
+                })
+                .collect()
             })
             .collect::<Result<Vec<Vec<(usize, usize, _, Encoding)>>>>()?
             .into_iter()
@@ -176,6 +195,7 @@ impl Indexer {
                         document,
                         self.embedder.tokenizer(),
                         self.max_chunk_tokens,
+                        self.chunk_overlap_tokens,
                     )?
                     .len()
                 ])
@@ -242,7 +262,12 @@ impl Indexer {
         path: &str,
         embeddings: &[Vec<f32>],
     ) -> Result<()> {
-        let chunks = chunker::chunk(document, self.embedder.tokenizer(), self.max_chunk_tokens)?;
+        let chunks = chunker::chunk(
+            document,
+            self.embedder.tokenizer(),
+            self.max_chunk_tokens,
+            self.chunk_overlap_tokens,
+        )?;
 
         let indexed_chunks = chunks
             .into_iter()
@@ -259,7 +284,7 @@ impl Indexer {
         self.db
             .replace_document(
                 path,
-                &index_fingerprint(document, self.max_chunk_tokens),
+                &index_fingerprint(document, self.max_chunk_tokens, self.chunk_overlap_tokens),
                 &indexed_chunks,
                 embeddings,
             )
@@ -270,9 +295,13 @@ impl Indexer {
     }
 }
 
-fn index_fingerprint(document: &Document, max_chunk_tokens: usize) -> String {
+fn index_fingerprint(
+    document: &Document,
+    max_chunk_tokens: usize,
+    chunk_overlap_tokens: usize,
+) -> String {
     format!(
-        "{}:chunker-v2-token-budget:{max_chunk_tokens}",
+        "{}:chunker-v4-token-budget:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
         document.content_hash
     )
 }

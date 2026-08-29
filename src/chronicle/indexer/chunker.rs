@@ -20,13 +20,24 @@ enum BlockKind {
 struct ParsedBlock {
     range: Range<usize>,
     kind: BlockKind,
+    section: usize,
     heading: Option<String>,
 }
 
 /// Split Markdown into token-bounded chunks while retaining the original source text.
-pub fn chunk(document: &Document, tokenizer: &Tokenizer, max_tokens: usize) -> Result<Vec<Chunk>> {
+pub fn chunk(
+    document: &Document,
+    tokenizer: &Tokenizer,
+    max_tokens: usize,
+    overlap_tokens: usize,
+) -> Result<Vec<Chunk>> {
     if max_tokens < 3 {
         return Err(anyhow!("Chunk token budget must be at least 3"));
+    }
+    if overlap_tokens > max_tokens.saturating_sub(3) {
+        return Err(anyhow!(
+            "Chunk overlap must be no greater than the chunk budget minus 3"
+        ));
     }
 
     if document.content.trim().is_empty() {
@@ -35,7 +46,7 @@ pub fn chunk(document: &Document, tokenizer: &Tokenizer, max_tokens: usize) -> R
 
     let blocks = parse_blocks(&document.content);
     let mut chunks = Vec::new();
-    let mut current = None::<(usize, usize, Option<String>)>;
+    let mut current = None::<(usize, usize, usize, BlockKind, Option<String>)>;
 
     for block in blocks {
         if matches!(block.kind, BlockKind::Heading(_))
@@ -46,21 +57,33 @@ pub fn chunk(document: &Document, tokenizer: &Tokenizer, max_tokens: usize) -> R
 
         let candidate_start = current
             .as_ref()
-            .map_or(block.range.start, |(start, _, _)| *start);
+            .map_or(block.range.start, |(start, _, _, _, _)| *start);
         let candidate = &document.content[candidate_start..block.range.end];
 
         if encoded_len(tokenizer, candidate)? <= max_tokens {
-            current = Some((candidate_start, block.range.end, block.heading));
+            current = Some((
+                candidate_start,
+                block.range.end,
+                block.section,
+                block.kind,
+                block.heading,
+            ));
             continue;
         }
 
-        if let Some((start, end, heading)) = current.take() {
-            chunks.push((start, end, heading));
+        if let Some((start, end, section, kind, heading)) = current.take() {
+            chunks.push((start, end, section, kind, heading));
         }
 
         let text = &document.content[block.range.clone()];
         if encoded_len(tokenizer, text)? <= max_tokens {
-            current = Some((block.range.start, block.range.end, block.heading));
+            current = Some((
+                block.range.start,
+                block.range.end,
+                block.section,
+                block.kind,
+                block.heading,
+            ));
         } else {
             let split = match block.kind {
                 BlockKind::Paragraph | BlockKind::BlockQuote | BlockKind::ListItem => {
@@ -74,6 +97,8 @@ pub fn chunk(document: &Document, tokenizer: &Tokenizer, max_tokens: usize) -> R
                 (
                     block.range.start + range.start,
                     block.range.start + range.end,
+                    block.section,
+                    block.kind,
                     block.heading.clone(),
                 )
             }));
@@ -84,16 +109,105 @@ pub fn chunk(document: &Document, tokenizer: &Tokenizer, max_tokens: usize) -> R
         chunks.push(chunk);
     }
 
+    apply_overlap(
+        &mut chunks,
+        &document.content,
+        tokenizer,
+        max_tokens,
+        overlap_tokens,
+    )?;
+
     Ok(chunks
         .into_iter()
         .enumerate()
-        .map(|(index, (start, end, heading))| Chunk {
+        .map(|(index, (start, end, _, _, heading))| Chunk {
             document_path: document.path.clone(),
             index,
             content: document.content[start..end].to_owned(),
             heading,
         })
         .collect())
+}
+
+fn apply_overlap(
+    chunks: &mut [(usize, usize, usize, BlockKind, Option<String>)],
+    source: &str,
+    tokenizer: &Tokenizer,
+    max_tokens: usize,
+    overlap_tokens: usize,
+) -> Result<()> {
+    if overlap_tokens == 0 {
+        return Ok(());
+    }
+
+    for index in 1..chunks.len() {
+        let (previous, current) = chunks.split_at_mut(index);
+        let (previous_start, previous_end, previous_section, previous_kind, _) =
+            &previous[index - 1];
+        let (current_start, current_end, current_section, _, _) = &current[0];
+
+        if previous_section != current_section || matches!(previous_kind, BlockKind::Heading(_)) {
+            continue;
+        }
+
+        let previous_text = &source[*previous_start..*previous_end];
+        let mut candidates =
+            overlap_candidates(previous_text, *previous_kind, tokenizer, overlap_tokens)?;
+        candidates.sort_by_key(|(_, token_count)| std::cmp::Reverse(*token_count));
+
+        for (local_start, _) in candidates {
+            let overlap_start = *previous_start + local_start;
+            if overlap_start >= *current_start
+                || encoded_len(tokenizer, &source[overlap_start..*current_end])? > max_tokens
+            {
+                continue;
+            }
+
+            current[0].0 = overlap_start;
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn overlap_candidates(
+    text: &str,
+    kind: BlockKind,
+    tokenizer: &Tokenizer,
+    overlap_tokens: usize,
+) -> Result<Vec<(usize, usize)>> {
+    let mut candidates = Vec::new();
+    let mut boundaries = Vec::new();
+
+    if matches!(
+        kind,
+        BlockKind::Paragraph | BlockKind::BlockQuote | BlockKind::ListItem
+    ) {
+        boundaries.extend(sentence_ranges(text).into_iter().map(|range| range.start));
+        boundaries.extend(word_ranges(text).into_iter().map(|range| range.start));
+    }
+
+    let encoding = tokenizer
+        .encode(text, true)
+        .map_err(|error| anyhow!("Failed to tokenize overlap: {error}"))?;
+    boundaries.extend(
+        encoding
+            .get_offsets()
+            .iter()
+            .filter_map(|(start, end)| (end > start).then_some(*start)),
+    );
+    boundaries.sort_unstable();
+    boundaries.dedup();
+
+    for start in boundaries {
+        let token_count = encoded_len(tokenizer, &text[start..])?;
+        if token_count <= overlap_tokens {
+            candidates.push((start, token_count));
+        }
+    }
+
+    Ok(candidates)
 }
 
 fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
@@ -107,6 +221,7 @@ fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
     let mut blocks = Vec::new();
     let mut heading_path = Vec::<(HeadingLevel, String)>::new();
     let mut heading_capture = None::<(HeadingLevel, String)>;
+    let mut section = 0;
 
     for (event, range) in parser {
         match event {
@@ -128,6 +243,7 @@ fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
                         .map(|(_, text)| text.trim().to_owned());
                     if let Some(heading) = heading.filter(|text| !text.is_empty()) {
                         update_heading_path(&mut heading_path, *level, heading);
+                        section += 1;
                     }
                 }
 
@@ -151,6 +267,7 @@ fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
                     blocks.push(ParsedBlock {
                         range: start..range.end,
                         kind,
+                        section,
                         heading,
                     });
                 }
@@ -163,6 +280,7 @@ fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
             Event::Rule => blocks.push(ParsedBlock {
                 range,
                 kind: BlockKind::Paragraph,
+                section,
                 heading: Some(format_heading_path(&heading_path)).filter(|path| !path.is_empty()),
             }),
             _ => {}

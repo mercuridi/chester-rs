@@ -172,7 +172,7 @@ fn deduplicate_and_diversify(
             continue;
         }
 
-        if is_near_duplicate(&candidate.text, &accepted, near_duplicate_threshold) {
+        if is_near_duplicate(&candidate, &accepted, near_duplicate_threshold) {
             near_duplicates += 1;
             continue;
         }
@@ -196,13 +196,19 @@ fn canonical_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn is_near_duplicate(candidate: &str, accepted: &[SearchResult], threshold: f32) -> bool {
-    let candidate_shingles = shingles(candidate);
+fn is_near_duplicate(candidate: &SearchResult, accepted: &[SearchResult], threshold: f32) -> bool {
+    let candidate_shingles = shingles(&candidate.text);
     if candidate_shingles.is_empty() {
         return false;
     }
 
     accepted.iter().any(|result| {
+        if result.document_path == candidate.document_path
+            && result.chunk_index.abs_diff(candidate.chunk_index) == 1
+        {
+            return false;
+        }
+
         let accepted_shingles = shingles(&result.text);
         let intersection = candidate_shingles.intersection(&accepted_shingles).count();
         let union = candidate_shingles.union(&accepted_shingles).count();

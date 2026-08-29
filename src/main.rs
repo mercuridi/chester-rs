@@ -82,6 +82,7 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
         chronicle_db,
         embedder,
         config.chronicle.max_chunk_tokens,
+        config.chronicle.chunk_overlap_tokens,
     );
 
     let indexing_stats = indexer

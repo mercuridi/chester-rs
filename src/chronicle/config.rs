@@ -72,6 +72,9 @@ pub struct RawChronicleConfig {
     retrieval_max_chunks_per_document: usize,
 
     max_chunk_tokens: usize,
+
+    #[serde(default)]
+    chunk_overlap_tokens: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -129,6 +132,7 @@ pub struct ChronicleConfig {
     pub retrieval_near_duplicate_threshold: f32,
     pub retrieval_max_chunks_per_document: usize,
     pub max_chunk_tokens: usize,
+    pub chunk_overlap_tokens: usize,
 }
 
 #[derive(Debug)]
@@ -286,6 +290,7 @@ impl Config {
             retrieval_near_duplicate_threshold: raw.chronicle.retrieval_near_duplicate_threshold,
             retrieval_max_chunks_per_document: raw.chronicle.retrieval_max_chunks_per_document,
             max_chunk_tokens: raw.chronicle.max_chunk_tokens,
+            chunk_overlap_tokens: raw.chronicle.chunk_overlap_tokens,
         };
 
         chronicle.validate()?;
@@ -419,6 +424,11 @@ impl ChronicleConfig {
         }
         if !(3..=512).contains(&self.max_chunk_tokens) {
             bail!("Chronicle max_chunk_tokens must be between 3 and 512");
+        }
+        if self.chunk_overlap_tokens > self.max_chunk_tokens.saturating_sub(3) {
+            bail!(
+                "Chronicle chunk_overlap_tokens must be no greater than max_chunk_tokens minus 3"
+            );
         }
         Ok(())
     }

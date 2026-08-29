@@ -21,7 +21,6 @@ pub struct IndexedChunk {
 #[derive(Debug, Clone)]
 pub struct SearchResult {
     pub document_path: String,
-    #[expect(dead_code, reason = "Retained for future result display and reranking")]
     pub chunk_index: i64,
     pub heading: Option<String>,
     pub text: String,
