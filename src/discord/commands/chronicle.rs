@@ -520,8 +520,9 @@ fn build_transcript_document(
         frontmatter: TranscriptFrontmatter {
             schema_version: 1,
             recording_date: manifest.started_at,
-            ended_at: manifest.ended_at,
-            duration_seconds: (manifest.ended_at - manifest.started_at)
+            ended_at: manifest.ended_at.unwrap_or(manifest.started_at),
+            duration_seconds: (manifest.ended_at.unwrap_or(manifest.started_at)
+                - manifest.started_at)
                 .to_std()
                 .map_or(0.0, |duration| duration.as_secs_f64()),
             participants,

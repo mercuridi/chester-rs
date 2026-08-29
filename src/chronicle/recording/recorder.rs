@@ -30,15 +30,45 @@ use tracing::{debug, info, instrument, warn};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecordingManifest {
+    #[serde(default = "default_manifest_status")]
+    pub status: ManifestStatus,
     pub guild_id: GuildId,
     pub started_at: DateTime<Local>,
-    pub ended_at: DateTime<Local>,
+    #[serde(default)]
+    pub ended_at: Option<DateTime<Local>>,
     pub participants: Vec<UserId>,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ManifestStatus {
+    Recording,
+    Complete,
+}
+
+fn default_manifest_status() -> ManifestStatus {
+    ManifestStatus::Complete
+}
+
 impl RecordingManifest {
     pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let contents = std::fs::read_to_string(path)?;
         Ok(toml::from_str(&contents)?)
+    }
+
+    fn save_atomically(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        let path = path.as_ref();
+        let temp_path = path.with_extension("toml.tmp");
+        let contents = toml::to_string_pretty(self)?;
+
+        std::fs::write(&temp_path, contents)?;
+
+        let file = std::fs::OpenOptions::new().read(true).open(&temp_path)?;
+        file.sync_data()?;
+        drop(file);
+
+        std::fs::rename(&temp_path, path)?;
+        Ok(())
     }
 }
 
@@ -55,6 +85,8 @@ pub struct RecordingSession {
     pub initiator: UserId,
     pub started_at: DateTime<Local>,
     pub session_name: String,
+    pub manifest_path: PathBuf,
+    pub manifest: RecordingManifest,
     pub tick: u64,
     pub users: HashMap<UserId, UserRecording>,
 }
@@ -118,6 +150,7 @@ impl Recorder {
     ) -> Result<bool, Error> {
         let started_at = Local::now();
 
+        let recording_directory = recording_directory(guild_id, &session_name, started_at);
         ensure_recording_directory(guild_id, &session_name, started_at)?;
 
         let mut recording = self.recording_session.lock().await;
@@ -126,6 +159,17 @@ impl Recorder {
             return Ok(false);
         }
 
+        let manifest_path = recording_directory.join("manifest.toml");
+        let manifest = RecordingManifest {
+            status: ManifestStatus::Recording,
+            guild_id,
+            started_at,
+            ended_at: None,
+            participants: Vec::new(),
+        };
+
+        manifest.save_atomically(&manifest_path)?;
+
         *recording = Some(RecordingSession {
             guild_id,
             voice_channel_id,
@@ -133,6 +177,8 @@ impl Recorder {
             initiator,
             started_at,
             session_name,
+            manifest_path,
+            manifest,
             tick: 0,
             users: HashMap::new(),
         });
@@ -191,23 +237,14 @@ impl Recorder {
             }
         }
 
-        let manifest: RecordingManifest = RecordingManifest {
-            guild_id: session.guild_id,
-            started_at: session.started_at,
-            ended_at: Local::now(),
-            participants,
-        };
-
-        let manifest_path =
-            recording_directory(session.guild_id, &session.session_name, session.started_at)
-                .join("manifest.toml");
-
-        let manifest_toml = toml::to_string_pretty(&manifest)?;
-
-        std::fs::write(&manifest_path, manifest_toml)?;
+        let mut manifest = session.manifest;
+        manifest.status = ManifestStatus::Complete;
+        manifest.ended_at = Some(Local::now());
+        manifest.participants = participants;
+        manifest.save_atomically(&session.manifest_path)?;
 
         tracing::info!(
-            path = %manifest_path.display(),
+            path = %session.manifest_path.display(),
             "Recording manifest written"
         );
 
@@ -327,6 +364,7 @@ impl EventHandler for Recorder {
                 let session = recording.as_mut()?;
 
                 // Create recordings for users who have just started speaking.
+                let mut manifest_changed = false;
                 for &user_id in tick_audio.keys() {
                     if session.users.contains_key(&user_id) {
                         continue;
@@ -341,6 +379,18 @@ impl EventHandler for Recorder {
                     );
 
                     session.users.insert(user_id, user_recording);
+                    session.manifest.participants.push(user_id);
+                    manifest_changed = true;
+                }
+
+                if manifest_changed {
+                    if let Err(error) = session.manifest.save_atomically(&session.manifest_path) {
+                        tracing::error!(
+                            %error,
+                            path = %session.manifest_path.display(),
+                            "Failed to persist recording manifest after participant discovery"
+                        );
+                    }
                 }
 
                 // Every user gets exactly one 20 ms PCM frame per VoiceTick.
@@ -428,6 +478,75 @@ fn ensure_recording_directory(
     started_at: DateTime<Local>,
 ) -> Result<(), std::io::Error> {
     std::fs::create_dir_all(recording_directory(guild_id, session_name, started_at))
+}
+
+/// Report manifests left in the active state by a previous process lifetime.
+///
+/// This deliberately reports problems instead of deleting or repairing them;
+/// an administrator should decide whether the corresponding audio is useful.
+pub fn scan_incomplete_manifests(root: impl AsRef<Path>) -> anyhow::Result<()> {
+    let root = root.as_ref();
+    if !root.exists() {
+        return Ok(());
+    }
+
+    scan_manifest_directory(root)
+}
+
+fn scan_manifest_directory(directory: &Path) -> anyhow::Result<()> {
+    let entries = std::fs::read_dir(directory)?.collect::<Result<Vec<_>, _>>()?;
+    let has_manifest = entries.iter().any(|entry| {
+        entry.path().file_name().and_then(|name| name.to_str()) == Some("manifest.toml")
+    });
+    let has_recording = entries.iter().any(|entry| {
+        entry
+            .path()
+            .extension()
+            .and_then(|extension| extension.to_str())
+            == Some("opus")
+    });
+
+    if has_recording && !has_manifest {
+        tracing::warn!(
+            path = %directory.display(),
+            "Found recordings without a manifest; manual cleanup or recovery is required"
+        );
+    }
+
+    for entry in entries {
+        let path = entry.path();
+
+        if path.is_dir() {
+            scan_manifest_directory(&path)?;
+            continue;
+        }
+
+        if path.file_name().and_then(|name| name.to_str()) != Some("manifest.toml") {
+            continue;
+        }
+
+        match RecordingManifest::load(&path) {
+            Ok(manifest) if manifest.status == ManifestStatus::Recording => {
+                tracing::warn!(
+                    path = %path.display(),
+                    guild_id = %manifest.guild_id,
+                    started_at = %manifest.started_at,
+                    participant_count = manifest.participants.len(),
+                    "Found an incomplete recording manifest; manual cleanup or recovery is required"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::error!(
+                    path = %path.display(),
+                    %error,
+                    "Found an unreadable recording manifest; manual cleanup or recovery is required"
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub async fn notify_recording_user(

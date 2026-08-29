@@ -24,7 +24,7 @@ use crate::{
         config::Config,
         indexer::{db::repository::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,
-        recording::recorder::notify_recording_user,
+        recording::recorder::{notify_recording_user, scan_incomplete_manifests},
         runtime::GpuRuntime,
         service::Chronicle,
     },
@@ -273,6 +273,9 @@ async fn run() -> Result<()> {
         max_reply_length = config.chronicle.llm_max_reply_length,
         "Loaded configuration"
     );
+
+    scan_incomplete_manifests(crate::constants::RECORDINGS_DIR)
+        .context("Failed to scan recording manifests")?;
 
     let token = std::env::var("DISCORD_TOKEN").context("DISCORD_TOKEN is not set")?;
 
