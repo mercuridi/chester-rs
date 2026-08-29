@@ -1,6 +1,21 @@
 # Changelog
 
-## [2.2.3] — 2026-08-28
+## [2.3.0] — 2026-08-29
+
+### Bug Fixes
+
+- Rewrite readme
+- Put candle-kernels patch onto remote while waiting for an upstream fix
+- Delete download.sh as its functionality is integrated in rust
+- Databases are created automatically if they do not exist
+
+
+### Features
+
+- Database parity pass part 1
+- Database parity pass part 2
+
+## [v2.2.3] — 2026-08-28
 
 ### Bug Fixes
 
