@@ -27,6 +27,7 @@ use crate::{
     },
 };
 
+/// Top-level Chronicle command
 #[poise::command(
     slash_command,
     subcommands("chronicle_start", "ask", "chronicle_stop"),
@@ -37,6 +38,7 @@ pub async fn chronicle(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Start the Chronicle subsystem
 #[poise::command(slash_command, rename = "start")]
 pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
     info!(user = %ctx.author().id, "Chronicle start command requested");
@@ -54,6 +56,7 @@ pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Stop the Chronicle subsystem
 #[poise::command(slash_command, rename = "stop")]
 pub async fn chronicle_stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
     info!(user = %ctx.author().id, "Chronicle stop command requested");
@@ -71,12 +74,14 @@ pub async fn chronicle_stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Top-level recording command
 #[poise::command(slash_command, subcommands("start", "stop"), subcommand_required)]
 #[allow(clippy::unused_async)]
 pub async fn recording(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Start a recording session
 #[poise::command(slash_command)]
 pub async fn start(
     ctx: PoiseContext<'_>,
@@ -153,6 +158,7 @@ pub async fn start(
     Ok(())
 }
 
+/// End a recording session.
 #[poise::command(slash_command)]
 pub async fn stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
     info!(user = %ctx.author().id, "Recording stop command requested");
@@ -176,6 +182,7 @@ pub async fn stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Top-level transcript command
 #[poise::command(slash_command, subcommands("show", "generate"))]
 #[allow(clippy::unused_async)]
 pub async fn transcript(_ctx: PoiseContext<'_>) -> Result<(), Error> {
@@ -285,6 +292,7 @@ pub async fn generate(
     Ok(())
 }
 
+/// Ask a natural-language question about the loaded corpus.
 #[poise::command(slash_command)]
 pub async fn ask(
     ctx: PoiseContext<'_>,

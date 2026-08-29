@@ -6,7 +6,7 @@ use crate::jester::db::repository::{
     fetch_library_by_origin, fetch_library_by_tag,
 };
 
-/// /library
+/// Top-level library command
 #[poise::command(
     slash_command,
     subcommands("all", "artist", "origin", "tags", "incomplete")
@@ -16,31 +16,31 @@ pub async fn library(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// /library all
+/// Shows the full library with all metadata for each track
 #[poise::command(slash_command)]
 async fn all(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "").await
 }
 
-/// /library artist
+/// Shows the library grouped by artist
 #[poise::command(slash_command)]
 async fn artist(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "artist").await
 }
 
-/// /library origin
+/// Shows the library grouped by origin
 #[poise::command(slash_command)]
 async fn origin(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "origin").await
 }
 
-/// /library tags
+/// Shows the library grouped by tags
 #[poise::command(slash_command)]
 async fn tags(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "tags").await
 }
 
-/// /library incomplete
+/// Shows tracks with incomplete metadata
 #[poise::command(slash_command)]
 async fn incomplete(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "incomplete").await
