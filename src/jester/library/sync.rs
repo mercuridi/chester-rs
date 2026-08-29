@@ -89,17 +89,23 @@ pub async fn sync_audio_library(pool: &SqlitePool) -> Result<SyncStats> {
 async fn verify_dependencies() -> Result<()> {
     info!("Verifying yt-dlp and ffmpeg availability");
 
-    Command::new(YTDLP_PATH)
+    let ytdlp = Command::new(YTDLP_PATH)
         .arg("--version")
         .output()
         .await
         .context("yt-dlp missing or not executable")?;
+    if !ytdlp.status.success() {
+        anyhow::bail!("yt-dlp version check returned a non-zero exit status");
+    }
 
-    Command::new("ffmpeg")
+    let ffmpeg = Command::new("ffmpeg")
         .arg("-version")
         .output()
         .await
         .context("ffmpeg missing or not executable")?;
+    if !ffmpeg.status.success() {
+        anyhow::bail!("ffmpeg version check returned a non-zero exit status");
+    }
 
     info!("yt-dlp and ffmpeg both available");
 
@@ -153,7 +159,7 @@ async fn download_with_retry(id: &str) -> Result<bool> {
         }
     }
 
-    Ok(false)
+    anyhow::bail!("All yt-dlp download attempts failed")
 }
 
 #[instrument]
@@ -182,7 +188,7 @@ async fn download_track(id: &str) -> Result<bool> {
             stderr = %String::from_utf8_lossy(&output.stderr),
             "yt-dlp returned non-zero exit"
         );
-        return Ok(false);
+        anyhow::bail!("yt-dlp returned a non-zero exit status");
     }
 
     if tokio::fs::try_exists(&tmp_path).await.unwrap_or(false) {
@@ -192,6 +198,6 @@ async fn download_track(id: &str) -> Result<bool> {
         Ok(true)
     } else {
         warn!(%id, "Downloaded file not found after completion");
-        Ok(false)
+        anyhow::bail!("Downloaded file not found after yt-dlp completed");
     }
 }

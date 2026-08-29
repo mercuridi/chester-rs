@@ -5,10 +5,10 @@ mod discord;
 mod jester;
 mod utils;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 ////////////////////////////////////////////////////////////////////////////////
-use dotenv::dotenv;
+use dotenv::from_path;
 /// Imports
 use poise::serenity_prelude::{ClientBuilder, Context as SerenityContext, GatewayIntents};
 use serenity::client::FullEvent;
@@ -28,9 +28,11 @@ use crate::{
         runtime::GpuRuntime,
         service::Chronicle,
     },
+    constants::PROJECT_ROOT,
     discord::context::{Data, Error},
     jester::library::sync::sync_audio_library,
 };
+use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -63,15 +65,20 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     }
 }
 
-async fn build_chronicle(config: &Config) -> Result<Chronicle, Error> {
+async fn build_chronicle(config: &Config) -> Result<Chronicle> {
     tracing::info!(
         chronicle_db = %config.database.chronicle,
         "Opening Chronicle index database"
     );
 
-    let chronicle_db = IndexerDb::open(&config.database.chronicle).await?;
+    let chronicle_db = IndexerDb::open(&config.database.chronicle)
+        .await
+        .context("Failed to open Chronicle index database")?;
     tracing::info!("Loading Chronicle embedding model");
-    let embedder = Embedder::load(candle_core::Device::cuda_if_available(0)?)?;
+    let device = candle_core::Device::cuda_if_available(0)
+        .context("Failed to select a CUDA or CPU device for Chronicle embeddings")?;
+    let embedder =
+        Embedder::load(device).context("Failed to load the Chronicle embedding model")?;
     let indexer = Indexer::new(
         PathBuf::from(&config.chronicle.corpus_dir),
         chronicle_db,
@@ -79,7 +86,10 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle, Error> {
         config.chronicle.max_chunk_length,
     );
 
-    let indexing_stats = indexer.index().await?;
+    let indexing_stats = indexer
+        .index()
+        .await
+        .context("Failed to index the Chronicle corpus")?;
     tracing::info!(
         added = indexing_stats.added,
         updated = indexing_stats.updated,
@@ -214,20 +224,46 @@ fn build_framework(
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
-    dotenv().ok();
-
+async fn main() {
     // Keep normal operation useful without being noisy. Set RUST_LOG to override,
     // for example: `RUST_LOG=chester_rs=debug cargo run`.
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("chester_rs=info,warn"));
+    let (env_filter, invalid_filter) = match EnvFilter::try_from_default_env() {
+        Ok(filter) => (filter, None),
+        Err(error) => (EnvFilter::new("chester_rs=info,warn"), Some(error)),
+    };
 
-    tracing_subscriber::fmt().with_env_filter(env_filter).init();
+    if let Err(error) = tracing_subscriber::fmt()
+        .with_env_filter(env_filter)
+        .try_init()
+    {
+        eprintln!("Failed to initialize logging: {error}");
+        std::process::exit(1);
+    }
+
+    if let Some(error) = invalid_filter {
+        tracing::warn!(?error, "Invalid RUST_LOG filter; using the default filter");
+    }
+
+    if let Err(error) = run().await {
+        tracing::error!(error = %error, "Chester failed to start");
+        tracing::debug!(error = ?error, "Startup error chain");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
+    let project_root = Path::new(PROJECT_ROOT);
+    from_path(project_root.join(".env")).ok();
 
     tracing::info!("Starting Chester");
-    std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"))?;
 
-    let config = Config::load(".chronicle/config.toml")?;
+    let config_path = project_root.join(".chronicle/config.toml");
+    let config = Config::load(&config_path).with_context(|| {
+        format!(
+            "Failed to load configuration from {}",
+            config_path.display()
+        )
+    })?;
     tracing::debug!(
         corpus_dir = %config.chronicle.corpus_dir,
         retrieval_limit = config.chronicle.retrieval_limit,
@@ -235,11 +271,21 @@ async fn main() -> Result<(), Error> {
         "Loaded configuration"
     );
 
-    let pool = database::pool::open_sqlite_pool(&config.database.jester, "Jester").await?;
-    jester::db::schema::initialise(&pool).await?;
-    let chronicle = build_chronicle(&config).await?;
+    let token = std::env::var("DISCORD_TOKEN").context("DISCORD_TOKEN is not set")?;
 
-    let sync_stats = sync_audio_library(&pool).await?;
+    let pool = database::pool::open_sqlite_pool(&config.database.jester, "Jester")
+        .await
+        .context("Failed to open the Jester database")?;
+    jester::db::schema::initialise(&pool)
+        .await
+        .context("Failed to initialize the Jester database schema")?;
+    let chronicle = build_chronicle(&config)
+        .await
+        .context("Failed to initialize Chronicle")?;
+
+    let sync_stats = sync_audio_library(&pool)
+        .await
+        .context("Failed to synchronize the audio library")?;
 
     info!(
         downloaded = sync_stats.downloaded,
@@ -248,7 +294,12 @@ async fn main() -> Result<(), Error> {
         "Library sync complete"
     );
 
-    let token = std::env::var("DISCORD_TOKEN")?;
+    if sync_stats.failed > 0 {
+        bail!(
+            "Audio library synchronization failed for {} track(s); refusing to start",
+            sync_stats.failed
+        );
+    }
 
     let poise_commands = build_commands();
     tracing::info!(
@@ -269,10 +320,14 @@ async fn main() -> Result<(), Error> {
     let mut client = ClientBuilder::new(token, intents)
         .framework(framework)
         .register_songbird_from_config(songbird_config) // ← this injects the Songbird voice manager
-        .await?;
+        .await
+        .context("Failed to create the Discord client")?;
 
-    // 4) Start the bot
-    client.start().await?;
+    tracing::info!("Starting Discord gateway");
+    client
+        .start()
+        .await
+        .context("Discord gateway stopped with an error")?;
 
     Ok(())
 }

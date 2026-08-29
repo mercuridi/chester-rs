@@ -29,11 +29,16 @@ pub const MODEL_REVISION: &str = "main";
 pub const MODEL_SAMPLE_RATE: u32 = 16_000;
 pub const TRANSCRIPT_PAGE_LIMIT: usize = 1900;
 
+// project paths
+pub const PROJECT_ROOT: &str = env!("CARGO_MANIFEST_DIR");
+pub const RECORDINGS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/.chronicle/recordings");
+
 // library sync
-pub const AUDIO_DIR: &str = "audio";
+pub const AUDIO_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/audio");
 pub const DOWNLOAD_CONCURRENCY: usize = 4;
 pub const MAX_RETRIES: usize = 3;
-pub const YTDLP_PATH: &str = "./yt-dlp";
+pub const YTDLP_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/yt-dlp");
+pub const COOKIES_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/cookies.txt");
 
 // autocomplete
 pub const AUTOCOMPLETE_MAX_CHOICES: usize = 25; // capped by Discord

@@ -3,6 +3,7 @@ use sqlx::SqlitePool;
 use std::process::Command;
 
 use crate::{
+    constants::{AUDIO_DIR, COOKIES_PATH, YTDLP_PATH},
     discord::context::Error,
     jester::db::{
         metadata::MetadataKind,
@@ -33,16 +34,16 @@ pub async fn download_track(
         return Ok(track);
     }
 
-    let output = Command::new("./yt-dlp")
+    let output = Command::new(YTDLP_PATH)
         .arg("-t")
         .arg("mp3")
         .arg("-o")
-        .arg("audio/%(id)s.%(ext)s")
+        .arg(format!("{AUDIO_DIR}/%(id)s.%(ext)s"))
         .arg("--no-playlist")
         .arg("--write-info-json")
         .arg("--no-progress")
         .arg("--cookies")
-        .arg("cookies.txt")
+        .arg(COOKIES_PATH)
         .arg(&yt_link)
         .output()
         .map_err(|e| format!("Failed to execute yt-dlp: {e}"))?;

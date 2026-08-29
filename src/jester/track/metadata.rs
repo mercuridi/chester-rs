@@ -2,8 +2,10 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::fs;
 
+use crate::constants::AUDIO_DIR;
+
 pub fn process_ytdlp_json(file_id: &str) -> Result<serde_json::Value> {
-    let path = format!("audio/{file_id}.info.json");
+    let path = format!("{AUDIO_DIR}/{file_id}.info.json");
     let content = fs::read_to_string(&path).with_context(|| format!("Failed to read {path:?}"))?;
 
     // Parse the full JSON

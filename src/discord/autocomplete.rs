@@ -4,7 +4,7 @@ use chrono::NaiveDateTime;
 use poise::serenity_prelude::AutocompleteChoice;
 use titlecase::Titlecase;
 
-use crate::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
+use crate::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH, RECORDINGS_DIR};
 use crate::discord::context::PoiseContext;
 use crate::discord::voice::require_guild;
 use crate::jester::db::metadata::MetadataKind;
@@ -140,7 +140,7 @@ pub async fn autocomplete_existing_transcript(
 
     let needle = partial.to_lowercase();
 
-    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{guild_id}"));
+    let recording_dir = PathBuf::from(RECORDINGS_DIR).join(guild_id.to_string());
 
     let entries = match std::fs::read_dir(&recording_dir) {
         Ok(entries) => entries,
@@ -200,7 +200,7 @@ pub async fn autocomplete_recording_session(
 
     let needle = partial.to_lowercase();
 
-    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{guild_id}"));
+    let recording_dir = PathBuf::from(RECORDINGS_DIR).join(guild_id.to_string());
 
     let entries = match std::fs::read_dir(&recording_dir) {
         Ok(entries) => entries,

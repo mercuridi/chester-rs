@@ -201,6 +201,35 @@ pub struct GuildConfig {
     pub alias_groups: Vec<AliasGroupId>,
 }
 
+fn resolve_path(project_root: &Path, path: String) -> String {
+    let path = Path::new(&path);
+    if path.is_absolute() {
+        path.to_string_lossy().into_owned()
+    } else {
+        project_root.join(path).to_string_lossy().into_owned()
+    }
+}
+
+fn resolve_sqlite_url(project_root: &Path, url: &str) -> String {
+    let Some(path_and_query) = url.strip_prefix("sqlite://") else {
+        return url.to_owned();
+    };
+
+    let (path, query) = path_and_query
+        .split_once('?')
+        .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
+
+    if path == ":memory:" || path.starts_with('/') {
+        return url.to_owned();
+    }
+
+    let resolved = resolve_path(project_root, path.to_owned());
+    match query {
+        Some(query) => format!("sqlite://{resolved}?{query}"),
+        None => format!("sqlite://{resolved}"),
+    }
+}
+
 impl Config {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -211,10 +240,15 @@ impl Config {
         let raw: RawConfig = toml::from_str(&contents)
             .with_context(|| format!("Failed to parse config file {}", path.display()))?;
 
-        Self::from_raw(raw)
+        let project_root = path
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or_else(|| Path::new("."));
+
+        Self::from_raw(raw, project_root)
     }
 
-    fn from_raw(raw: RawConfig) -> Result<Self> {
+    fn from_raw(raw: RawConfig, project_root: &Path) -> Result<Self> {
         let mut alias_groups = HashMap::new();
 
         for (group_id, raw_group) in raw.alias_groups {
@@ -278,7 +312,7 @@ impl Config {
             llm_model_file: raw.chronicle.llm_model_file,
             llm_tokenizer_repo: raw.chronicle.llm_tokenizer_repo,
             llm_tokenizer_file: raw.chronicle.llm_tokenizer_file,
-            corpus_dir: raw.chronicle.corpus_dir,
+            corpus_dir: resolve_path(project_root, raw.chronicle.corpus_dir),
             llm_max_tokens: raw.chronicle.llm_max_tokens,
             llm_temperature: raw.chronicle.llm_temperature,
             llm_seed: raw.chronicle.llm_seed,
@@ -297,8 +331,8 @@ impl Config {
             alias_groups,
             guilds,
             database: DatabaseConfig {
-                jester: raw.database.jester,
-                chronicle: raw.database.chronicle,
+                jester: resolve_sqlite_url(project_root, &raw.database.jester),
+                chronicle: resolve_sqlite_url(project_root, &raw.database.chronicle),
             },
             chronicle,
         })

@@ -23,7 +23,7 @@ use tokio::{
 
 use crate::{
     chronicle::recording::encoder::run_encoder,
-    constants::{RING_BUFFER_CAPACITY, SILENCE_FRAME},
+    constants::{RECORDINGS_DIR, RING_BUFFER_CAPACITY, SILENCE_FRAME},
     discord::context::Error,
 };
 use tracing::{debug, info, instrument, warn};
@@ -405,7 +405,7 @@ fn recording_directory(
     started_at: DateTime<Local>,
 ) -> PathBuf {
     PathBuf::from(format!(
-        ".chronicle/recordings/{}/{}-{}",
+        "{RECORDINGS_DIR}/{}/{}-{}",
         guild_id,
         started_at.format("%Y%m%d-%H%M%S"),
         session_name,

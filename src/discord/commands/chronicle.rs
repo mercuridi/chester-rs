@@ -16,7 +16,7 @@ use crate::{
             },
         },
     },
-    constants::{CHESTER_USER_ID, TRANSCRIPT_PAGE_LIMIT},
+    constants::{CHESTER_USER_ID, RECORDINGS_DIR, TRANSCRIPT_PAGE_LIMIT},
     discord::{
         autocomplete::{
             autocomplete_alias_group, autocomplete_existing_transcript,
@@ -201,7 +201,9 @@ pub async fn show(
     info!(user = %ctx.author().id, session = %session, "Transcript display requested");
     let guild_id = require_guild(ctx)?;
 
-    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{guild_id}/{session}"));
+    let recording_dir = PathBuf::from(RECORDINGS_DIR)
+        .join(guild_id.to_string())
+        .join(&session);
 
     let transcript_path = transcript_path(&recording_dir);
 
@@ -238,7 +240,9 @@ pub async fn generate(
     info!(user = %ctx.author().id, session = %session, alias_group = %alias_group_id, "Transcript generation requested");
     let guild_id = require_guild(ctx)?;
 
-    let recording_dir = PathBuf::from(format!(".chronicle/recordings/{guild_id}/{session}"));
+    let recording_dir = PathBuf::from(RECORDINGS_DIR)
+        .join(guild_id.to_string())
+        .join(&session);
 
     let manifest = match load_recording_manifest(&recording_dir, guild_id, &session) {
         Ok(manifest) => manifest,
