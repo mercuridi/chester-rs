@@ -34,3 +34,19 @@ retrieval_limit = 5
 # Must be greater than zero. This is a character/byte-oriented chunk limit;
 # the embedding tokenizer still truncates each chunk at 512 tokens.
 max_chunk_length = 2000
+
+# Optional: map Discord users to names used in transcripts.
+# Replace the example IDs with real Discord user IDs.
+#
+# [alias_groups.main]
+# name = "Main names"
+#
+# [alias_groups.main.aliases]
+# "123456789012345678" = "Alice"
+# "234567890123456789" = "Bob"
+#
+# Optional: make an alias group available to a guild.
+# Replace the example ID with a real Discord server ID.
+#
+# [guilds."345678901234567890"]
+# alias_groups = ["main"]

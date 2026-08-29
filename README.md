@@ -1,35 +1,214 @@
-# chester-rs
+# Chester
 
-Chester is a Discord music bot written in Rust using the Poise and Songbird libraries.
-Developed on macOS/Linux. Windows deployments YMMV.
+Chester is a Discord music bot written in Rust. It downloads and plays music from YouTube, maintains a SQLite-backed library, and provides Chronicle: voice recording, Whisper transcription, corpus search, and a local LLM assistant.
 
-## Setup
-### System Dependencies
-- ffmpeg
-- cargo / rustup
-- sqlite3
-- libssl-dev
-- cmake
+This document describes a Linux deployment from an empty machine. Windows and macOS are not supported deployment targets.
 
-### Other Dependencies
-- yt-dlp
-    - You will need to install yt-dlp yourself: https://github.com/yt-dlp/yt-dlp/wiki/Installation
-    - Remember to give the yt-dlp binary execute permissions with `chmod`
-    - `download.sh` assumes a binary `yt-dlp` file has been placed in the top level - you may need to edit this!
+## What runs where
 
-## Execution
+- Chester itself is a Rust binary started from the repository root.
+- `database/jester/jester.sqlite3` stores the music library and metadata.
+- `audio/` stores downloaded MP3 files.
+- `.chronicle/` stores Chronicle's index database and voice recordings.
+- `corpus/` contains the documents indexed by Chronicle.
+- `yt-dlp` must be an executable file in the repository root. The bot does not search `PATH` for it.
+- SQLite is bundled into the Rust binary. The `sqlite3` command-line program is still required by `download.sh` and `migrate.sh`.
 
-### Chester
-- `cargo run` for debug build
-- `cargo run --release` for optimised build
+Chronicle uses Candle with CUDA. A CUDA-capable NVIDIA GPU is therefore required for Chronicle's embedding, transcription, and LLM features. The music functionality does not need a GPU.
 
-Logging defaults to useful `info` messages for Chester and `warn` messages for dependencies.
-Use `RUST_LOG` to change the filter while developing:
+## Requirements
 
-- `RUST_LOG=chester_rs=debug cargo run` enables detailed project tracing.
-- `RUST_LOG=chester_rs=info,chester_rs::chronicle=debug cargo run` enables debug output only for Chronicle.
-- `RUST_LOG=warn cargo run` shows warnings and errors only.
+### Linux packages
 
-### download.sh
-- This script reads the database in `database/jester/jester.sqlite3` and downloads all relevant audio files automatically
-- `-p` can be passed as a flag to enable parallel download execution - this enormously speeds up large sequential downloads
+The following example is for Debian or Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential \
+  ca-certificates \
+  cmake \
+  curl \
+  ffmpeg \
+  findutils \
+  libopus-dev \
+  libssl-dev \
+  pkg-config \
+  sqlite3
+```
+
+`xargs` is normally supplied by `findutils`; if your distribution does not provide an `xargs` package, install its `findutils` equivalent. 
+
+You also need:
+
+- Rust and Cargo, installed with `rustup`.
+- An NVIDIA driver and CUDA toolkit visible to the build and runtime. Verify with `nvidia-smi` and `nvcc --version`.
+- A Discord application and bot token.
+
+### Rust
+
+Install Rust for the current user:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+rustup default stable
+```
+
+The project uses Rust edition 2024. If the build reports an unsupported edition, update Rust with `rustup update`.
+
+## Install from zero
+
+Run these commands after installing the requirements:
+
+```bash
+git clone git@github.com:mercuridi/chester-rs.git chester-rs
+cd chester-rs
+
+mkdir -p .chronicle corpus audio
+cp chronicle.config.example.toml .chronicle/config.toml
+
+curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o yt-dlp
+chmod 755 yt-dlp
+
+printf '%s\n' 'DISCORD_TOKEN=replace-with-your-bot-token' > .env
+cargo build --release
+```
+
+Keep `yt-dlp` beside `Cargo.toml`; both the bot and `download.sh` use `./yt-dlp`.
+
+The checked-in SQLite databases and schemas are used by default. Do not delete them during first setup. If starting with a new music database, initialize it from `database/jester/schema.sql` before adding tracks; the bot expects the `tracks` table to exist.
+
+## Discord setup
+
+1. Create an application in the Discord Developer Portal and add a bot user.
+2. Copy the bot token into `.env` as `DISCORD_TOKEN=...`. Do not commit `.env` or share the token.
+3. Install the bot using the `bot` and `applications.commands` OAuth scopes.
+4. Grant it permission to view channels, send messages, use slash commands, connect to voice channels, and speak. Recording also needs access to the relevant voice channel.
+5. Enable the **Message Content Intent** for the bot. Chester requests this intent at startup and uses the `>` prefix for the registration command.
+
+After Chester is running, use the prefix command below once in the target server to register application commands:
+
+```text
+>register
+```
+
+If commands are not visible, check the bot's OAuth scopes, application-command permissions, and startup logs.
+
+## Configuration
+
+Chester loads `.chronicle/config.toml` relative to the repository root. Start with the supplied example:
+
+```bash
+cp chronicle.config.example.toml .chronicle/config.toml
+```
+
+The example's Chronicle-only configuration is enough for a basic deployment. Paths are relative to the repository root:
+
+```toml
+[chronicle]
+index_db = "sqlite://database/chronicle/chronicle.sqlite3"
+corpus_dir = "corpus"
+
+llm_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
+llm_revision = "main"
+llm_model_file = "qwen2.5-7b-instruct-q3_k_m.gguf"
+llm_tokenizer_repo = "Qwen/Qwen2.5-7B-Instruct"
+llm_tokenizer_file = "tokenizer.json"
+
+llm_max_tokens = 512
+llm_temperature = 0.2
+llm_seed = 42
+llm_system_prompt = """\
+You are Chronicle, a concise and thoughtful assistant.
+Answer only from the supplied Chronicle context.
+If the context is insufficient, say so plainly.
+Do not invent facts.
+"""
+retrieval_limit = 5
+max_chunk_length = 2000
+```
+
+The loader validates `llm_max_tokens` (1–32768), `llm_temperature` (0.0–2.0), `retrieval_limit` (1–100), and requires non-empty repository, file, database, corpus, and prompt values. Startup downloads the BGE embedding model if it is not already cached. The first `/chronicle start` downloads the configured LLM model and tokenizer into the Hugging Face cache.
+
+### Alias and guild configuration
+
+Alias groups map Discord user IDs to names used in transcripts. A guild can enable one or more groups:
+
+```toml
+[alias_groups.main]
+name = "Main names"
+
+[alias_groups.main.aliases]
+"123456789012345678" = "Alice"
+"234567890123456789" = "Bob"
+
+[guilds."345678901234567890"]
+alias_groups = ["main"]
+```
+
+Use Discord's developer mode to copy user and server IDs. Every participant in a recording must have an alias in the selected group or transcript generation will stop with a validation error. Group IDs referenced by a guild must exist.
+
+## Run Chester
+
+Run from the repository root:
+
+```bash
+cargo run                 # debug build
+cargo run --release       # optimized build
+```
+
+With logging overrides:
+
+```bash
+RUST_LOG=chester_rs=debug cargo run --release
+RUST_LOG=chester_rs=info,chester_rs::chronicle=debug cargo run --release
+RUST_LOG=warn cargo run --release
+```
+
+At startup the bot opens the two SQLite databases, indexes `corpus/`, verifies `yt-dlp` and `ffmpeg`, synchronizes missing music, and then connects to Discord. A failure in any of those stages prevents login.
+
+## Commands
+
+The main application commands are:
+
+| Command | Purpose |
+| --- | --- |
+| `/join`, `/leave` | Join or leave the caller's voice channel |
+| `/play`, `/pause`, `/loop_track`, `/now_playing` | Control playback |
+| `/download` | Add a YouTube track to the library |
+| `/library all`, `artist`, `origin`, `tags`, `incomplete` | Browse the library |
+| `/set_metadata title`, `artist`, `origin` | Edit track metadata |
+| `/fix` | Fill missing metadata |
+| `/add_tag`, `/reset_tags` | Manage track tags |
+| `/recording start`, `/recording stop` | Record a voice session |
+| `/transcript generate`, `/transcript show` | Create or display a transcript |
+| `/chronicle start`, `/chronicle stop`, `/chronicle ask` | Load, unload, or query the local assistant |
+| `/help` | Show command help |
+
+Chronicle recording and transcription produce files below `.chronicle/recordings/<guild-id>/`. Obtain consent from voice participants before recording. Participants in the recording will be notified that they are being recorded.
+
+## Library downloads and migration
+
+The bot automatically synchronizes tracks in the Jester database at startup. To manually download every track with the helper script:
+
+```bash
+./download.sh
+./download.sh --parallel
+```
+
+The script reads IDs from `database/jester/jester.sqlite3`, writes MP3 files to `audio/`, and skips existing files. Parallel mode uses eight jobs; edit `PARALLEL_JOBS` in the script if the host or network needs a lower limit.
+
+## Troubleshooting
+
+- **`yt-dlp missing or not executable`:** verify `./yt-dlp` exists, is executable, and is a Linux binary (`chmod 755 yt-dlp`).
+- **`ffmpeg missing or not executable`:** install it and confirm `command -v ffmpeg` returns a path.
+- **CUDA or Candle build errors:** verify the NVIDIA driver, CUDA toolkit, `nvidia-smi`, `nvcc`, and the Candle revision all match the project's expected toolchain.
+- **`DISCORD_TOKEN` missing:** create `.env` in the repository root or export the variable in the service environment.
+- **`Failed to read config file`:** ensure `.chronicle/config.toml` exists and is valid TOML.
+- **No slash commands:** run `>register` and register commands in guild.
+- **Startup fails around SQLite:** the Rust application uses bundled SQLite, but `database/jester/jester.sqlite3` must exist and contain the expected schema.
+
+## License
+
+See [LICENSE](LICENSE).
