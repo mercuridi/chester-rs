@@ -547,6 +547,27 @@ chunk_overlap_tokens = 48
     }
 
     #[test]
+    fn load_errors_retain_toml_diagnostics_in_the_full_error_chain() -> Result<()> {
+        let path = std::env::temp_dir().join(format!(
+            "chester-rs-invalid-config-{}.toml",
+            std::process::id()
+        ));
+        fs::write(&path, "[chronicle\n")?;
+
+        let error = Config::load(&path)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("Invalid TOML should be rejected"))?;
+        let rendered = format!("{error:#}");
+
+        fs::remove_file(&path)?;
+
+        assert!(rendered.contains("Failed to parse config file"));
+        assert!(rendered.contains("TOML parse error"));
+        assert!(rendered.contains("line"));
+        Ok(())
+    }
+
+    #[test]
     fn requires_an_explicit_overlap_setting() -> Result<()> {
         let config = CHRONICLE_CONFIG.replace("chunk_overlap_tokens = 48\n", "");
         let error = toml::from_str::<RawChronicleConfig>(&config)

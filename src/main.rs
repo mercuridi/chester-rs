@@ -250,7 +250,7 @@ async fn main() {
     }
 
     if let Err(error) = run().await {
-        tracing::error!(error = %error, "Chester failed to start");
+        tracing::error!("Chester failed to start: {error:#}");
         tracing::debug!(error = ?error, "Startup error chain");
         std::process::exit(1);
     }
