@@ -1,6 +1,13 @@
 # Changelog
 
-## [2.6.0] — 2026-08-30
+## [2.6.1] — 2026-08-30
+
+### Bug Fixes
+
+- Scene is now a recording subcommand, not chronicle
+- Bad configs now clearly display errors
+
+## [v2.6.0] — 2026-08-30
 
 ### Features
 
