@@ -24,6 +24,21 @@ struct ParsedBlock {
     heading: Option<String>,
 }
 
+#[derive(Debug)]
+struct PlannedChunk {
+    range: Range<usize>,
+    kind: BlockKind,
+    section: usize,
+    heading: Option<String>,
+    token_budget: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct OverlapInfo {
+    eligible: bool,
+    tokens: usize,
+}
+
 /// Split Markdown into token-bounded chunks while retaining the original source text.
 pub fn chunk(
     document: &Document,
@@ -31,14 +46,7 @@ pub fn chunk(
     max_tokens: usize,
     overlap_tokens: usize,
 ) -> Result<Vec<Chunk>> {
-    if max_tokens < 3 {
-        return Err(anyhow!("Chunk token budget must be at least 3"));
-    }
-    if overlap_tokens > max_tokens.saturating_sub(3) {
-        return Err(anyhow!(
-            "Chunk overlap must be no greater than the chunk budget minus 3"
-        ));
-    }
+    validate_budgets(max_tokens, overlap_tokens)?;
 
     if document.content.trim().is_empty() {
         return Ok(Vec::new());
@@ -46,7 +54,7 @@ pub fn chunk(
 
     let blocks = parse_blocks(&document.content);
     let mut chunks = Vec::new();
-    let mut current = None::<(usize, usize, usize, BlockKind, Option<String>)>;
+    let mut current = None::<PlannedChunk>;
 
     for block in blocks {
         if matches!(block.kind, BlockKind::Heading(_))
@@ -57,51 +65,63 @@ pub fn chunk(
 
         let candidate_start = current
             .as_ref()
-            .map_or(block.range.start, |(start, _, _, _, _)| *start);
+            .map_or(block.range.start, |chunk| chunk.range.start);
         let candidate = &document.content[candidate_start..block.range.end];
+        let candidate_budget = current.as_ref().map_or_else(
+            || next_chunk_budget(&chunks, block.section, max_tokens, overlap_tokens),
+            |chunk| chunk.token_budget,
+        );
 
-        if encoded_len(tokenizer, candidate)? <= max_tokens {
-            current = Some((
-                candidate_start,
-                block.range.end,
-                block.section,
-                block.kind,
-                block.heading,
-            ));
+        if encoded_len(tokenizer, candidate)? <= candidate_budget {
+            current = Some(PlannedChunk {
+                range: candidate_start..block.range.end,
+                section: block.section,
+                kind: block.kind,
+                heading: block.heading,
+                token_budget: candidate_budget,
+            });
             continue;
         }
 
-        if let Some((start, end, section, kind, heading)) = current.take() {
-            chunks.push((start, end, section, kind, heading));
+        if let Some(chunk) = current.take() {
+            chunks.push(chunk);
         }
 
+        let token_budget = next_chunk_budget(&chunks, block.section, max_tokens, overlap_tokens);
         let text = &document.content[block.range.clone()];
-        if encoded_len(tokenizer, text)? <= max_tokens {
-            current = Some((
-                block.range.start,
-                block.range.end,
-                block.section,
-                block.kind,
-                block.heading,
-            ));
+        if encoded_len(tokenizer, text)? <= token_budget {
+            current = Some(PlannedChunk {
+                range: block.range,
+                section: block.section,
+                kind: block.kind,
+                heading: block.heading,
+                token_budget,
+            });
         } else {
-            let split = match block.kind {
-                BlockKind::Paragraph | BlockKind::BlockQuote | BlockKind::ListItem => {
-                    split_semantic_text(text, tokenizer, max_tokens)?
-                }
-                BlockKind::Heading(_) | BlockKind::CodeBlock | BlockKind::Table => {
-                    split_long_text(text, tokenizer, max_tokens)?
-                }
-            };
-            chunks.extend(split.into_iter().map(|range| {
-                (
-                    block.range.start + range.start,
-                    block.range.start + range.end,
-                    block.section,
-                    block.kind,
-                    block.heading.clone(),
-                )
-            }));
+            let continuation_budget = continuation_budget(block.kind, max_tokens, overlap_tokens);
+            let split = split_block(
+                text,
+                block.kind,
+                tokenizer,
+                token_budget,
+                continuation_budget,
+            )?;
+            chunks.extend(
+                split
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, range)| PlannedChunk {
+                        range: block.range.start + range.start..block.range.start + range.end,
+                        section: block.section,
+                        kind: block.kind,
+                        heading: block.heading.clone(),
+                        token_budget: if index == 0 {
+                            token_budget
+                        } else {
+                            continuation_budget
+                        },
+                    }),
+            );
         }
     }
 
@@ -109,7 +129,7 @@ pub fn chunk(
         chunks.push(chunk);
     }
 
-    apply_overlap(
+    let overlap = apply_overlap(
         &mut chunks,
         &document.content,
         tokenizer,
@@ -119,56 +139,97 @@ pub fn chunk(
 
     Ok(chunks
         .into_iter()
+        .zip(overlap)
         .enumerate()
-        .map(|(index, (start, end, _, _, heading))| Chunk {
+        .map(|(index, (chunk, overlap))| Chunk {
             document_path: document.path.clone(),
             index,
-            content: document.content[start..end].to_owned(),
-            heading,
+            content: document.content[chunk.range].to_owned(),
+            heading: chunk.heading,
+            overlap_eligible: overlap.eligible,
+            overlap_tokens: overlap.tokens,
         })
         .collect())
 }
 
+fn validate_budgets(max_tokens: usize, overlap_tokens: usize) -> Result<()> {
+    if max_tokens < 3 {
+        return Err(anyhow!("Chunk token budget must be at least 3"));
+    }
+    if overlap_tokens > max_tokens.saturating_sub(3) {
+        return Err(anyhow!(
+            "Chunk overlap must be no greater than the chunk budget minus 3"
+        ));
+    }
+
+    Ok(())
+}
+
+fn next_chunk_budget(
+    chunks: &[PlannedChunk],
+    section: usize,
+    max_tokens: usize,
+    overlap_tokens: usize,
+) -> usize {
+    if chunks.last().is_some_and(|chunk| {
+        chunk.section == section && !matches!(chunk.kind, BlockKind::Heading(_))
+    }) {
+        max_tokens - overlap_tokens
+    } else {
+        max_tokens
+    }
+}
+
+fn continuation_budget(kind: BlockKind, max_tokens: usize, overlap_tokens: usize) -> usize {
+    if matches!(kind, BlockKind::Heading(_)) {
+        max_tokens
+    } else {
+        max_tokens - overlap_tokens
+    }
+}
+
 fn apply_overlap(
-    chunks: &mut [(usize, usize, usize, BlockKind, Option<String>)],
+    chunks: &mut [PlannedChunk],
     source: &str,
     tokenizer: &Tokenizer,
     max_tokens: usize,
     overlap_tokens: usize,
-) -> Result<()> {
+) -> Result<Vec<OverlapInfo>> {
+    let mut overlap = vec![OverlapInfo::default(); chunks.len()];
     if overlap_tokens == 0 {
-        return Ok(());
+        return Ok(overlap);
     }
 
     for index in 1..chunks.len() {
         let (previous, current) = chunks.split_at_mut(index);
-        let (previous_start, previous_end, previous_section, previous_kind, _) =
-            &previous[index - 1];
-        let (current_start, current_end, current_section, _, _) = &current[0];
+        let previous = &previous[index - 1];
+        let current = &mut current[0];
 
-        if previous_section != current_section || matches!(previous_kind, BlockKind::Heading(_)) {
+        if previous.section != current.section || matches!(previous.kind, BlockKind::Heading(_)) {
             continue;
         }
+        overlap[index].eligible = true;
 
-        let previous_text = &source[*previous_start..*previous_end];
+        let previous_text = &source[previous.range.clone()];
         let mut candidates =
-            overlap_candidates(previous_text, *previous_kind, tokenizer, overlap_tokens)?;
+            overlap_candidates(previous_text, previous.kind, tokenizer, overlap_tokens)?;
         candidates.sort_by_key(|(_, token_count)| std::cmp::Reverse(*token_count));
 
-        for (local_start, _) in candidates {
-            let overlap_start = *previous_start + local_start;
-            if overlap_start >= *current_start
-                || encoded_len(tokenizer, &source[overlap_start..*current_end])? > max_tokens
+        for (local_start, token_count) in candidates {
+            let overlap_start = previous.range.start + local_start;
+            if overlap_start >= current.range.start
+                || encoded_len(tokenizer, &source[overlap_start..current.range.end])? > max_tokens
             {
                 continue;
             }
 
-            current[0].0 = overlap_start;
+            current.range.start = overlap_start;
+            overlap[index].tokens = token_count;
             break;
         }
     }
 
-    Ok(())
+    Ok(overlap)
 }
 
 fn overlap_candidates(
@@ -201,13 +262,26 @@ fn overlap_candidates(
     boundaries.dedup();
 
     for start in boundaries {
-        let token_count = encoded_len(tokenizer, &text[start..])?;
+        let token_count = content_token_len(tokenizer, &text[start..])?;
         if token_count <= overlap_tokens {
             candidates.push((start, token_count));
         }
     }
 
     Ok(candidates)
+}
+
+fn content_token_len(tokenizer: &Tokenizer, text: &str) -> Result<usize> {
+    tokenizer
+        .encode(text, true)
+        .map(|encoding| {
+            encoding
+                .get_offsets()
+                .iter()
+                .filter(|(start, end)| end > start)
+                .count()
+        })
+        .map_err(|error| anyhow!("Failed to count content tokens: {error}"))
 }
 
 fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
@@ -391,6 +465,50 @@ fn encoded_len(tokenizer: &Tokenizer, text: &str) -> Result<usize> {
         .encode(text, true)
         .map(|encoding| encoding.len())
         .map_err(|error| anyhow!("Failed to tokenize chunk: {error}"))
+}
+
+fn split_block(
+    text: &str,
+    kind: BlockKind,
+    tokenizer: &Tokenizer,
+    first_budget: usize,
+    continuation_budget: usize,
+) -> Result<Vec<Range<usize>>> {
+    let first_pass = split_block_with_budget(text, kind, tokenizer, first_budget)?;
+    if first_pass.len() <= 1 || first_budget == continuation_budget {
+        return Ok(first_pass);
+    }
+
+    let first = first_pass[0].clone();
+    let remainder_start = first.end;
+    let mut ranges = vec![first];
+    ranges.extend(
+        split_block_with_budget(
+            &text[remainder_start..],
+            kind,
+            tokenizer,
+            continuation_budget,
+        )?
+        .into_iter()
+        .map(|range| remainder_start + range.start..remainder_start + range.end),
+    );
+    Ok(ranges)
+}
+
+fn split_block_with_budget(
+    text: &str,
+    kind: BlockKind,
+    tokenizer: &Tokenizer,
+    max_tokens: usize,
+) -> Result<Vec<Range<usize>>> {
+    match kind {
+        BlockKind::Paragraph | BlockKind::BlockQuote | BlockKind::ListItem => {
+            split_semantic_text(text, tokenizer, max_tokens)
+        }
+        BlockKind::Heading(_) | BlockKind::CodeBlock | BlockKind::Table => {
+            split_long_text(text, tokenizer, max_tokens)
+        }
+    }
 }
 
 fn split_semantic_text(
@@ -703,6 +821,107 @@ mod tests {
 
         assert_eq!(chunks.len(), 1);
         assert_eq!(encoded_len(&tokenizer, &chunks[0].content)?, 512);
+        Ok(())
+    }
+
+    #[test]
+    fn reserves_and_reports_the_requested_overlap() -> Result<()> {
+        let tokenizer = test_tokenizer()?;
+        let document = document_with_words(40);
+
+        let chunks = chunk(&document, &tokenizer, 12, 3)?;
+
+        assert!(chunks.len() > 2);
+        assert!(!chunks[0].overlap_eligible);
+        assert_eq!(chunks[0].overlap_tokens, 0);
+        assert_eq!(encoded_len(&tokenizer, &chunks[0].content)?, 12);
+        for pair in chunks.windows(2) {
+            let previous_words = pair[0].content.split_whitespace().collect::<Vec<_>>();
+            let current_words = pair[1].content.split_whitespace().collect::<Vec<_>>();
+
+            assert!(pair[1].overlap_eligible);
+            assert_eq!(pair[1].overlap_tokens, 3);
+            assert_eq!(
+                previous_words[previous_words.len() - 3..],
+                current_words[..3]
+            );
+            assert!(encoded_len(&tokenizer, &pair[1].content)? <= 12);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_overlap_across_markdown_sections() -> Result<()> {
+        let tokenizer = test_tokenizer()?;
+        let words = vec!["word"; 20].join(" ");
+        let document = Document {
+            path: "sections.md".into(),
+            content: format!("# One\n\n{words}\n\n# Two\n\n{words}"),
+            content_hash: String::new(),
+        };
+
+        let chunks = chunk(&document, &tokenizer, 12, 3)?;
+        let second_section_start = chunks
+            .iter()
+            .position(|chunk| chunk.heading.as_deref() == Some("Two"))
+            .ok_or_else(|| anyhow!("Second Markdown section was not chunked"))?;
+
+        assert!(second_section_start > 0);
+        assert!(!chunks[second_section_start].overlap_eligible);
+        assert_eq!(chunks[second_section_start].overlap_tokens, 0);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| encoded_len(&tokenizer, &chunk.content).is_ok_and(|len| len <= 12))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_overlap_for_hard_token_boundary_splits() -> Result<()> {
+        let tokenizer = test_tokenizer()?;
+        let document = Document {
+            path: "code.md".into(),
+            content: format!("```text\n{}\n```", vec!["word"; 40].join(" ")),
+            content_hash: String::new(),
+        };
+
+        let chunks = chunk(&document, &tokenizer, 12, 3)?;
+
+        assert!(chunks.len() > 2);
+        assert!(
+            chunks
+                .iter()
+                .skip(1)
+                .all(|chunk| { chunk.overlap_eligible && chunk.overlap_tokens == 3 })
+        );
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| encoded_len(&tokenizer, &chunk.content).is_ok_and(|len| len <= 12))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn supports_overlap_near_the_maximum_budget() -> Result<()> {
+        let tokenizer = test_tokenizer()?;
+        let document = document_with_words(15);
+
+        let chunks = chunk(&document, &tokenizer, 12, 9)?;
+
+        assert!(chunks.len() > 2);
+        assert!(
+            chunks
+                .iter()
+                .skip(1)
+                .all(|chunk| { chunk.overlap_eligible && chunk.overlap_tokens == 9 })
+        );
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| encoded_len(&tokenizer, &chunk.content).is_ok_and(|len| len <= 12))
+        );
         Ok(())
     }
 

@@ -140,7 +140,8 @@ retrieval_distance_threshold = 0.8
 retrieval_near_duplicate_threshold = 0.85
 retrieval_max_chunks_per_document = 2
 max_chunk_tokens = 480
-# Number of embedding tokens shared by adjacent chunks. Zero disables overlap.
+# Target content tokens shared by adjacent chunks, excluding special model tokens.
+# Section boundaries may reduce the effective overlap. Zero disables overlap.
 chunk_overlap_tokens = 0
 ```
 

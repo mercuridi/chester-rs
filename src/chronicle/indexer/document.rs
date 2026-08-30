@@ -14,4 +14,8 @@ pub struct Chunk {
     pub index: usize,
     pub content: String,
     pub heading: Option<String>,
+    /// Whether this chunk follows an overlap-compatible chunk in the same Markdown section.
+    pub overlap_eligible: bool,
+    /// Actual content tokens shared with the preceding chunk.
+    pub overlap_tokens: usize,
 }

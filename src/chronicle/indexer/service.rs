@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use tokenizers::Encoding;
 
-use crate::chronicle::indexer::document::Document;
+use crate::chronicle::indexer::document::{Chunk, Document};
 use tracing::{debug, info, instrument, warn};
 
 use super::{
@@ -166,23 +166,7 @@ impl Indexer {
             .collect();
 
         let total_chunks = chunks.len();
-        let total_tokens = chunks
-            .iter()
-            .map(|(_, _, _, encoding)| encoding.len())
-            .sum::<usize>();
-        #[allow(clippy::cast_precision_loss)]
-        let average_chunk_tokens = if total_chunks == 0 {
-            0.0
-        } else {
-            total_tokens as f64 / total_chunks as f64
-        };
-        info!(
-            document_count = pending.len(),
-            chunk_count = total_chunks,
-            token_count = total_tokens,
-            average_chunk_tokens,
-            "Prepared corpus chunks for embedding"
-        );
+        log_chunk_metrics(&chunks, pending.len(), self.chunk_overlap_tokens);
 
         chunks.sort_by_key(|(_, _, _, encoding)| encoding.len());
 
@@ -295,13 +279,68 @@ impl Indexer {
     }
 }
 
+fn log_chunk_metrics(
+    chunks: &[(usize, usize, Chunk, Encoding)],
+    document_count: usize,
+    requested_overlap_tokens: usize,
+) {
+    let token_count = chunks
+        .iter()
+        .map(|(_, _, _, encoding)| encoding.len())
+        .sum::<usize>();
+    let eligible_overlap_boundaries = chunks
+        .iter()
+        .filter(|(_, _, chunk, _)| chunk.overlap_eligible)
+        .count();
+    let overlapped_boundaries = chunks
+        .iter()
+        .filter(|(_, _, chunk, _)| chunk.overlap_tokens > 0)
+        .count();
+    let overlap_shortfall_boundaries = chunks
+        .iter()
+        .filter(|(_, _, chunk, _)| {
+            chunk.overlap_eligible && chunk.overlap_tokens < requested_overlap_tokens
+        })
+        .count();
+    let total_overlap_tokens = chunks
+        .iter()
+        .map(|(_, _, chunk, _)| chunk.overlap_tokens)
+        .sum::<usize>();
+    #[allow(clippy::cast_precision_loss)]
+    let average_chunk_tokens = if chunks.is_empty() {
+        0.0
+    } else {
+        token_count as f64 / chunks.len() as f64
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let average_overlap_tokens = if eligible_overlap_boundaries == 0 {
+        0.0
+    } else {
+        total_overlap_tokens as f64 / eligible_overlap_boundaries as f64
+    };
+
+    info!(
+        document_count,
+        chunk_count = chunks.len(),
+        token_count,
+        average_chunk_tokens,
+        requested_overlap_tokens,
+        eligible_overlap_boundaries,
+        overlapped_boundaries,
+        overlap_shortfall_boundaries,
+        total_overlap_tokens,
+        average_overlap_tokens,
+        "Prepared corpus chunks for embedding"
+    );
+}
+
 fn index_fingerprint(
     document: &Document,
     max_chunk_tokens: usize,
     chunk_overlap_tokens: usize,
 ) -> String {
     format!(
-        "{}:chunker-v6-full-markdown-coverage:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
+        "{}:chunker-v7-reserved-overlap:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
         document.content_hash
     )
 }

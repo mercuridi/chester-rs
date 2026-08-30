@@ -58,7 +58,9 @@ retrieval_max_chunks_per_document = 2
 # Maximum number of BGE embedding tokens per chunk, including special tokens.
 # Must be between 3 and 512.
 max_chunk_tokens = 480
-# Number of embedding tokens shared by adjacent chunks. Zero disables overlap.
+# Target number of content tokens shared by adjacent chunks. Special model
+# tokens are excluded. Section boundaries may reduce the effective overlap.
+# Zero disables overlap.
 # A 10–20% experiment for this budget would be 48–96 tokens.
 chunk_overlap_tokens = 0
 
