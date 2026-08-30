@@ -3,6 +3,7 @@ use std::ops::Range;
 use anyhow::{Result, anyhow};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag};
 use tokenizers::Tokenizer;
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::document::{Chunk, Document};
 
@@ -584,25 +585,9 @@ fn pack_units(
 }
 
 fn sentence_ranges(text: &str) -> Vec<Range<usize>> {
-    let mut ranges = Vec::new();
-    let mut start = 0;
-
-    for (index, character) in text.char_indices() {
-        if !matches!(character, '.' | '!' | '?') {
-            continue;
-        }
-
-        let end = index + character.len_utf8();
-        if text[end..].chars().next().is_some_and(char::is_whitespace) {
-            ranges.push(start..end);
-            start = end;
-        }
-    }
-
-    if start < text.len() {
-        ranges.push(start..text.len());
-    }
-    ranges
+    text.split_sentence_bound_indices()
+        .map(|(start, sentence)| start..start + sentence.len())
+        .collect()
 }
 
 fn word_ranges(text: &str) -> Vec<Range<usize>> {
@@ -741,6 +726,35 @@ mod tests {
                 .map(|block| &source[block.range.clone()])
                 .collect::<String>(),
             source
+        );
+    }
+
+    #[test]
+    fn uses_unicode_sentence_boundaries_without_losing_source_text() {
+        let source = "A price is 3.14. Visit https://example.com/docs. これは文です。次の文です。Unfinished prose";
+
+        let ranges = sentence_ranges(source);
+
+        assert!(!ranges.is_empty());
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges.last().map(|range| range.end), Some(source.len()));
+        assert!(ranges.windows(2).all(|pair| pair[0].end == pair[1].start));
+        assert_eq!(
+            ranges
+                .iter()
+                .map(|range| &source[range.clone()])
+                .collect::<String>(),
+            source
+        );
+        assert!(
+            ranges
+                .iter()
+                .any(|range| &source[range.clone()] == "これは文です。")
+        );
+        assert!(
+            ranges
+                .iter()
+                .any(|range| &source[range.clone()] == "次の文です。")
         );
     }
 
