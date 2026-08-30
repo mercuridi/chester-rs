@@ -179,6 +179,12 @@ impl WhisperTranscriber {
     }
 }
 
+impl crate::chronicle::transcription::service::Transcriber for WhisperTranscriber {
+    fn transcribe(&mut self, audio: &Audio) -> Result<Vec<TranscriptSegment>> {
+        Self::transcribe(self, audio)
+    }
+}
+
 fn load_mel_filters() -> Result<Vec<f32>> {
     let bytes = include_bytes!("melfilters/melfilters128.bytes");
 

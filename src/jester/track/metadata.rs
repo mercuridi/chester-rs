@@ -5,7 +5,14 @@ use std::fs;
 use crate::jester::library::constants::AUDIO_DIR;
 
 pub fn process_ytdlp_json(file_id: &str) -> Result<serde_json::Value> {
-    let path = format!("{AUDIO_DIR}/{file_id}.info.json");
+    process_ytdlp_json_at(std::path::Path::new(AUDIO_DIR), file_id)
+}
+
+pub fn process_ytdlp_json_at(
+    audio_dir: &std::path::Path,
+    file_id: &str,
+) -> Result<serde_json::Value> {
+    let path = audio_dir.join(format!("{file_id}.info.json"));
     let content = fs::read_to_string(&path).with_context(|| format!("Failed to read {path:?}"))?;
 
     // Parse the full JSON

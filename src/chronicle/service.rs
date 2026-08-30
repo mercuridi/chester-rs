@@ -1,20 +1,21 @@
 use anyhow::Result;
+use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
 use super::{
     indexer::{
         db::repository::IndexerDb,
         prompt,
-        retriever::{RetrievalOutcome, Retriever},
+        retriever::{RetrievalOutcome, Retriever, RetrieverApi},
     },
-    llm::Llm,
+    llm::{LanguageModel, Llm},
     runtime::GpuRuntime,
     transcription::service::TranscriptionService,
 };
 
 pub struct Chronicle {
-    retriever: Retriever,
-    llm: Llm,
+    retriever: Arc<dyn RetrieverApi>,
+    llm: Arc<dyn LanguageModel>,
     runtime: GpuRuntime,
     transcription: TranscriptionService,
     retrieval_limit: usize,
@@ -39,7 +40,33 @@ impl Chronicle {
         max_reply_length: usize,
     ) -> Self {
         Self {
-            retriever: Retriever::new(db),
+            retriever: Arc::new(Retriever::new(db)),
+            llm: Arc::new(llm),
+            runtime: runtime.clone(),
+            transcription: TranscriptionService::new(runtime),
+            retrieval_limit,
+            retrieval_candidate_limit,
+            retrieval_distance_threshold,
+            retrieval_near_duplicate_threshold,
+            retrieval_max_chunks_per_document,
+            max_reply_length,
+            lifecycle: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    pub fn with_dependencies(
+        retriever: Arc<dyn RetrieverApi>,
+        llm: Arc<dyn LanguageModel>,
+        runtime: GpuRuntime,
+        retrieval_limit: usize,
+        retrieval_candidate_limit: usize,
+        retrieval_distance_threshold: f32,
+        retrieval_near_duplicate_threshold: f32,
+        retrieval_max_chunks_per_document: usize,
+        max_reply_length: usize,
+    ) -> Self {
+        Self {
+            retriever,
             llm,
             runtime: runtime.clone(),
             transcription: TranscriptionService::new(runtime),

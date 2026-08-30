@@ -100,7 +100,11 @@ pub async fn scene(
 }
 
 /// Top-level recording command
-#[poise::command(slash_command, subcommands("start", "stop", "scene"), subcommand_required)]
+#[poise::command(
+    slash_command,
+    subcommands("start", "stop", "scene"),
+    subcommand_required
+)]
 #[allow(clippy::unused_async)]
 pub async fn recording(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
@@ -507,7 +511,7 @@ fn build_transcript_entries(
 // The guard below defines the behavior for invalid timestamps; the remaining
 // cast is intentional because Rust has no checked `f64`-to-`u64` conversion.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn format_timestamp(seconds: f64) -> String {
+pub(crate) fn format_timestamp(seconds: f64) -> String {
     let total_tenths = if seconds.is_finite() && seconds >= 0.0 {
         (seconds * 10.0).round() as u64
     } else {
@@ -523,11 +527,11 @@ fn format_timestamp(seconds: f64) -> String {
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn scene_offset_seconds(offset_ms: u64) -> f64 {
+pub(crate) fn scene_offset_seconds(offset_ms: u64) -> f64 {
     offset_ms as f64 / 1_000.0
 }
 
-fn format_transcript(
+pub(crate) fn format_transcript(
     manifest: &RecordingManifest,
     entries: &[TranscriptEntry],
     include_scenes: bool,
@@ -558,7 +562,7 @@ fn format_transcript(
     lines
 }
 
-fn format_entry(entry: &TranscriptEntry) -> String {
+pub(crate) fn format_entry(entry: &TranscriptEntry) -> String {
     format!(
         "`[{}–{}]` `{}`: {}",
         format_timestamp(entry.start),

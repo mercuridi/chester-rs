@@ -1,5 +1,3 @@
-use songbird::tracks::TrackHandle;
-
 // Track Info unified struct
 #[derive(Clone, Debug)]
 pub struct TrackInfo {
@@ -33,9 +31,4 @@ impl From<&str> for VideoId {
     fn from(s: &str) -> Self {
         VideoId(s.to_string())
     }
-}
-
-pub struct NowPlaying {
-    pub track: TrackInfo,
-    pub handle: TrackHandle,
 }

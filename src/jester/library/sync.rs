@@ -1,11 +1,48 @@
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt as FuturesStreamExt};
 use sqlx::SqlitePool;
+use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
 
 use crate::jester::library::constants::{AUDIO_DIR, DOWNLOAD_CONCURRENCY, MAX_RETRIES, YTDLP_PATH};
+
+#[async_trait::async_trait]
+pub trait CommandExecutor: Send + Sync {
+    async fn output(&self, program: &str, args: &[String]) -> Result<std::process::Output>;
+}
+
+struct ProcessExecutor;
+#[async_trait::async_trait]
+impl CommandExecutor for ProcessExecutor {
+    async fn output(&self, program: &str, args: &[String]) -> Result<std::process::Output> {
+        Command::new(program)
+            .args(args)
+            .output()
+            .await
+            .map_err(Into::into)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SyncConfig {
+    pub audio_dir: PathBuf,
+    pub ytdlp_path: PathBuf,
+    pub ffmpeg_path: PathBuf,
+    pub retries: usize,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            audio_dir: PathBuf::from(AUDIO_DIR),
+            ytdlp_path: PathBuf::from(YTDLP_PATH),
+            ffmpeg_path: PathBuf::from("ffmpeg"),
+            retries: MAX_RETRIES,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct SyncStats {
@@ -26,11 +63,19 @@ enum DownloadResult {
 
 #[instrument(skip(pool))]
 pub async fn sync_audio_library(pool: &SqlitePool) -> Result<SyncStats> {
+    sync_audio_library_with(pool, Arc::new(ProcessExecutor), SyncConfig::default()).await
+}
+
+pub async fn sync_audio_library_with(
+    pool: &SqlitePool,
+    executor: Arc<dyn CommandExecutor>,
+    config: SyncConfig,
+) -> Result<SyncStats> {
     info!("Starting audio library synchronization");
 
-    verify_dependencies().await?;
+    verify_dependencies(executor.as_ref(), &config).await?;
 
-    tokio::fs::create_dir_all(AUDIO_DIR)
+    tokio::fs::create_dir_all(&config.audio_dir)
         .await
         .context("Failed to create audio directory")?;
 
@@ -46,9 +91,13 @@ pub async fn sync_audio_library(pool: &SqlitePool) -> Result<SyncStats> {
     };
 
     let mut tasks = stream::iter(ids)
-        .map(|id| async move {
-            let result = process_track(&id).await;
-            (id, result)
+        .map(|id| {
+            let executor = Arc::clone(&executor);
+            let config = config.clone();
+            async move {
+                let result = process_track(&id, executor, config).await;
+                (id, result)
+            }
         })
         .buffer_unordered(DOWNLOAD_CONCURRENCY);
 
@@ -85,22 +134,26 @@ pub async fn sync_audio_library(pool: &SqlitePool) -> Result<SyncStats> {
     Ok(stats)
 }
 
-#[instrument]
-async fn verify_dependencies() -> Result<()> {
+#[instrument(skip(executor, config))]
+async fn verify_dependencies(executor: &dyn CommandExecutor, config: &SyncConfig) -> Result<()> {
     info!("Verifying yt-dlp and ffmpeg availability");
 
-    let ytdlp = Command::new(YTDLP_PATH)
-        .arg("--version")
-        .output()
+    let ytdlp = executor
+        .output(
+            config.ytdlp_path.to_str().unwrap_or(YTDLP_PATH),
+            &["--version".into()],
+        )
         .await
         .context("yt-dlp missing or not executable")?;
     if !ytdlp.status.success() {
         anyhow::bail!("yt-dlp version check returned a non-zero exit status");
     }
 
-    let ffmpeg = Command::new("ffmpeg")
-        .arg("-version")
-        .output()
+    let ffmpeg = executor
+        .output(
+            config.ffmpeg_path.to_str().unwrap_or("ffmpeg"),
+            &["-version".into()],
+        )
         .await
         .context("ffmpeg missing or not executable")?;
     if !ffmpeg.status.success() {
@@ -119,28 +172,32 @@ async fn fetch_track_ids(pool: &SqlitePool) -> Result<Vec<String>> {
         .context("Failed to fetch track IDs")
 }
 
-fn audio_path(id: &str) -> PathBuf {
-    PathBuf::from(AUDIO_DIR).join(format!("{id}.mp3"))
-}
-
-async fn process_track(id: &str) -> DownloadResult {
-    let path = audio_path(id);
+async fn process_track(
+    id: &str,
+    executor: Arc<dyn CommandExecutor>,
+    config: SyncConfig,
+) -> DownloadResult {
+    let path = config.audio_dir.join(format!("{id}.mp3"));
 
     if tokio::fs::try_exists(&path).await.unwrap_or(false) {
         return DownloadResult::AlreadyPresent;
     }
 
-    match download_with_retry(id).await {
+    match download_with_retry(id, executor, config).await {
         Ok(true) => DownloadResult::Downloaded,
         Ok(false) => DownloadResult::Skipped,
         Err(_) => DownloadResult::Failed,
     }
 }
 
-#[instrument]
-async fn download_with_retry(id: &str) -> Result<bool> {
-    for attempt in 1..=MAX_RETRIES {
-        match download_track(id).await {
+#[instrument(skip(executor, config))]
+async fn download_with_retry(
+    id: &str,
+    executor: Arc<dyn CommandExecutor>,
+    config: SyncConfig,
+) -> Result<bool> {
+    for attempt in 1..=config.retries {
+        match download_track(id, executor.as_ref(), &config).await {
             Ok(true) => return Ok(true),
             Ok(false) => return Ok(false),
             Err(e) => {
@@ -151,7 +208,7 @@ async fn download_with_retry(id: &str) -> Result<bool> {
                     "Download attempt failed"
                 );
 
-                if attempt < MAX_RETRIES {
+                if attempt < config.retries {
                     let backoff = Duration::from_millis(200 * attempt as u64);
                     tokio::time::sleep(backoff).await;
                 }
@@ -162,23 +219,29 @@ async fn download_with_retry(id: &str) -> Result<bool> {
     anyhow::bail!("All yt-dlp download attempts failed")
 }
 
-#[instrument]
-async fn download_track(id: &str) -> Result<bool> {
-    let tmp_path = format!("{AUDIO_DIR}/{id}.part.mp3");
-    let final_path = audio_path(id);
+#[instrument(skip(executor, config))]
+async fn download_track(
+    id: &str,
+    executor: &dyn CommandExecutor,
+    config: &SyncConfig,
+) -> Result<bool> {
+    let tmp_path = config.audio_dir.join(format!("{id}.part.mp3"));
+    let final_path = config.audio_dir.join(format!("{id}.mp3"));
 
-    let output = Command::new(YTDLP_PATH)
-        .arg("-x")
-        .arg("--audio-format")
-        .arg("mp3")
-        .arg("--audio-quality")
-        .arg("0")
-        .arg("--no-playlist")
-        .arg("--no-progress")
-        .arg("-o")
-        .arg(&tmp_path)
-        .arg(format!("https://www.youtube.com/watch?v={id}"))
-        .output()
+    let args = vec![
+        "-x".into(),
+        "--audio-format".into(),
+        "mp3".into(),
+        "--audio-quality".into(),
+        "0".into(),
+        "--no-playlist".into(),
+        "--no-progress".into(),
+        "-o".into(),
+        tmp_path.to_string_lossy().into_owned(),
+        format!("https://www.youtube.com/watch?v={id}"),
+    ];
+    let output = executor
+        .output(config.ytdlp_path.to_str().unwrap_or(YTDLP_PATH), &args)
         .await
         .context("yt-dlp process failed")?;
 

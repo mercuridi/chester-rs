@@ -29,6 +29,19 @@ use crate::{
 };
 use tracing::{debug, info, instrument, warn};
 
+pub trait Clock: Send + Sync {
+    fn now(&self) -> DateTime<Local>;
+}
+
+#[derive(Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> DateTime<Local> {
+        Local::now()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RecordingManifest {
     #[serde(default = "default_manifest_status")]
@@ -107,13 +120,19 @@ pub struct RecordingSession {
 pub struct RecorderManager {
     recorders: Arc<Mutex<HashMap<GuildId, Recorder>>>,
     recordings_dir: PathBuf,
+    clock: Arc<dyn Clock>,
 }
 
 impl RecorderManager {
     pub fn new(recordings_dir: PathBuf) -> Self {
+        Self::with_clock(recordings_dir, Arc::new(SystemClock))
+    }
+
+    pub fn with_clock(recordings_dir: PathBuf, clock: Arc<dyn Clock>) -> Self {
         Self {
             recorders: Arc::new(Mutex::new(HashMap::new())),
             recordings_dir,
+            clock,
         }
     }
 
@@ -127,7 +146,8 @@ impl RecorderManager {
         match recorders.entry(guild_id) {
             Entry::Occupied(entry) => (entry.get().clone(), false),
             Entry::Vacant(entry) => {
-                let recorder = Recorder::new(self.recordings_dir.clone());
+                let recorder =
+                    Recorder::with_clock(self.recordings_dir.clone(), Arc::clone(&self.clock));
                 entry.insert(recorder.clone());
                 (recorder, true)
             }
@@ -145,6 +165,7 @@ pub struct Recorder {
     pub ssrc_to_user: Arc<Mutex<HashMap<u32, UserId>>>,
     pub recording_session: Arc<Mutex<Option<RecordingSession>>>,
     recordings_dir: PathBuf,
+    clock: Arc<dyn Clock>,
 }
 
 impl Recorder {
@@ -154,6 +175,17 @@ impl Recorder {
             ssrc_to_user: Arc::new(Mutex::new(HashMap::new())),
             recording_session: Arc::new(Mutex::new(None)),
             recordings_dir,
+            clock: Arc::new(SystemClock),
+        }
+    }
+
+    pub fn with_clock(recordings_dir: PathBuf, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            id: rand::random(),
+            ssrc_to_user: Arc::new(Mutex::new(HashMap::new())),
+            recording_session: Arc::new(Mutex::new(None)),
+            recordings_dir,
+            clock,
         }
     }
 
@@ -169,7 +201,7 @@ impl Recorder {
         session_slug: String,
         initial_scene: Option<String>,
     ) -> Result<bool, Error> {
-        let started_at = Local::now();
+        let started_at = self.clock.now();
         let started_instant = Instant::now();
 
         let recording_directory =
@@ -246,7 +278,7 @@ impl Recorder {
                     .min(u128::from(u64::MAX)),
             )
             .unwrap_or(u64::MAX),
-            submitted_at: Local::now(),
+            submitted_at: self.clock.now(),
             sequence: session.manifest.scenes.len() as u64,
         };
 
@@ -303,7 +335,7 @@ impl Recorder {
 
         let mut manifest = session.manifest;
         manifest.status = ManifestStatus::Complete;
-        manifest.ended_at = Some(Local::now());
+        manifest.ended_at = Some(self.clock.now());
         manifest.participants = participants;
         manifest.save_atomically(&session.manifest_path)?;
 

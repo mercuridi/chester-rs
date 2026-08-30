@@ -13,6 +13,15 @@ use tokenizers::Tokenizer;
 use super::{config::ChronicleConfig, runtime::GpuRuntime};
 use tracing::{debug, info, instrument};
 
+#[async_trait::async_trait]
+pub trait LanguageModel: Send + Sync {
+    fn prompt_token_budget(&self) -> usize;
+    fn count_input_tokens(&self, prompt: &str) -> Result<usize>;
+    async fn generate(&self, prompt: &str) -> Result<String>;
+    async fn load(&self) -> Result<()>;
+    async fn unload(&self) -> Result<()>;
+}
+
 #[derive(Clone)]
 pub struct Llm {
     model: Arc<Mutex<Option<LoadedLlm>>>,
@@ -229,6 +238,25 @@ impl Llm {
             "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n",
             self.system_prompt
         )
+    }
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for Llm {
+    fn prompt_token_budget(&self) -> usize {
+        self.prompt_token_budget()
+    }
+    fn count_input_tokens(&self, prompt: &str) -> Result<usize> {
+        self.count_input_tokens(prompt)
+    }
+    async fn generate(&self, prompt: &str) -> Result<String> {
+        self.generate(prompt).await
+    }
+    async fn load(&self) -> Result<()> {
+        self.load().await
+    }
+    async fn unload(&self) -> Result<()> {
+        self.unload().await
     }
 }
 

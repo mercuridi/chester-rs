@@ -10,7 +10,7 @@ use tracing::{debug, info, instrument, warn};
 use super::{
     chunker,
     db::repository::{IndexedChunk, IndexerDb},
-    embedder::Embedder,
+    embedder::{Embedder, EmbeddingModel},
     scanner,
 };
 
@@ -29,7 +29,7 @@ struct PreparedDocument {
 impl PreparedDocument {
     fn prepare(
         document: &Document,
-        embedder: &Embedder,
+        embedder: &dyn EmbeddingModel,
         max_chunk_tokens: usize,
         chunk_overlap_tokens: usize,
     ) -> Result<Self> {
@@ -88,7 +88,7 @@ pub struct IndexStats {
 pub struct Indexer {
     root: PathBuf,
     db: IndexerDb,
-    embedder: Embedder,
+    embedder: Box<dyn EmbeddingModel>,
     max_chunk_tokens: usize,
     chunk_overlap_tokens: usize,
 }
@@ -98,6 +98,22 @@ impl Indexer {
         root: PathBuf,
         db: IndexerDb,
         embedder: Embedder,
+        max_chunk_tokens: usize,
+        chunk_overlap_tokens: usize,
+    ) -> Self {
+        Self {
+            root,
+            db,
+            embedder: Box::new(embedder),
+            max_chunk_tokens,
+            chunk_overlap_tokens,
+        }
+    }
+
+    pub fn with_embedding_model(
+        root: PathBuf,
+        db: IndexerDb,
+        embedder: Box<dyn EmbeddingModel>,
         max_chunk_tokens: usize,
         chunk_overlap_tokens: usize,
     ) -> Self {
@@ -185,7 +201,7 @@ impl Indexer {
         Ok(stats)
     }
 
-    pub fn into_parts(self) -> (IndexerDb, Embedder) {
+    pub fn into_parts(self) -> (IndexerDb, Box<dyn EmbeddingModel>) {
         (self.db, self.embedder)
     }
 
@@ -203,7 +219,7 @@ impl Indexer {
             .map(|(document, path, _)| {
                 PreparedDocument::prepare(
                     document,
-                    &self.embedder,
+                    self.embedder.as_ref(),
                     self.max_chunk_tokens,
                     self.chunk_overlap_tokens,
                 )

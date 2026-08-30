@@ -14,6 +14,14 @@ const MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 pub const EMBEDDING_DIMENSIONS: usize = 384;
 const MAX_SEQUENCE_LENGTH: usize = 512;
 
+/// The small seam used by indexing and retrieval.  Production uses [`Embedder`],
+/// while tests can provide a deterministic implementation without loading a model.
+pub trait EmbeddingModel: Send + Sync {
+    fn chunking_tokenizer(&self) -> &Tokenizer;
+    fn encode(&self, text: &str) -> Result<Encoding>;
+    fn embed_encodings(&self, encodings: &[Encoding]) -> Result<Vec<Vec<f32>>>;
+}
+
 pub struct Embedder {
     model: BertModel,
     chunking_tokenizer: Tokenizer,
@@ -215,6 +223,18 @@ impl Embedder {
         }
 
         Ok(embeddings)
+    }
+}
+
+impl EmbeddingModel for Embedder {
+    fn chunking_tokenizer(&self) -> &Tokenizer {
+        self.chunking_tokenizer()
+    }
+    fn encode(&self, text: &str) -> Result<Encoding> {
+        self.encode(text)
+    }
+    fn embed_encodings(&self, encodings: &[Encoding]) -> Result<Vec<Vec<f32>>> {
+        self.embed_encodings(encodings)
     }
 }
 

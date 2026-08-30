@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use serenity::model::id::UserId;
@@ -6,6 +7,24 @@ use serenity::model::id::UserId;
 use super::{audio::load_opus, whisper::transcriber::WhisperTranscriber};
 use crate::chronicle::runtime::GpuRuntime;
 use tracing::{debug, info, instrument};
+
+pub trait Transcriber: Send {
+    fn transcribe(
+        &mut self,
+        audio: &super::audio::Audio,
+    ) -> Result<Vec<super::whisper::transcriber::TranscriptSegment>>;
+}
+
+pub trait TranscriberFactory: Send + Sync {
+    fn create(&self) -> Result<Box<dyn Transcriber>>;
+}
+
+struct CudaTranscriberFactory;
+impl TranscriberFactory for CudaTranscriberFactory {
+    fn create(&self) -> Result<Box<dyn Transcriber>> {
+        Ok(Box::new(WhisperTranscriber::new_cuda()?))
+    }
+}
 
 pub struct TranscribedSegment {
     pub start: f64,
@@ -17,11 +36,19 @@ pub struct TranscribedSegment {
 #[derive(Clone)]
 pub struct TranscriptionService {
     runtime: GpuRuntime,
+    factory: Arc<dyn TranscriberFactory>,
 }
 
 impl TranscriptionService {
     pub fn new(runtime: GpuRuntime) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            factory: Arc::new(CudaTranscriberFactory),
+        }
+    }
+
+    pub fn with_factory(runtime: GpuRuntime, factory: Arc<dyn TranscriberFactory>) -> Self {
+        Self { runtime, factory }
     }
 
     /// Transcribe a set of per-user Opus recordings with exclusive GPU access.
@@ -33,8 +60,9 @@ impl TranscriptionService {
         let _gpu_lease = self.runtime.acquire_transcription()?;
 
         info!("Starting recording transcription");
+        let factory = Arc::clone(&self.factory);
         tokio::task::spawn_blocking(move || {
-            let mut transcriber = WhisperTranscriber::new_cuda()?;
+            let mut transcriber = factory.create()?;
             let mut output = Vec::new();
 
             for path in recordings {

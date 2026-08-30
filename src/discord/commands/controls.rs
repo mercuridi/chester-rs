@@ -8,6 +8,34 @@ use crate::{
 };
 use tracing::info;
 
+pub fn play_message(track: &crate::jester::track::types::TrackInfo) -> String {
+    format!(
+        "Now playing: `{}` by `{}`, from `{}`.",
+        track.title, track.artist, track.origin
+    )
+}
+pub fn now_playing_message(track: Option<&crate::jester::track::types::TrackInfo>) -> String {
+    track.map_or_else(
+        || "No track is currently playing.".into(),
+        |track| {
+            format!(
+                "Now Playing:\n**Title:** {}\n**Artist:** {}\n**Origin:** {}",
+                track.title, track.artist, track.origin
+            )
+        },
+    )
+}
+pub fn toggle_message(enabled: bool) -> String {
+    format!("Looping {}", if enabled { "enabled" } else { "disabled" })
+}
+pub fn pause_message(resumed: bool) -> &'static str {
+    if resumed {
+        "Resumed the currently paused track."
+    } else {
+        "Paused the currently playing track."
+    }
+}
+
 /// Joins your voice channel
 #[poise::command(slash_command)]
 pub async fn join(ctx: PoiseContext<'_>) -> Result<(), Error> {
@@ -34,11 +62,7 @@ pub async fn play(
         .play(guild_id, call, track_info.clone())
         .await?;
 
-    ctx.say(format!(
-        "Now playing: `{}` by `{}`, from `{}`.",
-        track_info.title, track_info.artist, track_info.origin,
-    ))
-    .await?;
+    ctx.say(play_message(&track_info)).await?;
 
     Ok(())
 }
@@ -51,14 +75,10 @@ pub async fn now_playing(ctx: PoiseContext<'_>) -> Result<(), Error> {
 
     match ctx.data().player.get_now_playing(guild_id).await {
         Some(track) => {
-            ctx.say(format!(
-                "Now Playing:\n**Title:** {}\n**Artist:** {}\n**Origin:** {}",
-                track.title, track.artist, track.origin,
-            ))
-            .await?;
+            ctx.say(now_playing_message(Some(&track))).await?;
         }
         None => {
-            ctx.say("No track is currently playing.").await?;
+            ctx.say(now_playing_message(None)).await?;
         }
     }
 
@@ -72,11 +92,7 @@ pub async fn loop_track(ctx: PoiseContext<'_>) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
     let _track = ctx.data().player.require_now_playing(guild_id).await?;
     let looping = ctx.data().player.toggle_loop(guild_id).await?;
-    ctx.say(format!(
-        "Looping {}",
-        if looping { "enabled" } else { "disabled" }
-    ))
-    .await?;
+    ctx.say(toggle_message(looping)).await?;
     Ok(())
 }
 
@@ -87,12 +103,7 @@ pub async fn pause(ctx: PoiseContext<'_>) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
     let _track = ctx.data().player.require_now_playing(guild_id).await?;
     let playing = ctx.data().player.pause(guild_id).await?;
-    ctx.say(if playing {
-        "Resumed the currently paused track."
-    } else {
-        "Paused the currently playing track."
-    })
-    .await?;
+    ctx.say(pause_message(playing)).await?;
     Ok(())
 }
 

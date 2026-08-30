@@ -12,6 +12,21 @@ use super::{
     embedder::Embedder,
 };
 
+#[async_trait::async_trait]
+pub trait RetrieverApi: Send + Sync {
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        candidate_limit: usize,
+        distance_threshold: f32,
+        near_duplicate_threshold: f32,
+        max_chunks_per_document: usize,
+    ) -> Result<RetrievalOutcome>;
+    async fn load_embedder(&self) -> Result<()>;
+    fn unload_embedder(&self) -> Result<()>;
+}
+
 #[derive(Debug)]
 pub enum RetrievalOutcome {
     Results(Vec<SearchResult>),
@@ -145,6 +160,35 @@ impl Retriever {
                     RetrievalOutcome::Results(results)
                 }
             })
+    }
+}
+
+#[async_trait::async_trait]
+impl RetrieverApi for Retriever {
+    async fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        candidate_limit: usize,
+        distance_threshold: f32,
+        near_duplicate_threshold: f32,
+        max_chunks_per_document: usize,
+    ) -> Result<RetrievalOutcome> {
+        self.search(
+            query,
+            limit,
+            candidate_limit,
+            distance_threshold,
+            near_duplicate_threshold,
+            max_chunks_per_document,
+        )
+        .await
+    }
+    async fn load_embedder(&self) -> Result<()> {
+        self.load_embedder().await
+    }
+    fn unload_embedder(&self) -> Result<()> {
+        self.unload_embedder()
     }
 }
 
