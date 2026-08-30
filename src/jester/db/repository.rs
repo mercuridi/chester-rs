@@ -417,3 +417,167 @@ pub async fn update_track_origin(
         })?;
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    type TestResult<T = ()> = std::result::Result<T, crate::discord::context::Error>;
+
+    async fn test_pool() -> TestResult<(tempfile::TempDir, SqlitePool)> {
+        let directory = tempdir()?;
+        let database_url = format!("sqlite://{}", directory.path().join("jester.db").display());
+        let pool = crate::database::pool::open_sqlite_pool(&database_url, "test").await?;
+        crate::jester::db::schema::initialise(&pool).await?;
+        Ok((directory, pool))
+    }
+
+    async fn add_track(
+        pool: &SqlitePool,
+        id: &str,
+        title: &str,
+        artist: &str,
+        origin: &str,
+    ) -> TestResult {
+        let artist_id = get_or_insert_metadata_id(pool, MetadataKind::Artist, artist).await?;
+        let origin_id = get_or_insert_metadata_id(pool, MetadataKind::Origin, origin).await?;
+        insert_new_track(
+            pool,
+            &VideoId::from(id),
+            &serde_json::json!({ "upload_date": "2026-01-01", "title": "YouTube title" }),
+            title,
+            artist_id,
+            origin_id,
+        )
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn metadata_ids_are_reused_and_tracks_round_trip() -> TestResult {
+        let (_directory, pool) = test_pool().await?;
+        let first_artist =
+            get_or_insert_metadata_id(&pool, MetadataKind::Artist, "The Band").await?;
+        let second_artist =
+            get_or_insert_metadata_id(&pool, MetadataKind::Artist, "The Band").await?;
+        assert_eq!(first_artist, second_artist);
+
+        add_track(&pool, "video-1", "Track title", "The Band", "Album").await?;
+        let track = lookup_track(&pool, &VideoId::from("video-1"))
+            .await?
+            .ok_or_else(|| std::io::Error::other("inserted track should be found"))?;
+        assert_eq!(track.title, "Track title");
+        assert_eq!(track.artist, "The Band");
+        assert_eq!(track.origin, "Album");
+        assert!(
+            lookup_track(&pool, &VideoId::from("missing"))
+                .await?
+                .is_none()
+        );
+        assert!(
+            require_track(&pool, &VideoId::from("missing"))
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn library_views_and_tag_updates_return_expected_rows() -> TestResult {
+        let (_directory, pool) = test_pool().await?;
+        add_track(&pool, "video-1", "Alpha", "Artist A", "Origin A").await?;
+        add_track(&pool, "video-2", "Beta", "No artist provided", "Origin B").await?;
+        let tag_id = get_or_insert_metadata_id(&pool, MetadataKind::Tag, "live").await?;
+        let track_id = VideoId::from("video-1");
+        insert_track_tag(&pool, &track_id, tag_id).await?;
+        insert_track_tag(&pool, &track_id, tag_id).await?;
+
+        assert_eq!(
+            fetch_library_all(&pool).await?,
+            vec![
+                vec![
+                    "Alpha".into(),
+                    "Artist A".into(),
+                    "Origin A".into(),
+                    "live".into()
+                ],
+                vec![
+                    "Beta".into(),
+                    "No artist provided".into(),
+                    "Origin B".into(),
+                    String::new()
+                ],
+            ]
+        );
+        assert_eq!(
+            fetch_library_by_artist(&pool).await?[0],
+            ["Artist A", "Alpha"]
+        );
+        assert_eq!(
+            fetch_library_by_origin(&pool).await?[0],
+            ["Origin A", "Alpha"]
+        );
+        assert_eq!(
+            fetch_library_by_tag(&pool).await?,
+            vec![
+                vec![String::from("live"), String::from("Alpha")],
+                vec![String::from("No tags"), String::from("Beta")]
+            ]
+        );
+        assert_eq!(
+            fetch_library_by_incomplete(&pool).await?,
+            vec![vec![
+                String::from("Beta"),
+                String::from("No artist provided"),
+                String::from("Origin B")
+            ]]
+        );
+
+        delete_track_tags(&pool, &track_id).await?;
+        assert_eq!(fetch_library_by_tag(&pool).await?[0], ["No tags", "Alpha"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn searches_are_case_insensitive_limited_and_include_tags() -> TestResult {
+        let (_directory, pool) = test_pool().await?;
+        add_track(&pool, "video-1", "Northern Lights", "Aurora", "Winter").await?;
+        add_track(&pool, "video-2", "Summer Sun", "Sol", "No origin provided").await?;
+        let tag_id = get_or_insert_metadata_id(&pool, MetadataKind::Tag, "Ambient").await?;
+        insert_track_tag(&pool, &VideoId::from("video-1"), tag_id).await?;
+
+        assert_eq!(
+            search_metadata(&pool, MetadataKind::Artist, "aur", 1).await?,
+            ["Aurora"]
+        );
+        let tagged = search_tracks(&pool, "AMBI", 10).await?;
+        assert_eq!(tagged.len(), 1);
+        assert_eq!(tagged[0].0, "video-1");
+        assert_eq!(tagged[0].4.as_deref(), Some("Ambient"));
+        let incomplete = search_incomplete_tracks(&pool, "summer", 1).await?;
+        assert_eq!(incomplete.len(), 1);
+        assert_eq!(incomplete[0].0, "video-2");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn updates_change_only_the_requested_track_metadata() -> TestResult {
+        let (_directory, pool) = test_pool().await?;
+        add_track(&pool, "video-1", "Before", "Artist A", "Origin A").await?;
+        let artist_id = get_or_insert_metadata_id(&pool, MetadataKind::Artist, "Artist B").await?;
+        let origin_id = get_or_insert_metadata_id(&pool, MetadataKind::Origin, "Origin B").await?;
+        let track_id = VideoId::from("video-1");
+        update_track_title(&pool, &track_id, "After").await?;
+        update_track_artist(&pool, &track_id, artist_id).await?;
+        update_track_origin(&pool, &track_id, origin_id).await?;
+
+        let track = require_track(&pool, &track_id).await?;
+        assert_eq!(
+            (track.title, track.artist, track.origin),
+            ("After".into(), "Artist B".into(), "Origin B".into())
+        );
+        Ok(())
+    }
+}

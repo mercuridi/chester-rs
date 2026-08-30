@@ -157,3 +157,197 @@ pub async fn download_track_with(
         origin,
     })
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use std::{os::unix::process::ExitStatusExt, sync::Mutex};
+    use tempfile::tempdir;
+
+    type TestResult<T = ()> = std::result::Result<T, crate::discord::context::Error>;
+
+    struct FakeExecutor {
+        success: bool,
+        stderr: Vec<u8>,
+        calls: Mutex<Vec<(String, Vec<String>)>>,
+    }
+
+    #[async_trait]
+    impl DownloadExecutor for FakeExecutor {
+        async fn output(&self, program: &str, args: &[String]) -> anyhow::Result<Output> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((program.into(), args.to_vec()));
+            Ok(Output {
+                status: std::process::ExitStatus::from_raw(if self.success { 0 } else { 1 << 8 }),
+                stdout: Vec::new(),
+                stderr: self.stderr.clone(),
+            })
+        }
+    }
+
+    async fn test_pool() -> TestResult<(tempfile::TempDir, SqlitePool)> {
+        let directory = tempdir()?;
+        let url = format!("sqlite://{}", directory.path().join("jester.db").display());
+        let pool = crate::database::pool::open_sqlite_pool(&url, "test").await?;
+        crate::jester::db::schema::initialise(&pool).await?;
+        Ok((directory, pool))
+    }
+
+    fn config(audio_dir: &std::path::Path) -> DownloadConfig {
+        DownloadConfig {
+            audio_dir: audio_dir.into(),
+            ytdlp_path: "test-yt-dlp".into(),
+            cookies_path: "test-cookies.txt".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_links_without_executing_ytdlp() -> TestResult {
+        let (_directory, pool) = test_pool().await?;
+        let executor = Arc::new(FakeExecutor {
+            success: true,
+            stderr: Vec::new(),
+            calls: Mutex::new(Vec::new()),
+        });
+
+        let error = download_track_with(
+            &pool,
+            "https://example.com/not-a-video".into(),
+            None,
+            None,
+            None,
+            executor.clone(),
+            config(std::path::Path::new("/tmp")),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Invalid YouTube link"));
+        assert!(executor.calls.lock().unwrap().is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn existing_track_skips_ytdlp_and_returns_persisted_metadata() -> TestResult {
+        let (directory, pool) = test_pool().await?;
+        let artist_id = get_or_insert_metadata_id(&pool, MetadataKind::Artist, "Artist").await?;
+        let origin_id = get_or_insert_metadata_id(&pool, MetadataKind::Origin, "Origin").await?;
+        let id = VideoId::from("dQw4w9WgXcQ");
+        insert_new_track(
+            &pool,
+            &id,
+            &serde_json::json!({"upload_date": "20260101", "title": "Source"}),
+            "Saved title",
+            artist_id,
+            origin_id,
+        )
+        .await?;
+        let executor = Arc::new(FakeExecutor {
+            success: true,
+            stderr: Vec::new(),
+            calls: Mutex::new(Vec::new()),
+        });
+
+        let track = download_track_with(
+            &pool,
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ".into(),
+            None,
+            None,
+            None,
+            executor.clone(),
+            config(directory.path()),
+        )
+        .await?;
+
+        assert_eq!(track.title, "Saved title");
+        assert!(executor.calls.lock().unwrap().is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ytdlp_failure_returns_stderr_and_preserves_database() -> TestResult {
+        let (directory, pool) = test_pool().await?;
+        let executor = Arc::new(FakeExecutor {
+            success: false,
+            stderr: b"network unavailable".to_vec(),
+            calls: Mutex::new(Vec::new()),
+        });
+
+        let error = download_track_with(
+            &pool,
+            "https://youtu.be/dQw4w9WgXcQ".into(),
+            None,
+            None,
+            None,
+            executor.clone(),
+            config(directory.path()),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("network unavailable"));
+        assert_eq!(executor.calls.lock().unwrap().len(), 1);
+        assert!(
+            lookup_track(&pool, &VideoId::from("dQw4w9WgXcQ"))
+                .await?
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn successful_download_persists_metadata_and_uses_expected_arguments() -> TestResult {
+        let (directory, pool) = test_pool().await?;
+        std::fs::write(
+            directory.path().join("dQw4w9WgXcQ.info.json"),
+            r#"{"id":"dQw4w9WgXcQ","upload_date":"20260101","title":"Source title","channel":"Channel"}"#,
+        )?;
+        let executor = Arc::new(FakeExecutor {
+            success: true,
+            stderr: Vec::new(),
+            calls: Mutex::new(Vec::new()),
+        });
+
+        let track = download_track_with(
+            &pool,
+            "https://youtu.be/dQw4w9WgXcQ".into(),
+            Some("Artist".into()),
+            Some("Origin".into()),
+            None,
+            executor.clone(),
+            config(directory.path()),
+        )
+        .await?;
+
+        assert_eq!(track.title, "Source title");
+        assert_eq!(track.artist, "Artist");
+        assert_eq!(track.origin, "Origin");
+        assert!(!directory.path().join("dQw4w9WgXcQ.info.json").exists());
+        {
+            let calls = executor.calls.lock().unwrap();
+            assert_eq!(calls[0].0, "test-yt-dlp");
+            assert!(calls[0].1.windows(2).any(|pair| pair == ["-t", "mp3"]));
+            assert!(
+                calls[0]
+                    .1
+                    .windows(2)
+                    .any(|pair| pair == ["--write-info-json", "--no-progress"])
+            );
+            assert_eq!(
+                calls[0].1.last().map(String::as_str),
+                Some("https://youtu.be/dQw4w9WgXcQ")
+            );
+        }
+        assert_eq!(
+            lookup_track(&pool, &VideoId::from("dQw4w9WgXcQ"))
+                .await?
+                .ok_or_else(|| std::io::Error::other("track should be persisted"))?
+                .title,
+            "Source title"
+        );
+        Ok(())
+    }
+}
