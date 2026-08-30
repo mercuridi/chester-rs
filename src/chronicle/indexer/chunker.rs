@@ -494,6 +494,46 @@ fn split_long_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokenizers::{
+        Tokenizer, models::wordlevel::WordLevel, pre_tokenizers::whitespace::Whitespace,
+        processors::template::TemplateProcessing,
+    };
+
+    fn test_tokenizer() -> Result<Tokenizer> {
+        let model = WordLevel::builder()
+            .vocab(
+                [
+                    ("[UNK]".to_owned(), 0),
+                    ("[CLS]".to_owned(), 1),
+                    ("[SEP]".to_owned(), 2),
+                    ("word".to_owned(), 3),
+                ]
+                .into_iter()
+                .collect(),
+            )
+            .unk_token("[UNK]".to_owned())
+            .build()
+            .map_err(|error| anyhow!("Failed to build test tokenizer model: {error}"))?;
+        let mut tokenizer = Tokenizer::new(model);
+        tokenizer.with_pre_tokenizer(Some(Whitespace {}));
+        tokenizer.with_post_processor(Some(
+            TemplateProcessing::builder()
+                .try_single("[CLS] $A [SEP]")
+                .map_err(|error| anyhow!("Failed to build test tokenizer template: {error}"))?
+                .special_tokens(vec![("[CLS]", 1), ("[SEP]", 2)])
+                .build()
+                .map_err(|error| anyhow!("Failed to build test tokenizer processor: {error}"))?,
+        ));
+        Ok(tokenizer)
+    }
+
+    fn document_with_words(word_count: usize) -> Document {
+        Document {
+            path: "tokens.md".into(),
+            content: vec!["word"; word_count].join(" "),
+            content_hash: String::new(),
+        }
+    }
 
     #[test]
     fn parses_markdown_blocks_and_heading_hierarchy() {
@@ -518,5 +558,68 @@ mod tests {
         assert_eq!(&source[blocks[7].range.clone()], "---\n");
         assert!(source[blocks[8].range.clone()].starts_with("```rust\n"));
         assert_eq!(blocks[8].heading.as_deref(), Some("Top > Nested"));
+    }
+
+    #[test]
+    fn respects_the_exact_512_token_boundary() -> Result<()> {
+        let tokenizer = test_tokenizer()?;
+        let below_limit = document_with_words(509);
+        let document = document_with_words(510);
+
+        assert_eq!(encoded_len(&tokenizer, &below_limit.content)?, 511);
+        assert_eq!(chunk(&below_limit, &tokenizer, 512, 0)?.len(), 1);
+        assert_eq!(encoded_len(&tokenizer, &document.content)?, 512);
+        let chunks = chunk(&document, &tokenizer, 512, 0)?;
+
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(encoded_len(&tokenizer, &chunks[0].content)?, 512);
+        Ok(())
+    }
+
+    #[test]
+    fn splits_content_that_exceeds_512_tokens() -> Result<()> {
+        let tokenizer = test_tokenizer()?;
+        let document = document_with_words(511);
+
+        assert_eq!(encoded_len(&tokenizer, &document.content)?, 513);
+        let chunks = chunk(&document, &tokenizer, 512, 0)?;
+
+        assert_eq!(chunks.len(), 2);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| encoded_len(&tokenizer, &chunk.content).is_ok_and(|len| len <= 512))
+        );
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|chunk| chunk.content.as_str())
+                .collect::<String>(),
+            document.content
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn splits_a_multi_thousand_token_document_without_losing_text() -> Result<()> {
+        let tokenizer = test_tokenizer()?;
+        let document = document_with_words(2_000);
+
+        let chunks = chunk(&document, &tokenizer, 512, 0)?;
+
+        assert!(chunks.len() >= 4);
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| encoded_len(&tokenizer, &chunk.content).is_ok_and(|len| len <= 512))
+        );
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|chunk| chunk.content.as_str())
+                .collect::<String>(),
+            document.content
+        );
+        Ok(())
     }
 }

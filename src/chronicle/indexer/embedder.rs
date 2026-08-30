@@ -16,6 +16,7 @@ const MAX_SEQUENCE_LENGTH: usize = 512;
 
 pub struct Embedder {
     model: BertModel,
+    chunking_tokenizer: Tokenizer,
     tokenizer: Tokenizer,
     padding: PaddingParams,
     device: Device,
@@ -60,6 +61,7 @@ impl Embedder {
 
         let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|error| anyhow!("Failed to load BGE tokenizer: {error}"))?;
+        let chunking_tokenizer = tokenizer.clone();
 
         tokenizer
             .with_truncation(Some(TruncationParams {
@@ -88,6 +90,7 @@ impl Embedder {
 
         Ok(Self {
             model,
+            chunking_tokenizer,
             tokenizer,
             padding,
             device,
@@ -103,19 +106,32 @@ impl Embedder {
     }
 
     pub fn encode(&self, text: &str) -> Result<Encoding> {
+        let exact_length = self
+            .chunking_tokenizer
+            .encode(text, true)
+            .map_err(|error| anyhow!("Failed to count embedding input tokens: {error}"))?
+            .len();
+        if exact_length > MAX_SEQUENCE_LENGTH {
+            return Err(anyhow!(
+                "Embedding input contains {exact_length} tokens, exceeding the {MAX_SEQUENCE_LENGTH}-token model limit"
+            ));
+        }
+
         self.tokenizer
             .encode(text, true)
             .map_err(|error| anyhow!("Failed to tokenize text: {error}"))
     }
 
-    pub fn tokenizer(&self) -> &Tokenizer {
-        &self.tokenizer
+    pub fn chunking_tokenizer(&self) -> &Tokenizer {
+        &self.chunking_tokenizer
     }
 
     pub fn embed_encodings(&self, encodings: &[Encoding]) -> Result<Vec<Vec<f32>>> {
         if encodings.is_empty() {
             return Ok(Vec::new());
         }
+
+        validate_sequence_lengths(encodings)?;
 
         let target_length = encodings
             .iter()
@@ -199,5 +215,45 @@ impl Embedder {
         }
 
         Ok(embeddings)
+    }
+}
+
+fn validate_sequence_lengths(encodings: &[Encoding]) -> Result<()> {
+    for (index, encoding) in encodings.iter().enumerate() {
+        if encoding.len() > MAX_SEQUENCE_LENGTH {
+            return Err(anyhow!(
+                "Embedding input {index} contains {} tokens, exceeding the {MAX_SEQUENCE_LENGTH}-token model limit",
+                encoding.len()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokenizers::Token;
+
+    fn encoding_with_length(length: usize) -> Encoding {
+        Encoding::from_tokens(
+            (0..length)
+                .map(|index| Token::new(1, "word".to_owned(), (index, index + 1)))
+                .collect(),
+            0,
+        )
+    }
+
+    #[test]
+    fn rejects_embedding_inputs_over_the_model_limit() -> Result<()> {
+        assert!(validate_sequence_lengths(&[encoding_with_length(512)]).is_ok());
+
+        let error = validate_sequence_lengths(&[encoding_with_length(513)])
+            .err()
+            .ok_or_else(|| anyhow!("513-token input should exceed the model limit"))?;
+
+        assert!(error.to_string().contains("513 tokens"));
+        Ok(())
     }
 }

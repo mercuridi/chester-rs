@@ -144,7 +144,7 @@ impl Indexer {
             .map(|(document_index, (document, _, _))| -> Result<Vec<_>> {
                 chunker::chunk(
                     document,
-                    self.embedder.tokenizer(),
+                    self.embedder.chunking_tokenizer(),
                     self.max_chunk_tokens,
                     self.chunk_overlap_tokens,
                 )?
@@ -193,7 +193,7 @@ impl Indexer {
                     None;
                     chunker::chunk(
                         document,
-                        self.embedder.tokenizer(),
+                        self.embedder.chunking_tokenizer(),
                         self.max_chunk_tokens,
                         self.chunk_overlap_tokens,
                     )?
@@ -264,7 +264,7 @@ impl Indexer {
     ) -> Result<()> {
         let chunks = chunker::chunk(
             document,
-            self.embedder.tokenizer(),
+            self.embedder.chunking_tokenizer(),
             self.max_chunk_tokens,
             self.chunk_overlap_tokens,
         )?;
@@ -301,7 +301,7 @@ fn index_fingerprint(
     chunk_overlap_tokens: usize,
 ) -> String {
     format!(
-        "{}:chunker-v4-token-budget:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
+        "{}:chunker-v5-exact-token-budget:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
         document.content_hash
     )
 }
