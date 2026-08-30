@@ -30,7 +30,7 @@ use crate::{
 /// Top-level Chronicle command
 #[poise::command(
     slash_command,
-    subcommands("chronicle_start", "ask", "chronicle_stop", "scene"),
+    subcommands("chronicle_start", "ask", "chronicle_stop"),
     subcommand_required
 )]
 #[allow(clippy::unused_async)]
@@ -100,7 +100,7 @@ pub async fn scene(
 }
 
 /// Top-level recording command
-#[poise::command(slash_command, subcommands("start", "stop"), subcommand_required)]
+#[poise::command(slash_command, subcommands("start", "stop", "scene"), subcommand_required)]
 #[allow(clippy::unused_async)]
 pub async fn recording(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
