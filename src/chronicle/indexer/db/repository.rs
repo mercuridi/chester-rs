@@ -272,7 +272,7 @@ impl IndexerDb {
     }
 }
 
-fn register_sqlite_vec() {
+pub(super) fn register_sqlite_vec() {
     unsafe {
         libsqlite3_sys::sqlite3_auto_extension(Some(std::mem::transmute::<
             *const (),
@@ -284,5 +284,151 @@ fn register_sqlite_vec() {
         >(
             sqlite_vec::sqlite3_vec_init as *const ()
         )));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn embedding(value: f32) -> Vec<f32> {
+        vec![value; crate::chronicle::indexer::embedder::EMBEDDING_DIMENSIONS]
+    }
+
+    fn chunks() -> Vec<IndexedChunk> {
+        vec![
+            IndexedChunk {
+                chunk_index: 0,
+                heading: Some("Introduction".into()),
+                text: "First chunk".into(),
+                overlaps_previous: false,
+            },
+            IndexedChunk {
+                chunk_index: 1,
+                heading: Some("Introduction".into()),
+                text: "Second chunk".into(),
+                overlaps_previous: true,
+            },
+        ]
+    }
+
+    async fn test_database() -> anyhow::Result<(tempfile::TempDir, IndexerDb)> {
+        let directory = tempdir()?;
+        let url = format!(
+            "sqlite://{}",
+            directory.path().join("chronicle.db").display()
+        );
+        Ok((directory, IndexerDb::open(&url).await?))
+    }
+
+    #[tokio::test]
+    async fn replace_document_rejects_mismatched_inputs_without_writing() -> anyhow::Result<()> {
+        let (_directory, database) = test_database().await?;
+
+        let Err(error) = database
+            .replace_document("guide.md", "hash", &chunks(), &[embedding(0.0)])
+            .await
+        else {
+            anyhow::bail!("mismatched chunks and embeddings should fail");
+        };
+
+        assert!(error.to_string().contains("Chunk/embedding count mismatch"));
+        assert!(database.all_documents().await?.is_empty());
+        assert!(!database.has_chunks().await?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn replacement_keeps_document_identity_and_removes_stale_chunks() -> anyhow::Result<()> {
+        let (_directory, database) = test_database().await?;
+        let document_id = database
+            .replace_document(
+                "guide.md",
+                "first-hash",
+                &chunks(),
+                &[embedding(0.0), embedding(1.0)],
+            )
+            .await?;
+
+        let replacement = vec![IndexedChunk {
+            chunk_index: 0,
+            heading: None,
+            text: "Replacement chunk".into(),
+            overlaps_previous: false,
+        }];
+        let replacement_id = database
+            .replace_document("guide.md", "second-hash", &replacement, &[embedding(2.0)])
+            .await?;
+
+        assert_eq!(replacement_id, document_id);
+        assert_eq!(
+            database
+                .all_documents()
+                .await?
+                .into_iter()
+                .map(|document| (document.path, document.content_hash))
+                .collect::<Vec<_>>(),
+            vec![("guide.md".into(), "second-hash".into())]
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chunks")
+                .fetch_one(&database.pool)
+                .await?,
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, String>("SELECT text FROM chunks")
+                .fetch_one(&database.pool)
+                .await?,
+            "Replacement chunk"
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chunk_embeddings")
+                .fetch_one(&database.pool)
+                .await?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_document_removes_chunks_embeddings_and_corpus_state() -> anyhow::Result<()> {
+        let (_directory, database) = test_database().await?;
+        let document_id = database
+            .replace_document(
+                "guide.md",
+                "hash",
+                &chunks(),
+                &[embedding(0.0), embedding(1.0)],
+            )
+            .await?;
+        assert!(database.has_chunks().await?);
+
+        database.delete_document(document_id).await?;
+
+        assert!(database.all_documents().await?.is_empty());
+        assert!(!database.has_chunks().await?);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chunk_embeddings")
+                .fetch_one(&database.pool)
+                .await?,
+            0
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn search_rejects_wrong_dimension_and_short_circuits_zero_limit() -> anyhow::Result<()> {
+        let (_directory, database) = test_database().await?;
+
+        assert!(database.search_similar(&[0.0], 1).await.is_err());
+        assert!(
+            database
+                .search_similar(&embedding(0.0), 0)
+                .await?
+                .is_empty()
+        );
+        Ok(())
     }
 }
