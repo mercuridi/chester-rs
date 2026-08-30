@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_index   INTEGER NOT NULL,
     heading       TEXT,
     text          TEXT NOT NULL,
+    overlaps_previous INTEGER NOT NULL DEFAULT 0,
 
     FOREIGN KEY (document_id)
         REFERENCES documents(id)

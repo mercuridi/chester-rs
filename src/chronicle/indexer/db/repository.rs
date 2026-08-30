@@ -16,6 +16,8 @@ pub struct IndexedChunk {
     pub chunk_index: i64,
     pub heading: Option<String>,
     pub text: String,
+    /// Whether this chunk contains content repeated from its immediate predecessor.
+    pub overlaps_previous: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +26,7 @@ pub struct SearchResult {
     pub chunk_index: i64,
     pub heading: Option<String>,
     pub text: String,
+    pub overlaps_previous: bool,
     pub distance: f32,
 }
 
@@ -170,9 +173,10 @@ impl IndexerDb {
                     document_id,
                     chunk_index,
                     heading,
-                    text
+                    text,
+                    overlaps_previous
                 )
-                VALUES (?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 RETURNING id
                 ",
             )
@@ -180,6 +184,7 @@ impl IndexerDb {
             .bind(chunk.chunk_index)
             .bind(&chunk.heading)
             .bind(&chunk.text)
+            .bind(chunk.overlaps_previous)
             .fetch_one(&mut *tx)
             .await
             .context("Failed to insert chunk")?;
@@ -237,6 +242,7 @@ impl IndexerDb {
                 c.chunk_index,
                 c.heading,
                 c.text,
+                c.overlaps_previous,
                 ce.distance
             FROM chunk_embeddings ce
             JOIN chunks c ON c.id = ce.rowid
@@ -259,6 +265,7 @@ impl IndexerDb {
                 chunk_index: row.get("chunk_index"),
                 heading: row.get("heading"),
                 text: row.get("text"),
+                overlaps_previous: row.get("overlaps_previous"),
                 distance: row.get("distance"),
             })
             .collect())

@@ -203,7 +203,7 @@ fn is_near_duplicate(candidate: &SearchResult, accepted: &[SearchResult], thresh
     }
 
     accepted.iter().any(|result| {
-        if is_adjacent_chunk(candidate, result) {
+        if are_overlapping_neighbors(candidate, result) {
             return false;
         }
 
@@ -217,11 +217,21 @@ fn is_near_duplicate(candidate: &SearchResult, accepted: &[SearchResult], thresh
     })
 }
 
-/// Overlap makes neighboring chunks intentionally similar. Keep them both available so
-/// retrieval can return context spanning a chunk boundary; exact duplicates are still removed
-/// before this check.
-fn is_adjacent_chunk(left: &SearchResult, right: &SearchResult) -> bool {
-    left.document_path == right.document_path && left.chunk_index.abs_diff(right.chunk_index) == 1
+/// Keep intentionally overlapping neighbors available so retrieval can return context spanning a
+/// chunk boundary; exact duplicates are still removed before this check. The overlap marker is
+/// stored with the later chunk because it owns the repeated text.
+fn are_overlapping_neighbors(left: &SearchResult, right: &SearchResult) -> bool {
+    if left.document_path != right.document_path
+        || left.chunk_index.abs_diff(right.chunk_index) != 1
+    {
+        return false;
+    }
+
+    if left.chunk_index > right.chunk_index {
+        left.overlaps_previous
+    } else {
+        right.overlaps_previous
+    }
 }
 
 fn shingles(text: &str) -> HashSet<String> {
@@ -244,12 +254,18 @@ fn shingles(text: &str) -> HashSet<String> {
 mod tests {
     use super::*;
 
-    fn result(document_path: &str, chunk_index: i64, text: &str) -> SearchResult {
+    fn result(
+        document_path: &str,
+        chunk_index: i64,
+        text: &str,
+        overlaps_previous: bool,
+    ) -> SearchResult {
         SearchResult {
             document_path: document_path.to_owned(),
             chunk_index,
             heading: None,
             text: text.to_owned(),
+            overlaps_previous,
             distance: 0.0,
         }
     }
@@ -257,8 +273,8 @@ mod tests {
     #[test]
     fn preserves_similar_adjacent_chunks_from_the_same_document() {
         let candidates = vec![
-            result("notes.md", 0, "alpha beta gamma delta"),
-            result("notes.md", 1, "beta gamma delta epsilon"),
+            result("notes.md", 0, "alpha beta gamma delta", false),
+            result("notes.md", 1, "beta gamma delta epsilon", true),
         ];
 
         let (accepted, exact_duplicates, near_duplicates, document_cap) =
@@ -271,10 +287,26 @@ mod tests {
     }
 
     #[test]
-    fn filters_similar_non_adjacent_chunks() {
+    fn preserves_overlapping_neighbors_regardless_of_search_order() {
         let candidates = vec![
-            result("notes.md", 0, "alpha beta gamma delta"),
-            result("notes.md", 2, "beta gamma delta epsilon"),
+            result("notes.md", 1, "beta gamma delta epsilon", true),
+            result("notes.md", 0, "alpha beta gamma delta", false),
+        ];
+
+        let (accepted, exact_duplicates, near_duplicates, document_cap) =
+            deduplicate_and_diversify(candidates, 2, 0.5, 2);
+
+        assert_eq!(accepted.len(), 2);
+        assert_eq!(exact_duplicates, 0);
+        assert_eq!(near_duplicates, 0);
+        assert_eq!(document_cap, 0);
+    }
+
+    #[test]
+    fn filters_similar_chunks_without_a_persisted_overlap() {
+        let candidates = vec![
+            result("notes.md", 0, "alpha beta gamma delta", false),
+            result("notes.md", 1, "beta gamma delta epsilon", false),
         ];
 
         let (accepted, exact_duplicates, near_duplicates, document_cap) =

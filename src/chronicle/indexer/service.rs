@@ -66,6 +66,7 @@ impl PreparedDocument {
                     .context("Chunk index does not fit in SQLite integer")?,
                 heading: prepared.chunk.heading,
                 text: prepared.chunk.content,
+                overlaps_previous: prepared.chunk.overlap_tokens > 0,
             });
             embeddings.push(prepared.embedding.ok_or_else(|| {
                 anyhow::anyhow!("Missing embedding for chunk {chunk_index} of {path}")
@@ -362,7 +363,7 @@ fn index_fingerprint(
     chunk_overlap_tokens: usize,
 ) -> String {
     format!(
-        "{}:chunker-v7-reserved-overlap:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
+        "{}:chunker-v8-overlap-provenance:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
         document.content_hash
     )
 }
@@ -404,8 +405,10 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].chunk_index, 0);
         assert_eq!(chunks[0].text, "first");
+        assert!(!chunks[0].overlaps_previous);
         assert_eq!(chunks[1].chunk_index, 1);
         assert_eq!(chunks[1].text, "second");
+        assert!(chunks[1].overlaps_previous);
         assert_eq!(embeddings, vec![vec![1.0, 2.0], vec![3.0, 4.0]]);
         Ok(())
     }
