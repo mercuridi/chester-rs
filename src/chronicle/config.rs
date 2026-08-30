@@ -11,6 +11,7 @@ use crate::discord::constants::MESSAGE_MAX_CHARS;
 pub type AliasGroupId = String;
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawConfig {
     #[serde(default)]
     alias_groups: HashMap<String, RawAliasGroup>,
@@ -24,6 +25,7 @@ struct RawConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawDatabaseConfig {
     jester: String,
 
@@ -31,7 +33,8 @@ struct RawDatabaseConfig {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct RawChronicleConfig {
+#[serde(deny_unknown_fields)]
+struct RawChronicleConfig {
     llm_repo: String,
 
     llm_revision: String,
@@ -73,11 +76,11 @@ pub struct RawChronicleConfig {
 
     max_chunk_tokens: usize,
 
-    #[serde(default)]
     chunk_overlap_tokens: usize,
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 struct RawAliasGroup {
     name: String,
 
@@ -86,6 +89,7 @@ struct RawAliasGroup {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RawGuildConfig {
     #[serde(default)]
     alias_groups: Vec<String>,
@@ -493,4 +497,63 @@ fn parse_guild_id(value: &str) -> Result<GuildId> {
     }
 
     Ok(GuildId::new(id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CHRONICLE_CONFIG: &str = r#"
+llm_repo = "owner/model"
+llm_revision = "main"
+llm_model_file = "model.gguf"
+llm_tokenizer_repo = "owner/tokenizer"
+llm_tokenizer_file = "tokenizer.json"
+corpus_dir = "corpus"
+llm_max_tokens = 512
+llm_temperature = 0.7
+llm_seed = 42
+llm_system_prompt = "Answer from the corpus."
+llm_max_reply_length = 1900
+retrieval_limit = 5
+max_chunk_tokens = 480
+chunk_overlap_tokens = 48
+"#;
+
+    #[test]
+    fn example_uses_the_strict_current_schema() -> Result<()> {
+        let _: RawConfig = toml::from_str(include_str!("../../chronicle.config.example.toml"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_only_the_current_chunk_configuration() -> Result<()> {
+        let raw: RawChronicleConfig = toml::from_str(CHRONICLE_CONFIG)?;
+
+        assert_eq!(raw.max_chunk_tokens, 480);
+        assert_eq!(raw.chunk_overlap_tokens, 48);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_removed_chunk_configuration_keys() -> Result<()> {
+        let config = format!("{CHRONICLE_CONFIG}\nmax_chunk_length = 2000\n");
+        let error = toml::from_str::<RawChronicleConfig>(&config)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("Removed chunk key should be rejected"))?;
+
+        assert!(error.to_string().contains("max_chunk_length"));
+        Ok(())
+    }
+
+    #[test]
+    fn requires_an_explicit_overlap_setting() -> Result<()> {
+        let config = CHRONICLE_CONFIG.replace("chunk_overlap_tokens = 48\n", "");
+        let error = toml::from_str::<RawChronicleConfig>(&config)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("Missing overlap setting should be rejected"))?;
+
+        assert!(error.to_string().contains("chunk_overlap_tokens"));
+        Ok(())
+    }
 }
