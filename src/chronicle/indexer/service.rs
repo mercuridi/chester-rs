@@ -33,7 +33,7 @@ impl PreparedDocument {
         max_chunk_tokens: usize,
         chunk_overlap_tokens: usize,
     ) -> Result<Self> {
-        let chunks = chunker::chunk(
+        let chunks = chunker::chunk::chunk(
             document,
             embedder.chunking_tokenizer(),
             max_chunk_tokens,
