@@ -120,3 +120,43 @@ pub async fn leave(ctx: PoiseContext<'_>) -> Result<(), Error> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{now_playing_message, pause_message, play_message, toggle_message};
+    use crate::jester::track::types::{TrackInfo, VideoId};
+
+    fn track() -> TrackInfo {
+        TrackInfo {
+            id: VideoId::from("id"),
+            title: "Title".into(),
+            artist: "Artist".into(),
+            origin: "Origin".into(),
+        }
+    }
+
+    #[test]
+    fn formats_play_message() {
+        assert_eq!(
+            play_message(&track()),
+            "Now playing: `Title` by `Artist`, from `Origin`."
+        );
+    }
+
+    #[test]
+    fn formats_now_playing_for_present_and_absent_tracks() {
+        assert_eq!(
+            now_playing_message(Some(&track())),
+            "Now Playing:\n**Title:** Title\n**Artist:** Artist\n**Origin:** Origin"
+        );
+        assert_eq!(now_playing_message(None), "No track is currently playing.");
+    }
+
+    #[test]
+    fn formats_loop_and_pause_state_changes() {
+        assert_eq!(toggle_message(true), "Looping enabled");
+        assert_eq!(toggle_message(false), "Looping disabled");
+        assert_eq!(pause_message(true), "Resumed the currently paused track.");
+        assert_eq!(pause_message(false), "Paused the currently playing track.");
+    }
+}

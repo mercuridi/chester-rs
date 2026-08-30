@@ -117,7 +117,12 @@ fn format_flat(rows: Vec<Vec<String>>) -> Vec<String> {
             // cols: [title, artist, origin, tags?]  or  [title, artist, origin]
             let num = format!("{:>width$}.", i + 1, width = num_width);
             let title = trunc(cols.first().map_or("—", String::as_str), TITLE_MAX_CHARS);
-            let meta_parts: Vec<&str> = cols[1..].iter().map(String::as_str).collect();
+            let meta_parts: Vec<&str> = cols
+                .get(1..)
+                .unwrap_or_default()
+                .iter()
+                .map(String::as_str)
+                .collect();
             let meta = meta_line(&meta_parts);
             let indent = " ".repeat(num_width + 2 + 2); // lines up under the title plus two more spaces for visual separation
             if meta.is_empty() {
@@ -189,5 +194,107 @@ fn paginate(lines: &[String], mode: &str) -> Vec<String> {
             .chunks(MAX_RESULTS_PER_PAGE)
             .map(|chunk| format!("```\n{}\n```", chunk.join("\n")))
             .collect()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::range_plus_one)]
+mod tests {
+    use super::{format_flat, format_grouped, meta_line, paginate, trunc};
+    use crate::discord::constants::{MAX_RESULTS_PER_PAGE, META_MAX_CHARS, TITLE_MAX_CHARS};
+
+    #[test]
+    fn truncates_unicode_and_reserves_room_for_ellipsis() {
+        assert_eq!(trunc("ééé", 2), "é…");
+        assert_eq!(trunc("éé", 2), "éé");
+        assert_eq!(trunc("value", 0), "…");
+    }
+
+    #[test]
+    fn metadata_line_omits_placeholders_and_empty_values() {
+        assert_eq!(
+            meta_line(&["Artist", "No origin provided", "", "tag"]),
+            "Artist · tag"
+        );
+        assert!(meta_line(&["No artist provided", "No tags"]).is_empty());
+    }
+
+    #[test]
+    fn metadata_line_truncates_each_component_independently() {
+        let value = "x".repeat(META_MAX_CHARS + 5);
+        let output = meta_line(&[&value, "tag"]);
+        let first = output.split(" · ").next().unwrap_or_default();
+        assert_eq!(first.chars().count(), META_MAX_CHARS);
+        assert!(first.ends_with('…'));
+    }
+
+    #[test]
+    fn flat_rows_include_metadata_and_stable_numbering() {
+        let rows = vec![
+            vec!["First".into(), "Artist".into(), "Origin".into()],
+            vec![
+                "Second".into(),
+                "No artist provided".into(),
+                "No origin provided".into(),
+            ],
+        ];
+        let lines = format_flat(rows);
+        assert_eq!(lines[0], "1. First\n     Artist · Origin\n");
+        assert_eq!(lines[1], "2. Second\n");
+    }
+
+    #[test]
+    fn flat_rows_supply_a_fallback_for_missing_title() {
+        assert_eq!(format_flat(vec![Vec::new()]), vec!["1. —\n"]);
+    }
+
+    #[test]
+    fn flat_rows_truncate_long_titles() {
+        let output = format_flat(
+            vec![vec!["x".repeat(TITLE_MAX_CHARS + 1)]]
+                .into_iter()
+                .collect(),
+        );
+        assert!(output[0].contains('…'));
+    }
+
+    #[test]
+    fn grouped_rows_emit_headers_separators_and_global_numbers() {
+        let rows = vec![
+            vec!["A".into(), "One".into()],
+            vec!["A".into(), "Two".into()],
+            vec!["B".into(), "Three".into()],
+        ];
+        assert_eq!(
+            format_grouped(rows),
+            vec!["── A", "  1. One", "  2. Two", "", "── B", "  3. Three"]
+        );
+    }
+
+    #[test]
+    fn grouped_rows_supply_fallbacks_for_missing_columns() {
+        assert_eq!(format_grouped(vec![Vec::new()]), vec!["── —", "  1. —"]);
+    }
+
+    #[test]
+    fn pagination_wraps_code_blocks_and_chunks_at_limit() {
+        let lines = (0..MAX_RESULTS_PER_PAGE + 1)
+            .map(|index| index.to_string())
+            .collect::<Vec<_>>();
+        for mode in ["flat", "grouped"] {
+            let pages = paginate(&lines, mode);
+            assert_eq!(pages.len(), 2);
+            assert!(
+                pages
+                    .iter()
+                    .all(|page| page.starts_with("```\n") && page.ends_with("\n```"))
+            );
+        }
+    }
+
+    #[test]
+    fn pagination_of_empty_input_is_empty() {
+        assert!(paginate(&[], "flat").is_empty());
+        assert!(paginate(&[], "grouped").is_empty());
     }
 }

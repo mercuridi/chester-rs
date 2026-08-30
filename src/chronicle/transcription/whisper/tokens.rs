@@ -81,3 +81,32 @@ impl WhisperTranscriber {
         Ok(output)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::token_id;
+    use tokenizers::{Tokenizer, models::wordlevel::WordLevel};
+
+    fn tokenizer() -> anyhow::Result<Tokenizer> {
+        let model = WordLevel::builder()
+            .vocab([("known".to_owned(), 7)].into_iter().collect())
+            .unk_token("[UNK]".to_owned())
+            .build()
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        Ok(Tokenizer::new(model))
+    }
+
+    #[test]
+    fn returns_known_token_id() -> anyhow::Result<()> {
+        assert_eq!(token_id(&tokenizer()?, "known")?, 7);
+        Ok(())
+    }
+
+    #[test]
+    fn reports_unknown_token() -> anyhow::Result<()> {
+        let error = token_id(&tokenizer()?, "missing").unwrap_err();
+        assert!(error.to_string().contains("No tokenizer ID for missing"));
+        Ok(())
+    }
+}

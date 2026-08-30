@@ -28,3 +28,25 @@ pub async fn resolve_track(db_pool: &SqlitePool, input: String) -> Result<TrackI
     info!(track_id = %video_id.as_str(), "Track is not in library; downloading");
     download_track(db_pool, input, None, None, None).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::normalise_track_input;
+
+    #[test]
+    fn normalises_supported_youtube_urls_to_video_ids() {
+        assert_eq!(
+            normalise_track_input("https://www.youtube.com/watch?v=video-id").as_str(),
+            "video-id"
+        );
+    }
+
+    #[test]
+    fn preserves_plain_ids_and_unsupported_urls() {
+        assert_eq!(normalise_track_input("plain-id").as_str(), "plain-id");
+        assert_eq!(
+            normalise_track_input("https://example.com/video").as_str(),
+            "https://example.com/video"
+        );
+    }
+}

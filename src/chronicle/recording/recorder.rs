@@ -169,6 +169,10 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "convenience constructor used by tests")
+    )]
     pub fn new(recordings_dir: PathBuf) -> Self {
         Self {
             id: rand::random(),
@@ -685,4 +689,236 @@ pub async fn notify_recording_user(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::{
+        Clock, ManifestStatus, Recorder, RecorderManager, RecordingManifest,
+        default_manifest_status, recording_directory, recording_path, scan_incomplete_manifests,
+        validate_scene_name, write_pcm,
+    };
+    use chrono::{DateTime, Local, TimeZone};
+    use rtrb::RingBuffer;
+    use serenity::model::id::{ChannelId, GuildId, UserId};
+    use std::{fs, sync::Arc};
+    use tempfile::tempdir;
+
+    struct FixedClock(DateTime<Local>);
+
+    impl Clock for FixedClock {
+        fn now(&self) -> DateTime<Local> {
+            self.0
+        }
+    }
+
+    fn fixed_time() -> anyhow::Result<DateTime<Local>> {
+        Local
+            .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("fixed local time is ambiguous"))
+    }
+
+    fn manifest() -> anyhow::Result<RecordingManifest> {
+        Ok(RecordingManifest {
+            status: ManifestStatus::Recording,
+            guild_id: GuildId::new(10),
+            session_title: "Session".into(),
+            started_at: fixed_time()?,
+            ended_at: None,
+            participants: vec![UserId::new(20)],
+            scenes: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn default_manifest_status_is_complete_for_legacy_manifests() {
+        assert_eq!(default_manifest_status(), ManifestStatus::Complete);
+    }
+
+    #[test]
+    fn manifest_round_trips_atomically() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("manifest.toml");
+        let expected = manifest()?;
+        expected.save_atomically(&path)?;
+        let actual = RecordingManifest::load(&path)?;
+
+        assert_eq!(actual.status, ManifestStatus::Recording);
+        assert_eq!(actual.guild_id, GuildId::new(10));
+        assert_eq!(actual.session_title, "Session");
+        assert_eq!(actual.participants, vec![UserId::new(20)]);
+        assert!(!path.with_extension("toml.tmp").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_manifest_defaults_status_and_accepts_session_name() -> anyhow::Result<()> {
+        let source = format!(
+            "guild_id = 10\nsession_name = \"Legacy\"\nstarted_at = {}\nparticipants = []\n",
+            toml::Value::String(fixed_time()?.to_rfc3339())
+        );
+        let parsed: RecordingManifest = toml::from_str(&source)?;
+        assert_eq!(parsed.status, ManifestStatus::Complete);
+        assert_eq!(parsed.session_title, "Legacy");
+        assert!(parsed.scenes.is_empty());
+        assert!(parsed.ended_at.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn recording_paths_include_guild_timestamp_session_and_user() -> anyhow::Result<()> {
+        let root = std::path::Path::new("recordings");
+        let directory = recording_directory(root, GuildId::new(10), "session", fixed_time()?);
+        assert_eq!(directory, root.join("10/20240102-030405-session"));
+        assert_eq!(
+            recording_path(
+                root,
+                GuildId::new(10),
+                UserId::new(20),
+                "session",
+                fixed_time()?
+            ),
+            directory.join("recording-20.opus")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validates_scene_names_without_modifying_valid_input() -> anyhow::Result<()> {
+        let valid = validate_scene_name(" Scene ".into())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        assert_eq!(valid, " Scene ");
+        for invalid in ["", "   ", "line\nbreak", "line\rbreak"] {
+            assert!(validate_scene_name(invalid.into()).is_err(), "{invalid:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn write_pcm_commits_complete_samples_and_drops_oversized_frames() -> anyhow::Result<()> {
+        let (mut producer, mut consumer) = RingBuffer::<i16>::new(4);
+        write_pcm(&mut producer, &[1, 2, 3], UserId::new(1));
+        let chunk = consumer
+            .read_chunk(3)
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(chunk.as_slices().0, &[1, 2, 3]);
+        chunk.commit_all();
+
+        write_pcm(&mut producer, &[1, 2, 3, 4, 5], UserId::new(1));
+        assert!(consumer.read_chunk(1).is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manager_reuses_and_removes_recorders_by_guild() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let manager = RecorderManager::with_clock(
+            directory.path().into(),
+            Arc::new(FixedClock(fixed_time()?)),
+        );
+        let (first, created) = manager.get_or_create(GuildId::new(1)).await;
+        assert!(created);
+        let (second, created) = manager.get_or_create(GuildId::new(1)).await;
+        assert!(!created);
+        assert_eq!(first.id, second.id);
+        assert_eq!(
+            manager.get(GuildId::new(1)).await.map(|item| item.id),
+            Some(first.id)
+        );
+        assert_eq!(
+            manager.remove(GuildId::new(1)).await.map(|item| item.id),
+            Some(first.id)
+        );
+        assert!(manager.get(GuildId::new(1)).await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recorder_lifecycle_persists_manifest_and_scene() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let recorder =
+            Recorder::with_clock(directory.path().into(), Arc::new(FixedClock(fixed_time()?)));
+        let started = recorder
+            .start_recording(
+                GuildId::new(1),
+                ChannelId::new(2),
+                ChannelId::new(3),
+                UserId::new(4),
+                "Title".into(),
+                "slug".into(),
+                Some("Opening".into()),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        assert!(started);
+        assert!(recorder.is_recording().await);
+        assert!(
+            !recorder
+                .start_recording(
+                    GuildId::new(1),
+                    ChannelId::new(2),
+                    ChannelId::new(3),
+                    UserId::new(4),
+                    "Other".into(),
+                    "other".into(),
+                    None
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?
+        );
+        assert_eq!(
+            recorder.recording_info().await,
+            Some((ChannelId::new(2), ChannelId::new(3), UserId::new(4)))
+        );
+
+        let scene = recorder
+            .add_scene("Second".into())
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        assert_eq!(scene.sequence, 1);
+        assert_eq!(scene.name, "Second");
+        assert!(
+            recorder
+                .stop_recording()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?
+        );
+        assert!(
+            !recorder
+                .stop_recording()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?
+        );
+        assert!(!recorder.is_recording().await);
+
+        let path = recording_directory(directory.path(), GuildId::new(1), "slug", fixed_time()?)
+            .join("manifest.toml");
+        let saved = RecordingManifest::load(path)?;
+        assert_eq!(saved.status, ManifestStatus::Complete);
+        assert_eq!(saved.ended_at, Some(fixed_time()?));
+        assert_eq!(saved.scenes.len(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn adding_scene_without_recording_fails() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let recorder = Recorder::new(directory.path().into());
+        let error = recorder.add_scene("Scene".into()).await.unwrap_err();
+        assert!(error.to_string().contains("no recording"));
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_manifest_scan_accepts_missing_empty_and_nested_directories() -> anyhow::Result<()>
+    {
+        let directory = tempdir()?;
+        scan_incomplete_manifests(directory.path().join("missing"))?;
+        fs::create_dir(directory.path().join("nested"))?;
+        fs::write(directory.path().join("nested/recording-1.opus"), [])?;
+        scan_incomplete_manifests(directory.path())?;
+        Ok(())
+    }
 }

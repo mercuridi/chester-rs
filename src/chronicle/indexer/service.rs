@@ -110,6 +110,7 @@ impl Indexer {
         }
     }
 
+    #[expect(dead_code, reason = "dependency injection seam for higher-level tests")]
     pub fn with_embedding_model(
         root: PathBuf,
         db: IndexerDb,
@@ -442,5 +443,33 @@ mod tests {
 
         assert!(error.to_string().contains("chunk 0 of prepared.md"));
         Ok(())
+    }
+
+    #[test]
+    fn empty_prepared_document_converts_to_empty_index_data() -> Result<()> {
+        let (chunks, embeddings) =
+            PreparedDocument { chunks: Vec::new() }.into_index_data("empty.md")?;
+        assert!(chunks.is_empty());
+        assert!(embeddings.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn index_fingerprint_includes_content_and_chunking_configuration() {
+        let document = Document {
+            path: "doc.md".into(),
+            content: "content".into(),
+            content_hash: "hash".into(),
+        };
+        let baseline = index_fingerprint(&document, 100, 10);
+        assert!(baseline.starts_with("hash:chunker-v8-overlap-provenance:"));
+        assert_ne!(baseline, index_fingerprint(&document, 101, 10));
+        assert_ne!(baseline, index_fingerprint(&document, 100, 11));
+
+        let changed = Document {
+            content_hash: "other".into(),
+            ..document
+        };
+        assert_ne!(baseline, index_fingerprint(&changed, 100, 10));
     }
 }

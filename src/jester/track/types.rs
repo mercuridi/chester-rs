@@ -32,3 +32,16 @@ impl From<&str> for VideoId {
         VideoId(s.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::VideoId;
+
+    #[test]
+    fn video_id_converts_from_owned_and_borrowed_strings() {
+        let borrowed = VideoId::from("abc");
+        let owned = VideoId::from(String::from("abc"));
+        assert_eq!(borrowed, owned);
+        assert_eq!(borrowed.as_str(), "abc");
+    }
+}

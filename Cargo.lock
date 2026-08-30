@@ -473,6 +473,7 @@ dependencies = [
  "sqlite-vec",
  "sqlx",
  "symphonia",
+ "tempfile",
  "titlecase",
  "tokenizers",
  "tokio",

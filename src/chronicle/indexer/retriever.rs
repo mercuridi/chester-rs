@@ -361,4 +361,102 @@ mod tests {
         assert_eq!(near_duplicates, 1);
         assert_eq!(document_cap, 0);
     }
+
+    #[test]
+    fn canonical_text_collapses_whitespace_without_changing_case() {
+        assert_eq!(canonical_text("  Alpha\n beta\t"), "Alpha beta");
+        assert_ne!(canonical_text("Alpha"), canonical_text("alpha"));
+    }
+
+    #[test]
+    fn shingles_are_case_insensitive_bigrams() {
+        let actual = shingles("Alpha BETA gamma");
+        assert_eq!(actual.len(), 2);
+        assert!(actual.contains("alpha beta"));
+        assert!(actual.contains("beta gamma"));
+        assert!(shingles("single").is_empty());
+        assert!(shingles("").is_empty());
+    }
+
+    #[test]
+    fn removes_exact_duplicates_after_whitespace_normalisation() {
+        let candidates = vec![
+            result("a.md", 0, "alpha beta", false),
+            result("b.md", 0, " alpha   beta ", false),
+        ];
+        let (accepted, exact, near, cap) = deduplicate_and_diversify(candidates, 10, 1.0, 10);
+        assert_eq!(accepted.len(), 1);
+        assert_eq!((exact, near, cap), (1, 0, 0));
+    }
+
+    #[test]
+    fn exact_duplicate_detection_is_case_sensitive() {
+        let candidates = vec![
+            result("a.md", 0, "Alpha beta", false),
+            result("b.md", 0, "alpha beta", false),
+        ];
+        let (accepted, exact, _, _) = deduplicate_and_diversify(candidates, 10, 1.1, 10);
+        assert_eq!(accepted.len(), 2);
+        assert_eq!(exact, 0);
+    }
+
+    #[test]
+    fn applies_per_document_cap_and_preserves_ranked_order() {
+        let candidates = vec![
+            result("a.md", 0, "one alpha", false),
+            result("a.md", 1, "two beta", false),
+            result("b.md", 0, "three gamma", false),
+        ];
+        let (accepted, exact, near, cap) = deduplicate_and_diversify(candidates, 10, 1.1, 1);
+        assert_eq!(accepted.len(), 2);
+        assert_eq!(accepted[0].text, "one alpha");
+        assert_eq!(accepted[1].text, "three gamma");
+        assert_eq!((exact, near, cap), (0, 0, 1));
+    }
+
+    #[test]
+    fn respects_zero_and_finite_result_limits() {
+        let candidates = vec![
+            result("a", 0, "one alpha", false),
+            result("b", 0, "two beta", false),
+        ];
+        assert!(
+            deduplicate_and_diversify(candidates.clone(), 0, 1.1, 10)
+                .0
+                .is_empty()
+        );
+        let accepted = deduplicate_and_diversify(candidates, 1, 1.1, 10).0;
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].document_path, "a");
+    }
+
+    #[test]
+    fn identifies_only_marked_adjacent_chunks_as_overlap_neighbors() {
+        assert!(are_overlapping_neighbors(
+            &result("a", 0, "a b", false),
+            &result("a", 1, "b c", true)
+        ));
+        assert!(!are_overlapping_neighbors(
+            &result("a", 0, "a b", false),
+            &result("a", 1, "b c", false)
+        ));
+        assert!(!are_overlapping_neighbors(
+            &result("a", 0, "a b", false),
+            &result("a", 2, "b c", true)
+        ));
+        assert!(!are_overlapping_neighbors(
+            &result("a", 0, "a b", false),
+            &result("b", 1, "b c", true)
+        ));
+    }
+
+    #[test]
+    fn single_word_candidates_are_not_near_duplicates() {
+        let accepted = vec![result("a", 0, "word", false)];
+        assert!(!is_near_duplicate(
+            &result("b", 0, "word", false),
+            &accepted,
+            0.0
+        ));
+    }
 }

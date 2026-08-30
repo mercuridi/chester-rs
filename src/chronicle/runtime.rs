@@ -171,3 +171,91 @@ impl Drop for GpuLease {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::GpuRuntime;
+
+    #[test]
+    fn runtime_starts_idle() -> anyhow::Result<()> {
+        let runtime = GpuRuntime::new();
+        assert!(!runtime.is_llm_loaded()?);
+        Ok(())
+    }
+
+    #[test]
+    fn loading_lease_rolls_back_to_idle_when_dropped() -> anyhow::Result<()> {
+        let runtime = GpuRuntime::new();
+        let lease = runtime.begin_llm_load()?;
+        assert!(runtime.begin_llm_load().is_err());
+        assert!(runtime.acquire_transcription().is_err());
+        drop(lease);
+        assert!(runtime.acquire_transcription().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn loading_can_commit_to_loaded() -> anyhow::Result<()> {
+        let runtime = GpuRuntime::new();
+        runtime.begin_llm_load()?.commit_to_loaded()?;
+        assert!(runtime.is_llm_loaded()?);
+        assert!(runtime.acquire_transcription().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn inference_requires_loaded_state_and_restores_it_on_drop() -> anyhow::Result<()> {
+        let runtime = GpuRuntime::new();
+        assert!(runtime.acquire_inference().is_err());
+        runtime.begin_llm_load()?.commit_to_loaded()?;
+        let lease = runtime.acquire_inference()?;
+        assert!(runtime.is_llm_loaded()?);
+        assert!(runtime.acquire_inference().is_err());
+        drop(lease);
+        assert!(runtime.acquire_inference().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn unload_requires_loaded_state_and_can_commit_to_idle() -> anyhow::Result<()> {
+        let runtime = GpuRuntime::new();
+        assert!(runtime.begin_llm_unload().is_err());
+        runtime.begin_llm_load()?.commit_to_loaded()?;
+        runtime.begin_llm_unload()?.commit_to_idle()?;
+        assert!(!runtime.is_llm_loaded()?);
+        assert!(runtime.acquire_transcription().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn unload_lease_rolls_back_to_loaded_when_dropped() -> anyhow::Result<()> {
+        let runtime = GpuRuntime::new();
+        runtime.begin_llm_load()?.commit_to_loaded()?;
+        let lease = runtime.begin_llm_unload()?;
+        assert!(!runtime.is_llm_loaded()?);
+        drop(lease);
+        assert!(runtime.is_llm_loaded()?);
+        Ok(())
+    }
+
+    #[test]
+    fn transcription_is_exclusive_and_restores_idle() -> anyhow::Result<()> {
+        let runtime = GpuRuntime::new();
+        let lease = runtime.acquire_transcription()?;
+        assert!(runtime.acquire_transcription().is_err());
+        assert!(runtime.begin_llm_load().is_err());
+        drop(lease);
+        assert!(runtime.begin_llm_load().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn cloned_runtimes_share_state() -> anyhow::Result<()> {
+        let runtime = GpuRuntime::new();
+        let clone = runtime.clone();
+        runtime.begin_llm_load()?.commit_to_loaded()?;
+        assert!(clone.is_llm_loaded()?);
+        assert!(clone.acquire_transcription().is_err());
+        Ok(())
+    }
+}

@@ -190,3 +190,28 @@ fn write_opus_headers<W: std::io::Write>(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::downmix_stereo_frame;
+    use crate::chronicle::recording::constants::{MONO_FRAME_SAMPLES, STEREO_FRAME_SAMPLES};
+
+    #[test]
+    fn downmixes_stereo_pairs_with_midpoint() {
+        let mut stereo = [0i16; STEREO_FRAME_SAMPLES];
+        stereo[0] = 100;
+        stereo[1] = 300;
+        stereo[2] = -100;
+        stereo[3] = -300;
+        stereo[4] = i16::MIN;
+        stereo[5] = i16::MAX;
+        let mut mono = [0i16; MONO_FRAME_SAMPLES];
+
+        downmix_stereo_frame(&stereo, &mut mono);
+
+        assert_eq!(mono[0], 200);
+        assert_eq!(mono[1], -200);
+        assert_eq!(mono[2], 0);
+        assert!(mono[3..].iter().all(|sample| *sample == 0));
+    }
+}

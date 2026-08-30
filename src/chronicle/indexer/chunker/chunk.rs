@@ -5,9 +5,8 @@ use super::super::document::{Chunk, Document};
 use super::markdown::parse_blocks;
 use super::overlap::apply_overlap;
 use super::split::split_block;
-use super::text::sentence_ranges;
 use super::tokenizer::encoded_len;
-use super::types::{BlockKind, ParsedBlock, PlannedChunk};
+use super::types::{BlockKind, PlannedChunk};
 
 /// Split Markdown into token-bounded chunks while retaining the original source text.
 pub fn chunk(
@@ -161,6 +160,7 @@ fn continuation_budget(kind: BlockKind, max_tokens: usize, overlap_tokens: usize
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chronicle::indexer::chunker::{text::sentence_ranges, types::ParsedBlock};
     use tokenizers::{
         Tokenizer, models::wordlevel::WordLevel, pre_tokenizers::whitespace::Whitespace,
         processors::template::TemplateProcessing,
@@ -478,5 +478,43 @@ mod tests {
             document.content
         );
         Ok(())
+    }
+
+    #[test]
+    fn empty_or_whitespace_document_produces_no_chunks() -> Result<()> {
+        let tokenizer = test_tokenizer()?;
+        for content in ["", "  \n\t"] {
+            let document = Document {
+                path: "empty.md".into(),
+                content: content.into(),
+                content_hash: String::new(),
+            };
+            assert!(chunk(&document, &tokenizer, 10, 0)?.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_chunk_and_overlap_budgets() -> Result<()> {
+        let tokenizer = test_tokenizer()?;
+        let document = document_with_words(1);
+        assert!(chunk(&document, &tokenizer, 0, 0).is_err());
+        assert!(chunk(&document, &tokenizer, 2, 0).is_err());
+        assert!(chunk(&document, &tokenizer, 10, 8).is_err());
+        assert!(chunk(&document, &tokenizer, 10, 7).is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn continuation_budget_preserves_full_budget_for_headings() {
+        assert_eq!(
+            continuation_budget(
+                BlockKind::Heading(pulldown_cmark::HeadingLevel::H1),
+                100,
+                10
+            ),
+            100
+        );
+        assert_eq!(continuation_budget(BlockKind::Paragraph, 100, 10), 90);
     }
 }

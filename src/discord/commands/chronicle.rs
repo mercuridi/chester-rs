@@ -731,3 +731,253 @@ async fn confirm_transcript_regeneration(ctx: PoiseContext<'_>) -> Result<bool, 
 
     Ok(regenerate)
 }
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::{
+        build_transcript_document, build_transcript_entries, find_recordings, format_entry,
+        format_timestamp, format_transcript, load_recording_manifest, paginate_transcript,
+        scene_offset_seconds, transcript_path,
+    };
+    use crate::chronicle::{
+        config::AliasGroup,
+        recording::recorder::{ManifestStatus, RecordingManifest, SceneEvent},
+        transcription::{
+            constants::TRANSCRIPT_PAGE_LIMIT, service::TranscribedSegment,
+            transcript::TranscriptEntry,
+        },
+    };
+    use chrono::{Duration, Local, TimeZone};
+    use serenity::model::id::{GuildId, UserId};
+    use std::{collections::HashMap, fs, path::PathBuf};
+    use tempfile::tempdir;
+
+    fn time() -> anyhow::Result<chrono::DateTime<Local>> {
+        Local
+            .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("fixed local time is ambiguous"))
+    }
+
+    fn manifest() -> anyhow::Result<RecordingManifest> {
+        Ok(RecordingManifest {
+            status: ManifestStatus::Complete,
+            guild_id: GuildId::new(1),
+            session_title: "Recorded title".into(),
+            started_at: time()?,
+            ended_at: Some(time()? + Duration::seconds(10)),
+            participants: vec![UserId::new(2)],
+            scenes: vec![
+                SceneEvent {
+                    name: "Later".into(),
+                    offset_ms: 2_000,
+                    submitted_at: time()?,
+                    sequence: 1,
+                },
+                SceneEvent {
+                    name: "Opening".into(),
+                    offset_ms: 0,
+                    submitted_at: time()?,
+                    sequence: 0,
+                },
+            ],
+        })
+    }
+
+    fn entry(start: f64, user_id: u64, alias: &str, text: &str) -> TranscriptEntry {
+        TranscriptEntry {
+            start,
+            end: start + 0.5,
+            user_id: UserId::new(user_id),
+            alias: alias.into(),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn timestamp_rounds_to_tenths_and_handles_invalid_values() {
+        assert_eq!(format_timestamp(0.0), "00:00:00.0");
+        assert_eq!(format_timestamp(61.26), "00:01:01.3");
+        assert_eq!(format_timestamp(3661.99), "01:01:02.0");
+        assert_eq!(format_timestamp(-1.0), "00:00:00.0");
+        assert_eq!(format_timestamp(f64::NAN), "00:00:00.0");
+        assert_eq!(format_timestamp(f64::INFINITY), "00:00:00.0");
+    }
+
+    #[test]
+    fn scene_offsets_convert_milliseconds_to_seconds() {
+        assert_eq!(scene_offset_seconds(0), 0.0);
+        assert_eq!(scene_offset_seconds(1_250), 1.25);
+    }
+
+    #[test]
+    fn formats_transcript_entries() {
+        assert_eq!(
+            format_entry(&entry(1.0, 2, "Alice", "Hello")),
+            "`[00:00:01.0–00:00:01.5]` `Alice`: Hello"
+        );
+    }
+
+    #[test]
+    fn transcript_sorts_scenes_by_sequence_and_places_entries_by_time() -> anyhow::Result<()> {
+        let lines = format_transcript(
+            &manifest()?,
+            &[
+                entry(1.0, 2, "Alice", "Before later"),
+                entry(2.0, 2, "Alice", "At later"),
+            ],
+            true,
+            "Title",
+        );
+        assert_eq!(lines[0], "# Title");
+        assert_eq!(lines[2], "## Opening");
+        assert!(lines[3].contains("Before later"));
+        assert_eq!(lines[4], "## Later");
+        assert!(lines[5].contains("At later"));
+        Ok(())
+    }
+
+    #[test]
+    fn transcript_can_exclude_scene_headings() -> anyhow::Result<()> {
+        let lines = format_transcript(
+            &manifest()?,
+            &[entry(1.0, 2, "Alice", "Line")],
+            false,
+            "Title",
+        );
+        assert!(lines.iter().all(|line| !line.starts_with("## ")));
+        assert!(lines.iter().any(|line| line.contains("Line")));
+        Ok(())
+    }
+
+    #[test]
+    fn pagination_preserves_lines_and_splits_long_unicode_lines() {
+        let pages = paginate_transcript(vec![
+            "a".repeat(TRANSCRIPT_PAGE_LIMIT),
+            "é".repeat(TRANSCRIPT_PAGE_LIMIT + 1),
+        ]);
+        assert_eq!(pages.len(), 3);
+        assert_eq!(pages[0].chars().count(), TRANSCRIPT_PAGE_LIMIT);
+        assert_eq!(pages[1].chars().count(), TRANSCRIPT_PAGE_LIMIT);
+        assert_eq!(pages[2], "é");
+    }
+
+    #[test]
+    fn pagination_packs_short_lines_with_newline_separator() {
+        assert_eq!(
+            paginate_transcript(vec!["one".into(), "two".into()]),
+            vec!["one\ntwo"]
+        );
+        assert!(paginate_transcript(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn builds_entries_from_aliases_and_rejects_missing_alias() -> anyhow::Result<()> {
+        let group = AliasGroup {
+            name: "Group".into(),
+            aliases: HashMap::from([(UserId::new(2), "Alice".into())]),
+        };
+        let entries = build_transcript_entries(
+            vec![TranscribedSegment {
+                start: 1.0,
+                end: 2.0,
+                user_id: UserId::new(2),
+                text: "Hi".into(),
+            }],
+            &group,
+        )?;
+        assert_eq!(entries[0].alias, "Alice");
+        assert!(
+            build_transcript_entries(
+                vec![TranscribedSegment {
+                    start: 1.0,
+                    end: 2.0,
+                    user_id: UserId::new(3),
+                    text: "Hi".into()
+                }],
+                &group,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn builds_document_metadata_and_deduplicates_participants() -> anyhow::Result<()> {
+        let recordings = [PathBuf::from("one.opus"), PathBuf::from("two.opus")];
+        let entries = [
+            entry(0.0, 20, "Bob", "First words"),
+            entry(1.0, 10, "Alice", "More words"),
+            entry(2.0, 20, "Bob", "Last words"),
+        ];
+        let document =
+            build_transcript_document(&manifest()?, &recordings, &entries, false, "Fallback");
+        assert!(document.body.starts_with("# Recorded title"));
+        assert_eq!(document.frontmatter.duration_seconds, 10.0);
+        assert_eq!(document.frontmatter.recording_count, 2);
+        assert_eq!(document.frontmatter.entry_count, 3);
+        assert_eq!(document.frontmatter.participants.len(), 2);
+        assert_eq!(document.frontmatter.participants[0].user_id, "10");
+        assert_eq!(document.frontmatter.participants[1].user_id, "20");
+        assert_eq!(
+            document.frontmatter.character_count,
+            document.body.chars().count()
+        );
+        assert_eq!(
+            document.frontmatter.word_count,
+            document.body.split_whitespace().count()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn document_uses_fallback_title_and_zero_duration_when_end_precedes_start() -> anyhow::Result<()>
+    {
+        let mut value = manifest()?;
+        value.session_title.clear();
+        value.ended_at = Some(value.started_at - Duration::seconds(1));
+        let document = build_transcript_document(&value, &[], &[], false, "Fallback");
+        assert!(document.body.starts_with("# Fallback"));
+        assert_eq!(document.frontmatter.duration_seconds, 0.0);
+        Ok(())
+    }
+
+    #[test]
+    fn finds_only_opus_files_and_builds_transcript_path() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        fs::write(directory.path().join("one.opus"), [])?;
+        fs::write(directory.path().join("two.OPUS"), [])?;
+        fs::write(directory.path().join("notes.txt"), [])?;
+        let recordings = find_recordings(directory.path())?;
+        assert_eq!(recordings.len(), 1);
+        assert!(recordings[0].ends_with("one.opus"));
+        assert_eq!(
+            transcript_path(directory.path()),
+            directory.path().join("transcript.md")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_loader_validates_directory_and_guild() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        assert!(
+            load_recording_manifest(
+                &directory.path().join("missing"),
+                GuildId::new(1),
+                "missing"
+            )
+            .is_err()
+        );
+        fs::write(
+            directory.path().join("manifest.toml"),
+            toml::to_string(&manifest()?)?,
+        )?;
+        assert!(load_recording_manifest(directory.path(), GuildId::new(2), "session").is_err());
+        let loaded = load_recording_manifest(directory.path(), GuildId::new(1), "session")
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(loaded.session_title, "Recorded title");
+        Ok(())
+    }
+}

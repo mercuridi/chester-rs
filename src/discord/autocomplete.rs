@@ -342,3 +342,54 @@ fn format_session_display_name(session: &str, title: Option<&str>) -> String {
         _ => session.to_uppercase(),
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::cast_possible_wrap)]
+mod tests {
+    use super::{autocomplete_limit, format_session_display_name};
+    use crate::discord::constants::AUTOCOMPLETE_MAX_CHOICES;
+
+    #[test]
+    fn autocomplete_limit_matches_discord_choice_limit() {
+        assert_eq!(autocomplete_limit(), AUTOCOMPLETE_MAX_CHOICES as i64);
+    }
+
+    #[test]
+    fn formats_timestamped_session_slug() {
+        assert_eq!(
+            format_session_display_name("20240102-030405-session-name", None),
+            "session name (02 Jan 2024, 03:04)"
+        );
+    }
+
+    #[test]
+    fn configured_title_replaces_slug_name() {
+        assert_eq!(
+            format_session_display_name("20240102-030405-session-name", Some("Session Title")),
+            "Session Title (02 Jan 2024, 03:04)"
+        );
+    }
+
+    #[test]
+    fn empty_title_is_preserved_by_the_low_level_formatter() {
+        assert_eq!(
+            format_session_display_name("20240102-030405-session", Some("")),
+            " (02 Jan 2024, 03:04)"
+        );
+    }
+
+    #[test]
+    fn malformed_sessions_fall_back_to_uppercase() {
+        for session in [
+            "session",
+            "2024010-030405-name",
+            "20240102-03040-name",
+            "20241399-030405-name",
+        ] {
+            assert_eq!(
+                format_session_display_name(session, None),
+                session.to_uppercase()
+            );
+        }
+    }
+}

@@ -87,3 +87,93 @@ impl TranscriptDocument {
         Ok(document)
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::{TranscriptDocument, TranscriptFrontmatter, TranscriptParticipant};
+    use chrono::{Local, TimeZone};
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn document() -> anyhow::Result<TranscriptDocument> {
+        let time = Local
+            .with_ymd_and_hms(2024, 1, 2, 3, 4, 5)
+            .single()
+            .ok_or_else(|| anyhow::anyhow!("fixed local time is ambiguous"))?;
+        Ok(TranscriptDocument {
+            frontmatter: TranscriptFrontmatter {
+                schema_version: 1,
+                recording_date: time,
+                ended_at: time,
+                duration_seconds: 12.5,
+                participants: vec![TranscriptParticipant {
+                    user_id: "1".into(),
+                    alias: "Alice".into(),
+                }],
+                recording_count: 1,
+                entry_count: 2,
+                word_count: 3,
+                character_count: 4,
+                transcribed_at: time,
+            },
+            body: "# Session\n\nBody\n".into(),
+        })
+    }
+
+    #[test]
+    fn transcript_round_trips_frontmatter_and_body() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("transcript.md");
+        document()?.save(&path)?;
+        let loaded = TranscriptDocument::load(&path)?;
+
+        assert_eq!(loaded.frontmatter.schema_version, 1);
+        assert_eq!(loaded.frontmatter.participants[0].alias, "Alice");
+        assert_eq!(loaded.body, "# Session\n\nBody");
+        assert!(!path.with_extension("md.tmp").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn save_trims_only_trailing_body_whitespace() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("transcript.md");
+        let mut value = document()?;
+        value.body = "  body  \n\n".into();
+        value.save(&path)?;
+        let contents = fs::read_to_string(path)?;
+        assert!(contents.ends_with("\n\n  body"));
+        Ok(())
+    }
+
+    #[test]
+    fn load_rejects_missing_or_unterminated_frontmatter() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("transcript.md");
+        fs::write(&path, "plain body")?;
+        assert!(
+            TranscriptDocument::load(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("missing frontmatter")
+        );
+        fs::write(&path, "---\nschema_version: 1")?;
+        assert!(
+            TranscriptDocument::load(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("invalid frontmatter")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn load_reports_invalid_yaml() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("transcript.md");
+        fs::write(&path, "---\nnot: [valid\n---\nbody")?;
+        assert!(TranscriptDocument::load(path).is_err());
+        Ok(())
+    }
+}

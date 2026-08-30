@@ -264,3 +264,212 @@ async fn download_track(
         anyhow::bail!("Downloaded file not found after yt-dlp completed");
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::{
+        CommandExecutor, DownloadResult, SyncConfig, download_track, download_with_retry,
+        process_track, verify_dependencies,
+    };
+    use anyhow::{Result, anyhow};
+    use std::{
+        collections::VecDeque,
+        fs,
+        os::unix::process::ExitStatusExt,
+        process::{ExitStatus, Output},
+        sync::Mutex,
+    };
+    use tempfile::tempdir;
+
+    struct Response {
+        success: bool,
+        create_output_file: bool,
+        error: Option<&'static str>,
+    }
+
+    struct FakeExecutor {
+        responses: Mutex<VecDeque<Response>>,
+        calls: Mutex<Vec<(String, Vec<String>)>>,
+    }
+
+    impl FakeExecutor {
+        fn new(responses: impl IntoIterator<Item = Response>) -> Self {
+            Self {
+                responses: Mutex::new(responses.into_iter().collect()),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn call_count(&self) -> Result<usize> {
+            self.calls
+                .lock()
+                .map(|calls| calls.len())
+                .map_err(|_| anyhow!("calls poisoned"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl CommandExecutor for FakeExecutor {
+        async fn output(&self, program: &str, args: &[String]) -> Result<Output> {
+            self.calls
+                .lock()
+                .map_err(|_| anyhow!("calls poisoned"))?
+                .push((program.into(), args.to_vec()));
+            let response = self
+                .responses
+                .lock()
+                .map_err(|_| anyhow!("responses poisoned"))?
+                .pop_front()
+                .ok_or_else(|| anyhow!("no fake response"))?;
+            if let Some(error) = response.error {
+                return Err(anyhow!(error));
+            }
+            if response.create_output_file
+                && let Some(index) = args.iter().position(|arg| arg == "-o")
+                && let Some(path) = args.get(index + 1)
+            {
+                fs::write(path, b"audio")?;
+            }
+            Ok(Output {
+                status: ExitStatus::from_raw(if response.success { 0 } else { 1 << 8 }),
+                stdout: Vec::new(),
+                stderr: b"failure".to_vec(),
+            })
+        }
+    }
+
+    fn success(create_output_file: bool) -> Response {
+        Response {
+            success: true,
+            create_output_file,
+            error: None,
+        }
+    }
+
+    fn failure() -> Response {
+        Response {
+            success: false,
+            create_output_file: false,
+            error: None,
+        }
+    }
+
+    fn config(path: &std::path::Path) -> SyncConfig {
+        SyncConfig {
+            audio_dir: path.into(),
+            ytdlp_path: "test-yt-dlp".into(),
+            ffmpeg_path: "test-ffmpeg".into(),
+            retries: 2,
+        }
+    }
+
+    #[tokio::test]
+    async fn dependency_check_invokes_expected_version_commands() -> Result<()> {
+        let directory = tempdir()?;
+        let executor = FakeExecutor::new([success(false), success(false)]);
+        verify_dependencies(&executor, &config(directory.path())).await?;
+        let calls = executor
+            .calls
+            .lock()
+            .map_err(|_| anyhow!("calls poisoned"))?;
+        assert_eq!(calls[0], ("test-yt-dlp".into(), vec!["--version".into()]));
+        assert_eq!(calls[1], ("test-ffmpeg".into(), vec!["-version".into()]));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dependency_check_stops_after_ytdlp_failure() -> Result<()> {
+        let directory = tempdir()?;
+        let executor = FakeExecutor::new([failure()]);
+        let error = verify_dependencies(&executor, &config(directory.path()))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("yt-dlp version check"));
+        assert_eq!(executor.call_count()?, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dependency_check_reports_ffmpeg_failure() -> Result<()> {
+        let directory = tempdir()?;
+        let executor = FakeExecutor::new([success(false), failure()]);
+        let error = verify_dependencies(&executor, &config(directory.path()))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("ffmpeg version check"));
+        assert_eq!(executor.call_count()?, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn download_builds_expected_command_and_finalises_file() -> Result<()> {
+        let directory = tempdir()?;
+        let executor = FakeExecutor::new([success(true)]);
+        assert!(download_track("abc", &executor, &config(directory.path())).await?);
+        assert_eq!(fs::read(directory.path().join("abc.mp3"))?, b"audio");
+        assert!(!directory.path().join("abc.part.mp3").exists());
+        let calls = executor
+            .calls
+            .lock()
+            .map_err(|_| anyhow!("calls poisoned"))?;
+        assert_eq!(calls[0].0, "test-yt-dlp");
+        assert!(
+            calls[0]
+                .1
+                .windows(2)
+                .any(|pair| pair == ["--audio-format", "mp3"])
+        );
+        assert_eq!(
+            calls[0].1.last().map(String::as_str),
+            Some("https://www.youtube.com/watch?v=abc")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn successful_process_without_output_file_is_an_error() -> Result<()> {
+        let directory = tempdir()?;
+        let executor = FakeExecutor::new([success(false)]);
+        let error = download_track("abc", &executor, &config(directory.path()))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Downloaded file not found"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn existing_track_is_not_downloaded() -> Result<()> {
+        let directory = tempdir()?;
+        fs::write(directory.path().join("abc.mp3"), b"existing")?;
+        let executor = std::sync::Arc::new(FakeExecutor::new([]));
+        let result = process_track("abc", executor.clone(), config(directory.path())).await;
+        assert!(matches!(result, DownloadResult::AlreadyPresent));
+        assert_eq!(executor.call_count()?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retries_failed_download_and_then_succeeds() -> Result<()> {
+        let directory = tempdir()?;
+        let executor = std::sync::Arc::new(FakeExecutor::new([failure(), success(true)]));
+        assert!(download_with_retry("abc", executor.clone(), config(directory.path())).await?);
+        assert_eq!(executor.call_count()?, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zero_retries_fails_without_invoking_executor() -> Result<()> {
+        let directory = tempdir()?;
+        let executor = std::sync::Arc::new(FakeExecutor::new([]));
+        let mut value = config(directory.path());
+        value.retries = 0;
+        assert!(
+            download_with_retry("abc", executor.clone(), value)
+                .await
+                .is_err()
+        );
+        assert_eq!(executor.call_count()?, 0);
+        Ok(())
+    }
+}

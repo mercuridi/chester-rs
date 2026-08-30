@@ -110,3 +110,82 @@ fn hash_content(content: &str) -> String {
     let hash = Sha256::digest(content.as_bytes());
     hex::encode(hash)
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::{hash_content, is_markdown_file, scan_directory_with_stats};
+    use std::{fs, path::Path};
+    use tempfile::tempdir;
+
+    #[test]
+    fn recognises_markdown_extensions_case_insensitively() {
+        assert!(is_markdown_file(Path::new("notes.md")));
+        assert!(is_markdown_file(Path::new("notes.MD")));
+        assert!(!is_markdown_file(Path::new("notes.txt")));
+        assert!(!is_markdown_file(Path::new("notes")));
+    }
+
+    #[test]
+    fn hashes_are_stable_and_content_sensitive() {
+        assert_eq!(hash_content("same"), hash_content("same"));
+        assert_ne!(hash_content("same"), hash_content("different"));
+        assert_eq!(hash_content("").len(), 64);
+    }
+
+    #[test]
+    fn scans_nested_markdown_and_ignores_other_files() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let nested = directory.path().join("nested");
+        fs::create_dir(&nested)?;
+        fs::write(directory.path().join("b.md"), "two words")?;
+        fs::write(nested.join("a.MD"), "é")?;
+        fs::write(nested.join("ignored.txt"), "not counted")?;
+
+        let (documents, stats) = scan_directory_with_stats(directory.path())?;
+
+        assert_eq!(stats.directories, 2);
+        assert_eq!(stats.files, 2);
+        assert_eq!(stats.words, 3);
+        assert_eq!(stats.characters, "two words".chars().count() + 1);
+        assert!(documents[0].path < documents[1].path);
+        assert!(
+            documents
+                .iter()
+                .all(|document| document.content_hash.len() == 64)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn empty_directory_returns_empty_documents_and_root_stat() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let (documents, stats) = scan_directory_with_stats(directory.path())?;
+        assert!(documents.is_empty());
+        assert_eq!(stats.directories, 1);
+        assert_eq!(stats.files, 0);
+        assert_eq!(stats.words, 0);
+        assert_eq!(stats.characters, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_missing_paths_and_regular_files() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let file = directory.path().join("file.md");
+        fs::write(&file, "content")?;
+        assert!(
+            scan_directory_with_stats(&file)
+                .unwrap_err()
+                .to_string()
+                .contains("not a directory")
+        );
+        assert!(
+            scan_directory_with_stats(directory.path().join("missing"))
+                .unwrap_err()
+                .to_string()
+                .contains("not a directory")
+        );
+        Ok(())
+    }
+}

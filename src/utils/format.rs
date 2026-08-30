@@ -88,4 +88,42 @@ mod tests {
         assert!(display.chars().count() <= 100);
         assert!(display.ends_with('…'));
     }
+
+    #[test]
+    fn trim_leaves_short_choices_unchanged() {
+        assert_eq!(lightweight_trim("short".to_owned(), 10), "short");
+    }
+
+    #[test]
+    fn trim_returns_ellipsis_when_width_cannot_hold_content() {
+        assert_eq!(lightweight_trim("anything".to_owned(), 0), "…");
+        assert_eq!(lightweight_trim("anything".to_owned(), 1), "…");
+    }
+
+    #[test]
+    fn trim_honours_exact_width() {
+        assert_eq!(lightweight_trim("abcd".to_owned(), 4), "abcd");
+        assert_eq!(lightweight_trim("abcde".to_owned(), 4), "abc…");
+    }
+
+    #[test]
+    fn autocomplete_display_joins_fields_without_truncating_short_values() {
+        assert_eq!(
+            build_autocomplete_display(vec!["Title".into(), "Artist".into(), "Origin".into()]),
+            "Title | Artist | Origin"
+        );
+    }
+
+    #[test]
+    fn autocomplete_display_handles_no_fields() {
+        assert!(build_autocomplete_display(Vec::new()).is_empty());
+    }
+
+    #[test]
+    fn autocomplete_display_trims_multiple_long_fields_to_the_limit() {
+        let display = build_autocomplete_display(vec!["a".repeat(80), "b".repeat(80)]);
+        assert!(display.chars().count() <= 100);
+        assert!(display.contains(" | "));
+        assert!(display.matches('…').count() >= 1);
+    }
 }

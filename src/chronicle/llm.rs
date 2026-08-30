@@ -313,3 +313,70 @@ impl LoadedLlm {
         })
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::float_cmp, clippy::unwrap_used)]
+mod tests {
+    use super::Llm;
+    use crate::chronicle::{config::ChronicleConfig, runtime::GpuRuntime};
+
+    fn config() -> ChronicleConfig {
+        ChronicleConfig {
+            llm_repo: "repo".into(),
+            llm_revision: "revision".into(),
+            llm_model_file: "model".into(),
+            llm_tokenizer_repo: "tokenizer-repo".into(),
+            llm_tokenizer_file: "tokenizer".into(),
+            corpus_dir: "corpus".into(),
+            llm_max_tokens: 256,
+            llm_context_limit: 1024,
+            llm_temperature: 0.5,
+            llm_seed: 7,
+            llm_system_prompt: "System prompt\n\n".into(),
+            llm_max_reply_length: 100,
+            retrieval_limit: 5,
+            retrieval_candidate_limit: 10,
+            retrieval_distance_threshold: 0.8,
+            retrieval_near_duplicate_threshold: 0.85,
+            retrieval_max_chunks_per_document: 2,
+            max_chunk_tokens: 100,
+            chunk_overlap_tokens: 10,
+        }
+    }
+
+    #[test]
+    fn constructor_derives_prompt_budget_and_reply_instruction() {
+        let llm = Llm::new(&config(), GpuRuntime::new());
+        assert_eq!(llm.prompt_token_budget(), 768);
+        assert_eq!(llm.max_tokens, 256);
+        assert_eq!(llm.temperature, 0.5);
+        assert_eq!(llm.seed, 7);
+        assert_eq!(
+            llm.system_prompt,
+            "System prompt\n\nKeep every answer at or below 100 characters."
+        );
+    }
+
+    #[test]
+    fn input_prompt_uses_qwen_chat_markers() {
+        let llm = Llm::new(&config(), GpuRuntime::new());
+        assert_eq!(
+            llm.format_input_prompt("Question"),
+            "<|im_start|>system\nSystem prompt\n\nKeep every answer at or below 100 characters.<|im_end|>\n<|im_start|>user\nQuestion<|im_end|>\n<|im_start|>assistant\n"
+        );
+    }
+
+    #[test]
+    fn token_count_requires_loaded_model() {
+        let llm = Llm::new(&config(), GpuRuntime::new());
+        let error = llm.count_input_tokens("Question").unwrap_err();
+        assert!(error.to_string().contains("not loaded"));
+    }
+
+    #[tokio::test]
+    async fn generation_requires_loaded_model() {
+        let llm = Llm::new(&config(), GpuRuntime::new());
+        let error = llm.generate("Question").await.unwrap_err();
+        assert!(error.to_string().contains("not loaded"));
+    }
+}

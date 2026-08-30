@@ -21,3 +21,26 @@ impl MetadataKind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::MetadataKind;
+
+    #[test]
+    fn metadata_kinds_use_the_expected_tables_and_columns() {
+        let cases = [
+            (MetadataKind::Artist, "artists", "artist"),
+            (MetadataKind::Origin, "origins", "origin"),
+            (MetadataKind::Tag, "tags", "tag"),
+        ];
+
+        for (kind, table, column) in cases {
+            assert!(kind.select_sql().contains(table));
+            assert!(kind.select_sql().contains(column));
+            assert!(kind.insert_sql().contains(table));
+            assert!(kind.insert_sql().contains(column));
+            assert!(kind.select_sql().contains("?1"));
+            assert!(kind.insert_sql().contains("?1"));
+        }
+    }
+}

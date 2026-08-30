@@ -160,7 +160,12 @@ fn parse_opus_head(data: &[u8]) -> Result<OpusHead> {
 }
 
 fn resample_48k_to_16k(input: &[f32]) -> Result<Vec<f32>> {
+    if input.is_empty() {
+        return Ok(Vec::new());
+    }
+
     let mut resampler = FftFixedIn::<f32>::new(OPUS_SAMPLE_RATE, WHISPER_SAMPLE_RATE, 1024, 1, 1)?;
+    let output_delay = resampler.output_delay();
 
     let mut output = Vec::with_capacity(input.len() * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE);
 
@@ -180,11 +185,83 @@ fn resample_48k_to_16k(input: &[f32]) -> Result<Vec<f32>> {
         offset += chunk_len;
     }
 
-    // The final chunk may have been zero-padded to the required input size.
-    // Trim the output to the expected resampled length.
+    // Flush enough zero-padded frames to recover samples held by the FFT overlap.
     let expected_len = input.len() * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE;
+    while output.len() < output_delay + expected_len {
+        let result = resampler.process_partial::<Vec<f32>>(None, None)?;
+        if result[0].is_empty() {
+            return Err(anyhow!("Resampler produced no output while flushing"));
+        }
+        output.extend_from_slice(&result[0]);
+    }
 
+    output.drain(..output_delay);
     output.truncate(expected_len);
 
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_opus_head, resample_48k_to_16k};
+
+    fn header(version: u8, channels: u8, pre_skip: u16) -> Vec<u8> {
+        let mut bytes = b"OpusHead".to_vec();
+        bytes.push(version);
+        bytes.push(channels);
+        bytes.extend_from_slice(&pre_skip.to_le_bytes());
+        bytes.extend_from_slice(&48_000u32.to_le_bytes());
+        bytes.extend_from_slice(&0i16.to_le_bytes());
+        bytes.push(0);
+        bytes
+    }
+
+    #[test]
+    fn parses_supported_opus_header() -> anyhow::Result<()> {
+        let parsed = parse_opus_head(&header(1, 1, 312))?;
+        assert_eq!(parsed.channels, 1);
+        assert_eq!(parsed.pre_skip, 312);
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_short_or_malformed_opus_headers() {
+        assert!(parse_opus_head(b"OpusHead").is_err());
+        assert!(parse_opus_head(&[0; 19]).is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_opus_version() {
+        let error = parse_opus_head(&header(2, 1, 0))
+            .err()
+            .map(|error| error.to_string());
+        assert!(
+            error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Unsupported OpusHead version: 2")
+        );
+    }
+
+    #[test]
+    fn resampling_empty_audio_is_empty() -> anyhow::Result<()> {
+        assert!(resample_48k_to_16k(&[])?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn resampling_produces_exact_one_third_length() -> anyhow::Result<()> {
+        for length in [3072, 4096] {
+            let input = vec![0.0; length];
+            assert_eq!(resample_48k_to_16k(&input)?.len(), length / 3);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn resampling_silence_remains_silent() -> anyhow::Result<()> {
+        let output = resample_48k_to_16k(&vec![0.0; 3072])?;
+        assert!(output.iter().all(|sample| sample.abs() < f32::EPSILON));
+        Ok(())
+    }
 }

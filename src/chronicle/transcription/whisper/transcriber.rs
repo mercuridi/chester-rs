@@ -221,11 +221,11 @@ fn has_temporal_overlap(a: &TranscriptSegment, b: &TranscriptSegment) -> bool {
     a.start < b.end && b.start < a.end
 }
 
-fn contains_tokens(container: &[String], contained: &[String]) -> bool {
-    contained.len() >= 3
+fn contains_tokens(container: &[String], needle: &[String]) -> bool {
+    needle.len() >= 3
         && container
-            .windows(contained.len())
-            .any(|window| window == contained)
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 fn suffix_prefix_overlap(left: &[String], right: &[String]) -> usize {
@@ -318,4 +318,148 @@ pub fn deduplicate_segments(mut segments: Vec<TranscriptSegment>) -> Vec<Transcr
     }
 
     output
+}
+
+#[cfg(test)]
+#[allow(clippy::float_cmp)]
+mod tests {
+    use super::{
+        TranscriptSegment, contains_tokens, deduplicate_segments, has_temporal_overlap,
+        merge_overlapping_text, normalized_tokens, raw_words, suffix_prefix_overlap,
+    };
+
+    fn segment(start: f64, end: f64, text: &str) -> TranscriptSegment {
+        TranscriptSegment {
+            start,
+            end,
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn normalisation_removes_punctuation_case_and_empty_tokens() {
+        assert_eq!(
+            normalized_tokens(" Hello, WORLD! -- 42 "),
+            vec!["hello", "world", "42"]
+        );
+        assert!(normalized_tokens("... --").is_empty());
+        assert_eq!(raw_words(" a  b\n c "), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn temporal_overlap_excludes_touching_boundaries() {
+        assert!(has_temporal_overlap(
+            &segment(0.0, 2.0, "a"),
+            &segment(1.0, 3.0, "b")
+        ));
+        assert!(!has_temporal_overlap(
+            &segment(0.0, 1.0, "a"),
+            &segment(1.0, 2.0, "b")
+        ));
+    }
+
+    #[test]
+    fn token_containment_requires_at_least_three_tokens() {
+        let container = normalized_tokens("one two three four");
+        assert!(contains_tokens(
+            &container,
+            &normalized_tokens("two three four")
+        ));
+        assert!(!contains_tokens(
+            &container,
+            &normalized_tokens("two three")
+        ));
+        assert!(!contains_tokens(
+            &container,
+            &normalized_tokens("one three four")
+        ));
+    }
+
+    #[test]
+    fn finds_longest_suffix_prefix_overlap() {
+        let left = normalized_tokens("one two three four");
+        let right = normalized_tokens("two three four five");
+        assert_eq!(suffix_prefix_overlap(&left, &right), 3);
+        assert_eq!(suffix_prefix_overlap(&left, &normalized_tokens("none")), 0);
+    }
+
+    #[test]
+    fn merges_text_only_for_three_or_more_overlapping_tokens() {
+        assert_eq!(
+            merge_overlapping_text("one two three four", "two three four five").as_deref(),
+            Some("one two three four five")
+        );
+        assert_eq!(merge_overlapping_text("one two", "two three"), None);
+        assert_eq!(
+            merge_overlapping_text("One, TWO three", "one two THREE").as_deref(),
+            Some("One, TWO three")
+        );
+    }
+
+    #[test]
+    fn deduplication_sorts_segments_by_start_then_end() {
+        let output = deduplicate_segments(vec![
+            segment(2.0, 3.0, "later"),
+            segment(1.0, 3.0, "longer"),
+            segment(1.0, 2.0, "earlier"),
+        ]);
+        assert_eq!(
+            output
+                .iter()
+                .map(|item| item.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["earlier", "longer", "later"]
+        );
+    }
+
+    #[test]
+    fn identical_overlapping_text_keeps_tighter_interval() {
+        let output = deduplicate_segments(vec![
+            segment(0.0, 5.0, "Same text here"),
+            segment(1.0, 3.0, "same, TEXT here!"),
+        ]);
+        assert_eq!(output.len(), 1);
+        assert_eq!((output[0].start, output[0].end), (1.0, 3.0));
+    }
+
+    #[test]
+    fn contained_overlapping_text_keeps_richer_candidate() {
+        let output = deduplicate_segments(vec![
+            segment(0.0, 3.0, "you can swap"),
+            segment(1.0, 4.0, "you can swap your helmet"),
+        ]);
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].text, "you can swap your helmet");
+    }
+
+    #[test]
+    fn partial_overlaps_are_merged_and_extend_end_time() {
+        let output = deduplicate_segments(vec![
+            segment(0.0, 3.0, "one two three four"),
+            segment(2.0, 5.0, "two three four five"),
+        ]);
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0].text, "one two three four five");
+        assert_eq!(output[0].end, 5.0);
+    }
+
+    #[test]
+    fn non_overlapping_duplicates_are_retained() {
+        let output = deduplicate_segments(vec![
+            segment(0.0, 1.0, "same text here"),
+            segment(1.0, 2.0, "same text here"),
+        ]);
+        assert_eq!(output.len(), 2);
+    }
+
+    #[test]
+    fn duplicate_can_be_found_behind_an_unrelated_segment() {
+        let output = deduplicate_segments(vec![
+            segment(0.0, 5.0, "duplicate phrase here"),
+            segment(1.0, 4.0, "unrelated words remain"),
+            segment(2.0, 3.0, "duplicate phrase here"),
+        ]);
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0].start, 2.0);
+    }
 }

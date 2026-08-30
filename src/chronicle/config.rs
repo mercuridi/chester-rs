@@ -500,8 +500,10 @@ fn parse_guild_id(value: &str) -> Result<GuildId> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     const CHRONICLE_CONFIG: &str = r#"
 llm_repo = "owner/model"
@@ -575,6 +577,287 @@ chunk_overlap_tokens = 48
             .ok_or_else(|| anyhow::anyhow!("Missing overlap setting should be rejected"))?;
 
         assert!(error.to_string().contains("chunk_overlap_tokens"));
+        Ok(())
+    }
+
+    fn valid_chronicle_config() -> ChronicleConfig {
+        ChronicleConfig {
+            llm_repo: "owner/model".into(),
+            llm_revision: "main".into(),
+            llm_model_file: "model.gguf".into(),
+            llm_tokenizer_repo: "owner/tokenizer".into(),
+            llm_tokenizer_file: "tokenizer.json".into(),
+            corpus_dir: "corpus".into(),
+            llm_max_tokens: 512,
+            llm_context_limit: 1024,
+            llm_temperature: 0.7,
+            llm_seed: 42,
+            llm_system_prompt: "Answer from the corpus".into(),
+            llm_max_reply_length: 1900,
+            retrieval_limit: 5,
+            retrieval_candidate_limit: 15,
+            retrieval_distance_threshold: 0.8,
+            retrieval_near_duplicate_threshold: 0.85,
+            retrieval_max_chunks_per_document: 2,
+            max_chunk_tokens: 480,
+            chunk_overlap_tokens: 48,
+        }
+    }
+
+    fn full_config() -> String {
+        format!(
+            r#"
+[chronicle]
+{CHRONICLE_CONFIG}
+
+[database]
+jester = "sqlite://data/jester.sqlite3"
+chronicle = "sqlite://data/chronicle.sqlite3?mode=rwc"
+
+[alias_groups.party]
+name = "Party"
+
+[alias_groups.party.aliases]
+"10" = "Alice"
+"20" = "Bob"
+
+[guilds."30"]
+alias_groups = ["party"]
+"#
+        )
+    }
+
+    #[test]
+    fn resolves_relative_and_preserves_absolute_paths() {
+        let root = Path::new("/project");
+        assert_eq!(resolve_path(root, "corpus"), "/project/corpus");
+        assert_eq!(resolve_path(root, "/data/corpus"), "/data/corpus");
+    }
+
+    #[test]
+    fn resolves_relative_sqlite_urls_and_preserves_special_urls() {
+        let root = Path::new("/project");
+        assert_eq!(
+            resolve_sqlite_url(root, "sqlite://data/db.sqlite?mode=rwc"),
+            "sqlite:///project/data/db.sqlite?mode=rwc"
+        );
+        assert_eq!(
+            resolve_sqlite_url(root, "sqlite://:memory:"),
+            "sqlite://:memory:"
+        );
+        assert_eq!(
+            resolve_sqlite_url(root, "sqlite:///data/db.sqlite"),
+            "sqlite:///data/db.sqlite"
+        );
+        assert_eq!(
+            resolve_sqlite_url(root, "postgres://server/db"),
+            "postgres://server/db"
+        );
+    }
+
+    #[test]
+    fn parses_nonzero_discord_ids() -> Result<()> {
+        assert_eq!(parse_user_id("42")?.get(), 42);
+        assert_eq!(parse_guild_id("43")?.get(), 43);
+        for invalid in ["", "abc", "0", "-1"] {
+            assert!(parse_user_id(invalid).is_err(), "{invalid}");
+            assert!(parse_guild_id(invalid).is_err(), "{invalid}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn validates_every_chronicle_numeric_boundary() {
+        let mut config = valid_chronicle_config();
+        assert!(config.validate().is_ok());
+
+        config.llm_max_tokens = 0;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.llm_max_tokens = 32_769;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.llm_context_limit = 512;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.llm_context_limit = 32_769;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.llm_temperature = f32::NAN;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.llm_temperature = 2.1;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.llm_max_reply_length = 0;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.llm_max_reply_length = MESSAGE_MAX_CHARS + 1;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.retrieval_limit = 0;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.retrieval_limit = 101;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.retrieval_candidate_limit = 4;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.retrieval_candidate_limit = 1001;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.retrieval_distance_threshold = -0.1;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.retrieval_near_duplicate_threshold = 1.1;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.retrieval_max_chunks_per_document = 0;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.max_chunk_tokens = 2;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.max_chunk_tokens = 513;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.chunk_overlap_tokens = 478;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn validates_required_chronicle_strings() {
+        let mut config = valid_chronicle_config();
+        config.corpus_dir = "  ".into();
+        assert!(config.validate().is_err());
+
+        for field in 0..6 {
+            let mut config = valid_chronicle_config();
+            match field {
+                0 => config.llm_repo.clear(),
+                1 => config.llm_revision.clear(),
+                2 => config.llm_model_file.clear(),
+                3 => config.llm_tokenizer_repo.clear(),
+                4 => config.llm_tokenizer_file.clear(),
+                _ => config.llm_system_prompt.clear(),
+            }
+            assert!(config.validate().is_err(), "field {field}");
+        }
+    }
+
+    #[test]
+    fn loads_aliases_guilds_and_project_relative_paths() -> Result<()> {
+        let directory = tempdir()?;
+        let config_dir = directory.path().join(".chronicle");
+        fs::create_dir(&config_dir)?;
+        let path = config_dir.join("config.toml");
+        fs::write(&path, full_config())?;
+
+        let config = Config::load(&path)?;
+        let party = config.alias_group("party").context("missing party")?;
+        assert_eq!(party.name, "Party");
+        assert_eq!(
+            party.aliases.get(&UserId::new(10)).map(String::as_str),
+            Some("Alice")
+        );
+        assert!(config.guild_has_alias_group(GuildId::new(30), "party"));
+        assert!(!config.guild_has_alias_group(GuildId::new(31), "party"));
+        assert_eq!(
+            config
+                .alias_groups_for_guild(GuildId::new(30))
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(config.alias_groups_for_guild(GuildId::new(31)).is_none());
+        assert_eq!(
+            config.chronicle.corpus_dir,
+            directory.path().join("corpus").to_string_lossy()
+        );
+        assert_eq!(
+            config.paths.recordings_dir,
+            directory.path().join(".chronicle/recordings")
+        );
+        assert_eq!(config.paths.audio_dir, directory.path().join("audio"));
+        assert!(
+            config
+                .database
+                .jester
+                .contains(directory.path().to_string_lossy().as_ref())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn validates_participant_alias_coverage() -> Result<()> {
+        let directory = tempdir()?;
+        let config_dir = directory.path().join(".chronicle");
+        fs::create_dir(&config_dir)?;
+        let path = config_dir.join("config.toml");
+        fs::write(&path, full_config())?;
+        let config = Config::load(path)?;
+
+        assert!(
+            config
+                .validate_participants("party", [&UserId::new(10), &UserId::new(20)])
+                .is_ok()
+        );
+        let missing = config
+            .validate_participants("party", [&UserId::new(99)])
+            .unwrap_err();
+        assert!(missing.to_string().contains("99"));
+        let unknown = config
+            .validate_participants("missing", [&UserId::new(10)])
+            .unwrap_err();
+        assert!(unknown.to_string().contains("unknown alias group"));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_alias_and_guild_configuration() -> Result<()> {
+        let base: RawConfig = toml::from_str(&full_config())?;
+        let mut aliases = base.alias_groups.clone();
+        aliases.insert(
+            " ".into(),
+            RawAliasGroup {
+                name: "Name".into(),
+                aliases: HashMap::new(),
+            },
+        );
+        let raw = RawConfig {
+            alias_groups: aliases,
+            ..base
+        };
+        assert!(Config::from_raw(raw, Path::new(".")).is_err());
+
+        let mut raw: RawConfig = toml::from_str(&full_config())?;
+        raw.alias_groups.get_mut("party").unwrap().name.clear();
+        assert!(Config::from_raw(raw, Path::new(".")).is_err());
+
+        let mut raw: RawConfig = toml::from_str(&full_config())?;
+        raw.alias_groups
+            .get_mut("party")
+            .unwrap()
+            .aliases
+            .insert("0".into(), "Nobody".into());
+        assert!(Config::from_raw(raw, Path::new(".")).is_err());
+
+        let mut raw: RawConfig = toml::from_str(&full_config())?;
+        raw.alias_groups
+            .get_mut("party")
+            .unwrap()
+            .aliases
+            .insert("99".into(), " ".into());
+        assert!(Config::from_raw(raw, Path::new(".")).is_err());
+
+        let mut raw: RawConfig = toml::from_str(&full_config())?;
+        raw.guilds
+            .get_mut("30")
+            .unwrap()
+            .alias_groups
+            .push("missing".into());
+        assert!(Config::from_raw(raw, Path::new(".")).is_err());
         Ok(())
     }
 }
