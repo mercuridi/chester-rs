@@ -1,6 +1,20 @@
 # Changelog
 
-## [2.6.1] — 2026-08-30
+## [2.7.0] — 2026-08-30
+
+### Features
+
+- What if we actually had some tests
+- Repository and downloading tests
+- Extra edge-case tests
+
+
+### Bug Fixes
+
+- Prep for better testing by adding traits to internal types
+- Force all releases to be clean on test, clippy, and fmt
+
+## [v2.6.1] — 2026-08-30
 
 ### Bug Fixes
 
