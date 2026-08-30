@@ -1,6 +1,28 @@
 # Changelog
 
-## [2.5.0] — 2026-08-29
+## [2.6.0] — 2026-08-30
+
+### Features
+
+- Token-aware chunker
+- Markdown-aware chunking parser
+- Hierarchical semantic splitting; chunker is more aware of "blocks" of text
+- Chunker now has overlap tokens to improve llm contextual awareness
+- Retriever is now overlap-aware
+
+
+### Bug Fixes
+
+- Exact-token accounting issues fixed
+- Block tracking is now a nested stack to ensure full document coverage
+- Improved overlap behaviour in chunking
+- Clean break from old config settings
+- Documents are now only chunked once per indexing process
+- Improve deduplication for similar chunks in the same document
+- Improve sentence parsing with unicode sentence-boundary iterators over punctuation splitting
+- Split out chunker.rs to new submodules
+
+## [v2.5.0] — 2026-08-29
 
 ### Features
 
