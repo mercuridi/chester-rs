@@ -301,7 +301,7 @@ fn index_fingerprint(
     chunk_overlap_tokens: usize,
 ) -> String {
     format!(
-        "{}:chunker-v5-exact-token-budget:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
+        "{}:chunker-v6-full-markdown-coverage:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
         document.content_hash
     )
 }

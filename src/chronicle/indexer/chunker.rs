@@ -230,9 +230,7 @@ fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
                     heading_capture = Some((*level, String::new()));
                 }
 
-                if let Some(kind) = block_kind(&tag)
-                    && open_blocks.is_empty()
-                {
+                if let Some(kind) = block_kind(&tag) {
                     open_blocks.push((kind, range.start));
                 }
             }
@@ -255,6 +253,9 @@ fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
                     let Some((_, start)) = open_blocks.pop() else {
                         continue;
                     };
+                    if !open_blocks.is_empty() {
+                        continue;
+                    }
                     let heading = match kind {
                         BlockKind::Heading(level) => heading_path
                             .iter()
@@ -277,7 +278,7 @@ fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
                     heading.push_str(&text);
                 }
             }
-            Event::Rule => blocks.push(ParsedBlock {
+            Event::Rule if open_blocks.is_empty() => blocks.push(ParsedBlock {
                 range,
                 kind: BlockKind::Paragraph,
                 section,
@@ -287,8 +288,77 @@ fn parse_blocks(source: &str) -> Vec<ParsedBlock> {
         }
     }
 
+    cover_source(source, blocks)
+}
+
+fn cover_source(source: &str, mut blocks: Vec<ParsedBlock>) -> Vec<ParsedBlock> {
     blocks.sort_by_key(|block| block.range.start);
-    blocks
+    if blocks.is_empty() {
+        return vec![ParsedBlock {
+            range: 0..source.len(),
+            kind: BlockKind::Paragraph,
+            section: 0,
+            heading: None,
+        }];
+    }
+
+    let mut covered = Vec::<ParsedBlock>::with_capacity(blocks.len());
+    let mut cursor = 0;
+
+    for mut block in blocks {
+        if block.range.end <= cursor {
+            continue;
+        }
+        if block.range.start < cursor {
+            block.range.start = cursor;
+        }
+
+        if cursor < block.range.start {
+            let gap = cursor..block.range.start;
+            if source[gap.clone()].trim().is_empty() {
+                if let Some(previous) = covered.last_mut() {
+                    previous.range.end = gap.end;
+                } else {
+                    block.range.start = 0;
+                }
+            } else {
+                let (section, heading) = covered.last().map_or_else(
+                    || (block.section, block.heading.clone()),
+                    |previous| (previous.section, previous.heading.clone()),
+                );
+                covered.push(ParsedBlock {
+                    range: gap,
+                    kind: BlockKind::Paragraph,
+                    section,
+                    heading,
+                });
+            }
+        }
+
+        cursor = block.range.end;
+        covered.push(block);
+    }
+
+    if cursor < source.len() {
+        let gap = cursor..source.len();
+        if source[gap.clone()].trim().is_empty() {
+            if let Some(previous) = covered.last_mut() {
+                previous.range.end = source.len();
+            }
+        } else {
+            let (section, heading) = covered.last().map_or((0, None), |previous| {
+                (previous.section, previous.heading.clone())
+            });
+            covered.push(ParsedBlock {
+                range: gap,
+                kind: BlockKind::Paragraph,
+                section,
+                heading,
+            });
+        }
+    }
+
+    covered
 }
 
 fn block_kind(tag: &Tag<'_>) -> Option<BlockKind> {
@@ -535,6 +605,27 @@ mod tests {
         }
     }
 
+    fn assert_full_block_coverage(source: &str, blocks: &[ParsedBlock]) {
+        assert!(!blocks.is_empty());
+        assert_eq!(blocks[0].range.start, 0);
+        assert_eq!(
+            blocks.last().map(|block| block.range.end),
+            Some(source.len())
+        );
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| pair[0].range.end == pair[1].range.start)
+        );
+        assert_eq!(
+            blocks
+                .iter()
+                .map(|block| &source[block.range.clone()])
+                .collect::<String>(),
+            source
+        );
+    }
+
     #[test]
     fn parses_markdown_blocks_and_heading_hierarchy() {
         let source = "# Top\n\nIntro [link](https://example.com) ![image](image.png)\n\n## Nested\n\n- one\n- two\n\n> quoted\n\n| Name | Value |\n| --- | --- |\n| A | B |\n\n---\n\n```rust\nlet answer = 42;\n```\n";
@@ -542,22 +633,61 @@ mod tests {
         let blocks = parse_blocks(source);
 
         assert_eq!(blocks.len(), 9);
-        assert_eq!(&source[blocks[0].range.clone()], "# Top\n");
+        assert_full_block_coverage(source, &blocks);
+        assert_eq!(source[blocks[0].range.clone()].trim_end(), "# Top");
         assert_eq!(blocks[0].heading.as_deref(), Some("Top"));
         assert_eq!(
-            &source[blocks[1].range.clone()],
-            "Intro [link](https://example.com) ![image](image.png)\n"
+            source[blocks[1].range.clone()].trim_end(),
+            "Intro [link](https://example.com) ![image](image.png)"
         );
         assert_eq!(blocks[1].heading.as_deref(), Some("Top"));
-        assert_eq!(&source[blocks[2].range.clone()], "## Nested\n");
+        assert_eq!(source[blocks[2].range.clone()].trim_end(), "## Nested");
         assert_eq!(blocks[2].heading.as_deref(), Some("Top > Nested"));
         assert!(source[blocks[3].range.clone()].starts_with("- one"));
         assert!(source[blocks[4].range.clone()].starts_with("- two"));
         assert!(source[blocks[5].range.clone()].starts_with("> quoted"));
         assert!(source[blocks[6].range.clone()].starts_with("| Name | Value |"));
-        assert_eq!(&source[blocks[7].range.clone()], "---\n");
+        assert_eq!(source[blocks[7].range.clone()].trim_end(), "---");
         assert!(source[blocks[8].range.clone()].starts_with("```rust\n"));
         assert_eq!(blocks[8].heading.as_deref(), Some("Top > Nested"));
+    }
+
+    #[test]
+    fn preserves_nested_markdown_and_unemitted_markdown_syntax() -> Result<()> {
+        let source = "# Nested structures\n\n- parent\n  - nested one\n  - nested two\n\n- sibling\n\n> outer quote\n>\n> > nested quote\n>\n> outer tail\n\nA [reference][id].\n\n[id]: https://example.com\n\n[^note]: footnote text\n";
+        let blocks = parse_blocks(source);
+
+        assert_full_block_coverage(source, &blocks);
+        let parent = blocks
+            .iter()
+            .map(|block| &source[block.range.clone()])
+            .find(|text| text.contains("- parent"))
+            .ok_or_else(|| anyhow!("Parent list item was not parsed"))?;
+        assert!(parent.contains("nested one"));
+        assert!(parent.contains("nested two"));
+        let quote = blocks
+            .iter()
+            .map(|block| &source[block.range.clone()])
+            .find(|text| text.contains("> outer quote"))
+            .ok_or_else(|| anyhow!("Outer block quote was not parsed"))?;
+        assert!(quote.contains("> > nested quote"));
+        assert!(quote.contains("> outer tail"));
+
+        let tokenizer = test_tokenizer()?;
+        let document = Document {
+            path: "nested.md".into(),
+            content: source.to_owned(),
+            content_hash: String::new(),
+        };
+        let chunks = chunk(&document, &tokenizer, 512, 0)?;
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|chunk| chunk.content.as_str())
+                .collect::<String>(),
+            source
+        );
+        Ok(())
     }
 
     #[test]
