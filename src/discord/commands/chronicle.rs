@@ -352,10 +352,11 @@ pub async fn ask(
     ctx: PoiseContext<'_>,
     #[description = "Question to ask Chronicle"] question: String,
 ) -> Result<(), Error> {
-    info!(user = %ctx.author().id, question_len = question.len(), "Chronicle ask command requested");
+    info!(user = %ctx.author().id, question = %question, "Chronicle ask command requested");
     ctx.defer().await?;
 
     let answer = ctx.data().chronicle.ask(&question).await?;
+    info!(user = %ctx.author().id, reply = %answer, "Chronicle ask command returned reply");
 
     ctx.say(answer).await?;
 
