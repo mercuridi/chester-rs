@@ -190,41 +190,48 @@ impl Llm {
                 );
             }
 
-            let mut logits_processor = LogitsProcessor::new(seed, Some(temperature), None);
-            let input = Tensor::new(prompt_tokens, &loaded.device)?.unsqueeze(0)?;
-            let logits = loaded.model.forward(&input, 0)?.squeeze(0)?;
-            let mut next_token = logits_processor.sample(&logits)?;
-            let mut generated = Vec::with_capacity(max_tokens);
+            // Clear the cache even if a CUDA allocation or kernel call fails.
+            // Without this, a failed long request can poison every later request
+            // by retaining its partial KV cache on the GPU.
+            let result = (|| -> Result<(String, usize)> {
+                let mut logits_processor = LogitsProcessor::new(seed, Some(temperature), None);
+                let input = Tensor::new(prompt_tokens, &loaded.device)?.unsqueeze(0)?;
+                let logits = loaded.model.forward(&input, 0)?.squeeze(0)?;
+                let mut next_token = logits_processor.sample(&logits)?;
+                let mut generated = Vec::with_capacity(max_tokens);
 
-            for index in 0..max_tokens {
-                if loaded.eos_tokens.contains(&next_token) {
-                    break;
+                for index in 0..max_tokens {
+                    if loaded.eos_tokens.contains(&next_token) {
+                        break;
+                    }
+
+                    generated.push(next_token);
+
+                    if index + 1 == max_tokens {
+                        break;
+                    }
+
+                    let input = Tensor::new(&[next_token], &loaded.device)?.unsqueeze(0)?;
+                    let logits = loaded
+                        .model
+                        .forward(&input, prompt_tokens.len() + index)?
+                        .squeeze(0)?;
+                    next_token = logits_processor.sample(&logits)?;
                 }
 
-                generated.push(next_token);
-
-                if index + 1 == max_tokens {
-                    break;
-                }
-
-                let input = Tensor::new(&[next_token], &loaded.device)?.unsqueeze(0)?;
-                let logits = loaded
-                    .model
-                    .forward(&input, prompt_tokens.len() + index)?
-                    .squeeze(0)?;
-                next_token = logits_processor.sample(&logits)?;
-            }
-
-            let response = loaded
-                .tokenizer
-                .decode(&generated, true)
-                .map_err(|error| anyhow!("Failed to decode LLM response: {error}"))?;
+                let response = loaded
+                    .tokenizer
+                    .decode(&generated, true)
+                    .map_err(|error| anyhow!("Failed to decode LLM response: {error}"))?;
+                Ok((response, generated.len()))
+            })();
             loaded.model.clear_kv_cache();
+            let (response, generated_tokens) = result?;
 
             let response = response.trim().to_owned();
             tracing::debug!(
                 response_len = response.len(),
-                generated_tokens = generated.len(),
+                generated_tokens,
                 "LLM inference complete"
             );
             Ok(response)

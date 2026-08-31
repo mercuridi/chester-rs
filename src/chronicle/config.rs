@@ -155,7 +155,10 @@ fn default_retrieval_candidate_limit() -> usize {
 }
 
 fn default_llm_context_limit() -> usize {
-    32_768
+    // The quantized weights are only part of the VRAM cost. Candle's Qwen
+    // prefill also allocates attention state proportional to the square of
+    // the prompt length, so a 32k default is not usable on many consumer GPUs.
+    8_192
 }
 
 fn default_retrieval_distance_threshold() -> f32 {

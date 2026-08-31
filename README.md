@@ -123,7 +123,9 @@ llm_tokenizer_repo = "Qwen/Qwen2.5-7B-Instruct"
 llm_tokenizer_file = "tokenizer.json"
 
 llm_max_tokens = 512
-llm_context_limit = 32768
+# 8192 is the conservative default for the bundled 7B model. Higher context
+# limits require substantially more GPU memory.
+llm_context_limit = 8192
 llm_temperature = 0.2
 llm_seed = 42
 llm_system_prompt = """\
