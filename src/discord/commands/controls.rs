@@ -4,7 +4,11 @@ use crate::{
         context::{Error, PoiseContext},
         voice::{ensure_vc, leave_vc, require_guild},
     },
-    jester::{player::queue::RepeatMode, track::resolver::resolve_track},
+    jester::{
+        player::queue::{HistoryOutcome, RepeatMode},
+        track::resolver::resolve_track,
+    },
+    utils::format::lightweight_trim,
 };
 use std::fmt::Write;
 pub fn pause_message(resumed: bool) -> &'static str {
@@ -197,6 +201,41 @@ pub async fn queue_shuffle(ctx: PoiseContext<'_>) -> Result<(), Error> {
 pub async fn skip(ctx: PoiseContext<'_>) -> Result<(), Error> {
     let track = ctx.data().player.skip(require_guild(ctx)?).await?;
     ctx.say(format!("Skipped to `{}`.", track.title)).await?;
+    Ok(())
+}
+
+/// Shows recently completed, skipped, and replaced tracks.
+#[poise::command(slash_command)]
+pub async fn history(ctx: PoiseContext<'_>, #[min = 1] page: Option<usize>) -> Result<(), Error> {
+    const PAGE_SIZE: usize = 10;
+
+    let entries = ctx.data().player.history(require_guild(ctx)?).await;
+    if entries.is_empty() {
+        ctx.say("No playback history for this server yet.").await?;
+        return Ok(());
+    }
+
+    let page = page.unwrap_or(1);
+    let page_count = entries.len().div_ceil(PAGE_SIZE);
+    if page > page_count {
+        return Err(format!("History has only {page_count} page(s).").into());
+    }
+
+    let start = (page - 1) * PAGE_SIZE;
+    let mut message = format!("**Playback history — page {page}/{page_count}:**");
+    for entry in entries.iter().rev().skip(start).take(PAGE_SIZE) {
+        let outcome = match entry.outcome {
+            HistoryOutcome::Completed => "completed",
+            HistoryOutcome::Skipped => "skipped",
+            HistoryOutcome::Replaced => "replaced",
+        };
+        write!(
+            message,
+            "\n- `{}` — {outcome}",
+            lightweight_trim(entry.item.track.title.clone(), 120)
+        )?;
+    }
+    ctx.say(message).await?;
     Ok(())
 }
 

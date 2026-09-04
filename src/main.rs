@@ -123,6 +123,7 @@ fn build_commands() -> Vec<poise::Command<Data, Error>> {
         discord::commands::controls::play(),
         discord::commands::controls::queue(),
         discord::commands::controls::skip(),
+        discord::commands::controls::history(),
         discord::commands::controls::leave(),
         discord::commands::controls::loop_track(),
         discord::commands::controls::pause(),

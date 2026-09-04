@@ -20,7 +20,9 @@ use tracing::{debug, error, info};
 use crate::{
     discord::context::Error,
     jester::{
-        player::queue::{GuildQueue, PlaybackItem, QueueEntry, QueueTransition, RepeatMode},
+        player::queue::{
+            GuildQueue, HistoryEntry, PlaybackItem, QueueEntry, QueueTransition, RepeatMode,
+        },
         track::types::TrackInfo,
     },
 };
@@ -138,6 +140,15 @@ impl PlayerService {
                 .unwrap_or_default(),
             repeat_mode: queue.map(GuildQueue::repeat_mode).unwrap_or_default(),
         }
+    }
+
+    pub async fn history(&self, guild_id: GuildId) -> Vec<HistoryEntry> {
+        self.queues
+            .lock()
+            .await
+            .get(&guild_id)
+            .map(|queue| queue.history().iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     pub async fn remove_queue_entry(
