@@ -91,6 +91,47 @@ pub async fn autocomplete_track(
         .into_iter() // ...then re-iterate, matching the early return type
 }
 
+/// Offers upcoming queue entries, returning their one-based position as value.
+pub async fn autocomplete_queue_position(
+    ctx: PoiseContext<'_>,
+    partial: &str,
+) -> impl Iterator<Item = AutocompleteChoice> {
+    let guild_id = match require_guild(ctx) {
+        Ok(guild_id) => guild_id,
+        Err(error) => {
+            tracing::error!("Failed to get guild for queue autocomplete: {error}");
+            return Vec::new().into_iter();
+        }
+    };
+
+    let needle = partial.to_lowercase();
+    ctx.data()
+        .player
+        .queue_snapshot(guild_id)
+        .await
+        .upcoming
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let position = index + 1;
+            let display = format!(
+                "{position}. {}",
+                build_autocomplete_display(vec![
+                    entry.track.title,
+                    entry.track.artist,
+                    entry.track.origin
+                ])
+            );
+            (needle.is_empty()
+                || display.to_lowercase().contains(&needle)
+                || position.to_string().starts_with(&needle))
+            .then(|| AutocompleteChoice::new(display, position.to_string()))
+        })
+        .take(AUTOCOMPLETE_MAX_CHOICES)
+        .collect::<Vec<_>>()
+        .into_iter()
+}
+
 pub async fn autocomplete_incomplete_track(
     ctx: PoiseContext<'_>,
     partial: &str,

@@ -1,6 +1,6 @@
 use crate::{
     discord::{
-        autocomplete::autocomplete_track,
+        autocomplete::{autocomplete_queue_position, autocomplete_track},
         context::{Error, PoiseContext},
         voice::{ensure_vc, leave_vc, require_guild},
     },
@@ -74,14 +74,13 @@ pub async fn play(
     ),
     subcommand_required
 )]
+#[allow(clippy::unused_async)] // Poise command handlers are async, even for a subcommand-only group.
 pub async fn queue(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
 }
 
 #[poise::command(slash_command, rename = "show")]
-pub async fn queue_show(
-    ctx: PoiseContext<'_>,
-) -> Result<(), Error> {
+pub async fn queue_show(ctx: PoiseContext<'_>) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
     let snapshot = ctx.data().player.queue_snapshot(guild_id).await;
     let mut message = match snapshot.current {
@@ -148,7 +147,13 @@ pub async fn queue_next(
 }
 
 #[poise::command(slash_command, rename = "remove")]
-pub async fn queue_remove(ctx: PoiseContext<'_>, #[min = 1] position: usize) -> Result<(), Error> {
+pub async fn queue_remove(
+    ctx: PoiseContext<'_>,
+    #[autocomplete = "autocomplete_queue_position"] position: String,
+) -> Result<(), Error> {
+    let position: usize = position
+        .parse()
+        .map_err(|_| "Choose a queue entry from the autocomplete list.")?;
     let track = ctx
         .data()
         .player
