@@ -69,10 +69,19 @@ pub async fn play(
         "queue_remove",
         "queue_move",
         "queue_clear",
-        "queue_shuffle"
-    )
+        "queue_shuffle",
+        "queue_show",
+    ),
+    subcommand_required
 )]
-pub async fn queue(ctx: PoiseContext<'_>) -> Result<(), Error> {
+pub async fn queue(_ctx: PoiseContext<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "show")]
+pub async fn queue_show(
+    ctx: PoiseContext<'_>,
+) -> Result<(), Error> {
     let guild_id = require_guild(ctx)?;
     let snapshot = ctx.data().player.queue_snapshot(guild_id).await;
     let mut message = match snapshot.current {
