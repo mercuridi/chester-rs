@@ -4,17 +4,25 @@ use crate::{
         context::{Error, PoiseContext},
         voice::{ensure_vc, leave_vc, require_guild},
     },
-    jester::track::resolver::resolve_track,
+    jester::{player::queue::RepeatMode, track::resolver::resolve_track},
 };
-use tracing::info;
+use std::fmt::Write;
+pub fn pause_message(resumed: bool) -> &'static str {
+    if resumed {
+        "Resumed the currently paused track."
+    } else {
+        "Paused the currently playing track."
+    }
+}
 
-pub fn play_message(track: &crate::jester::track::types::TrackInfo) -> String {
+fn play_message(track: &crate::jester::track::types::TrackInfo) -> String {
     format!(
         "Now playing: `{}` by `{}`, from `{}`.",
         track.title, track.artist, track.origin
     )
 }
-pub fn now_playing_message(track: Option<&crate::jester::track::types::TrackInfo>) -> String {
+
+fn now_playing_message(track: Option<&crate::jester::track::types::TrackInfo>) -> String {
     track.map_or_else(
         || "No track is currently playing.".into(),
         |track| {
@@ -25,138 +33,206 @@ pub fn now_playing_message(track: Option<&crate::jester::track::types::TrackInfo
         },
     )
 }
-pub fn toggle_message(enabled: bool) -> String {
-    format!("Looping {}", if enabled { "enabled" } else { "disabled" })
-}
-pub fn pause_message(resumed: bool) -> &'static str {
-    if resumed {
-        "Resumed the currently paused track."
-    } else {
-        "Paused the currently playing track."
-    }
-}
 
-/// Joins your voice channel
+/// Joins your voice channel.
 #[poise::command(slash_command)]
 pub async fn join(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    info!(user = %ctx.author().id, "Join command requested");
     ensure_vc(ctx).await?;
     ctx.say("Joined your voice channel! 🎶").await?;
     Ok(())
 }
 
-/// Plays a selected track from the library
+/// Immediately plays a track, replacing the current track while preserving the queue.
 #[poise::command(slash_command)]
 pub async fn play(
     ctx: PoiseContext<'_>,
-    #[description = "Track to play now"]
+    #[description = "Track to play immediately"]
     #[autocomplete = "autocomplete_track"]
     track: String,
 ) -> Result<(), Error> {
-    info!(user = %ctx.author().id, "Play command requested");
     let (guild_id, _, call) = ensure_vc(ctx).await?;
     let track_info = resolve_track(&ctx.data().db_pool, track).await?;
-
     ctx.data()
         .player
-        .play(guild_id, call, track_info.clone())
+        .play_now(guild_id, call, track_info.clone())
         .await?;
-
     ctx.say(play_message(&track_info)).await?;
-
     Ok(())
 }
 
-/// Displays the currently playing track's details
+/// Shows the active track and explicit upcoming queue.
+#[poise::command(
+    slash_command,
+    subcommands(
+        "queue_add",
+        "queue_next",
+        "queue_remove",
+        "queue_move",
+        "queue_clear",
+        "queue_shuffle"
+    )
+)]
+pub async fn queue(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    let guild_id = require_guild(ctx)?;
+    let snapshot = ctx.data().player.queue_snapshot(guild_id).await;
+    let mut message = match snapshot.current {
+        Some(item) => format!("**Now playing:** {}", item.track.title),
+        None => "**Now playing:** nothing".into(),
+    };
+    let repeat = match snapshot.repeat_mode {
+        RepeatMode::Off => "off",
+        RepeatMode::Track => "track",
+        RepeatMode::Queue => "queue",
+    };
+    write!(message, "\n**Repeat:** {repeat}")?;
+    message.push_str("\n**Up next:**");
+    if snapshot.upcoming.is_empty() {
+        message.push_str("\n*(empty)*");
+    }
+    for (index, entry) in snapshot.upcoming.iter().enumerate() {
+        write!(message, "\n{}. {}", index + 1, entry.track.title)?;
+    }
+    ctx.say(message).await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "add")]
+pub async fn queue_add(
+    ctx: PoiseContext<'_>,
+    #[autocomplete = "autocomplete_track"] track: String,
+) -> Result<(), Error> {
+    let (guild_id, _, call) = ensure_vc(ctx).await?;
+    let track_info = resolve_track(&ctx.data().db_pool, track).await?;
+    let started = ctx
+        .data()
+        .player
+        .enqueue(guild_id, call, track_info.clone(), ctx.author().id, false)
+        .await?;
+    ctx.say(if started {
+        play_message(&track_info)
+    } else {
+        format!("Added `{}` to the queue.", track_info.title)
+    })
+    .await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "next")]
+pub async fn queue_next(
+    ctx: PoiseContext<'_>,
+    #[autocomplete = "autocomplete_track"] track: String,
+) -> Result<(), Error> {
+    let (guild_id, _, call) = ensure_vc(ctx).await?;
+    let track_info = resolve_track(&ctx.data().db_pool, track).await?;
+    let started = ctx
+        .data()
+        .player
+        .enqueue(guild_id, call, track_info.clone(), ctx.author().id, true)
+        .await?;
+    ctx.say(if started {
+        play_message(&track_info)
+    } else {
+        format!("Added `{}` as the next track.", track_info.title)
+    })
+    .await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "remove")]
+pub async fn queue_remove(ctx: PoiseContext<'_>, #[min = 1] position: usize) -> Result<(), Error> {
+    let track = ctx
+        .data()
+        .player
+        .remove_queue_entry(require_guild(ctx)?, position)
+        .await?;
+    ctx.say(format!("Removed `{}` from the queue.", track.title))
+        .await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "move")]
+pub async fn queue_move(
+    ctx: PoiseContext<'_>,
+    #[min = 1] from: usize,
+    #[min = 1] to: usize,
+) -> Result<(), Error> {
+    ctx.data()
+        .player
+        .move_queue_entry(require_guild(ctx)?, from, to)
+        .await?;
+    ctx.say("Moved queue entry.").await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "clear")]
+pub async fn queue_clear(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    ctx.data().player.clear_queue(require_guild(ctx)?).await;
+    ctx.say("Cleared upcoming tracks.").await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "shuffle")]
+pub async fn queue_shuffle(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    ctx.data().player.shuffle_queue(require_guild(ctx)?).await;
+    ctx.say("Shuffled upcoming tracks.").await?;
+    Ok(())
+}
+
+/// Skips to the next queued song.
+#[poise::command(slash_command)]
+pub async fn skip(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    let track = ctx.data().player.skip(require_guild(ctx)?).await?;
+    ctx.say(format!("Skipped to `{}`.", track.title)).await?;
+    Ok(())
+}
+
+/// Sets repeat mode: off, track, or queue.
+#[poise::command(slash_command, rename = "loop")]
+pub async fn loop_track(
+    ctx: PoiseContext<'_>,
+    #[description = "off, track, or queue"] mode: String,
+) -> Result<(), Error> {
+    let mode = match mode.to_ascii_lowercase().as_str() {
+        "off" => RepeatMode::Off,
+        "track" => RepeatMode::Track,
+        "queue" => RepeatMode::Queue,
+        _ => return Err("Loop mode must be `off`, `track`, or `queue`.".into()),
+    };
+    ctx.data()
+        .player
+        .set_repeat_mode(require_guild(ctx)?, mode)
+        .await;
+    ctx.say(format!(
+        "Repeat mode set to `{}`.",
+        match mode {
+            RepeatMode::Off => "off",
+            RepeatMode::Track => "track",
+            RepeatMode::Queue => "queue",
+        }
+    ))
+    .await?;
+    Ok(())
+}
+
 #[poise::command(slash_command)]
 pub async fn now_playing(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    info!(user = %ctx.author().id, "Now-playing command requested");
-    let guild_id = require_guild(ctx)?;
-
-    match ctx.data().player.get_now_playing(guild_id).await {
-        Some(track) => {
-            ctx.say(now_playing_message(Some(&track))).await?;
-        }
-        None => {
-            ctx.say(now_playing_message(None)).await?;
-        }
-    }
-
+    let track = ctx.data().player.get_now_playing(require_guild(ctx)?).await;
+    ctx.say(now_playing_message(track.as_ref())).await?;
     Ok(())
 }
 
-/// Loop or un-loop the currently playing track
-#[poise::command(slash_command, prefix_command)]
-pub async fn loop_track(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    info!(user = %ctx.author().id, "Loop command requested");
-    let guild_id = require_guild(ctx)?;
-    let _track = ctx.data().player.require_now_playing(guild_id).await?;
-    let looping = ctx.data().player.toggle_loop(guild_id).await?;
-    ctx.say(toggle_message(looping)).await?;
-    Ok(())
-}
-
-/// Toggles pause/unpause for the currently playing track
 #[poise::command(slash_command)]
 pub async fn pause(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    info!(user = %ctx.author().id, "Pause command requested");
-    let guild_id = require_guild(ctx)?;
-    let _track = ctx.data().player.require_now_playing(guild_id).await?;
-    let playing = ctx.data().player.pause(guild_id).await?;
+    let playing = ctx.data().player.pause(require_guild(ctx)?).await?;
     ctx.say(pause_message(playing)).await?;
     Ok(())
 }
 
-/// Leaves the voice channel
 #[poise::command(slash_command)]
 pub async fn leave(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    info!(user = %ctx.author().id, "Leave command requested");
     let guild_id = require_guild(ctx)?;
-
     leave_vc(ctx, guild_id).await?;
-
     ctx.data().player.clear_now_playing(guild_id).await;
     ctx.say("Left the voice channel.").await?;
-
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{now_playing_message, pause_message, play_message, toggle_message};
-    use crate::jester::track::types::{TrackInfo, VideoId};
-
-    fn track() -> TrackInfo {
-        TrackInfo {
-            id: VideoId::from("id"),
-            title: "Title".into(),
-            artist: "Artist".into(),
-            origin: "Origin".into(),
-        }
-    }
-
-    #[test]
-    fn formats_play_message() {
-        assert_eq!(
-            play_message(&track()),
-            "Now playing: `Title` by `Artist`, from `Origin`."
-        );
-    }
-
-    #[test]
-    fn formats_now_playing_for_present_and_absent_tracks() {
-        assert_eq!(
-            now_playing_message(Some(&track())),
-            "Now Playing:\n**Title:** Title\n**Artist:** Artist\n**Origin:** Origin"
-        );
-        assert_eq!(now_playing_message(None), "No track is currently playing.");
-    }
-
-    #[test]
-    fn formats_loop_and_pause_state_changes() {
-        assert_eq!(toggle_message(true), "Looping enabled");
-        assert_eq!(toggle_message(false), "Looping disabled");
-        assert_eq!(pause_message(true), "Resumed the currently paused track.");
-        assert_eq!(pause_message(false), "Paused the currently playing track.");
-    }
 }

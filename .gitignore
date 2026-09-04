@@ -4,6 +4,8 @@
 yt-dlp
 cookies.txt
 
+logs/
+
 # rebuild roadmap
 docs/rebuild-plan
 

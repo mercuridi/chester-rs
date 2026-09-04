@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use sqlx::SqlitePool;
 
 use crate::{
@@ -8,7 +10,7 @@ use crate::{
 // Defines user data; this is always available in the Serenity context of an invocation
 pub struct Data {
     pub db_pool: SqlitePool,
-    pub player: PlayerService,
+    pub player: Arc<PlayerService>,
     pub recorder: RecorderManager,
     pub config: Config,
     pub chronicle: Chronicle,
@@ -19,7 +21,7 @@ impl Data {
         let paths = config.paths.clone();
         Self {
             db_pool,
-            player: PlayerService::new(paths.audio_dir),
+            player: Arc::new(PlayerService::new(paths.audio_dir)),
             recorder: RecorderManager::new(paths.recordings_dir),
             config,
             chronicle,
