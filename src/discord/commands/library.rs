@@ -9,7 +9,7 @@ use crate::jester::db::repository::{
 /// Top-level library command
 #[poise::command(
     slash_command,
-    subcommands("all", "artist", "origin", "tags", "incomplete")
+    subcommands("all", "artist", "origin", "taxonomy", "incomplete")
 )]
 #[allow(clippy::unused_async)]
 pub async fn library(_ctx: PoiseContext<'_>) -> Result<(), Error> {
@@ -34,10 +34,10 @@ async fn origin(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "origin").await
 }
 
-/// Shows the library grouped by tags
+/// Shows the library grouped by taxonomy values and custom labels
 #[poise::command(slash_command)]
-async fn tags(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    library_dynamic(ctx, "tags").await
+async fn taxonomy(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    library_dynamic(ctx, "taxonomy").await
 }
 
 /// Shows tracks with incomplete metadata
@@ -54,7 +54,7 @@ async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error>
     let (raw_data, grouped) = match mode {
         "artist" => (fetch_library_by_artist(db_pool).await?, true),
         "origin" => (fetch_library_by_origin(db_pool).await?, true),
-        "tags" => (fetch_library_by_tag(db_pool).await?, true),
+        "taxonomy" => (fetch_library_by_tag(db_pool).await?, true),
         "incomplete" => (fetch_library_by_incomplete(db_pool).await?, false),
         _ => (fetch_library_all(db_pool).await?, false),
     };
@@ -134,7 +134,7 @@ fn format_flat(rows: Vec<Vec<String>>) -> Vec<String> {
         .collect()
 }
 
-/// Grouped format used by /library artist, /library origin, /library tags.
+/// Grouped format used by /library artist, /library origin, /library taxonomy.
 ///
 /// ```
 /// ── Group Name

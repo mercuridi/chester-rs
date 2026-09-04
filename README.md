@@ -195,10 +195,10 @@ The main application commands are:
 | `/join`, `/leave` | Join or leave the caller's voice channel |
 | `/play`, `/pause`, `/loop_track`, `/now_playing` | Control playback |
 | `/download` | Add a YouTube track to the library |
-| `/library all`, `artist`, `origin`, `tags`, `incomplete` | Browse the library |
+| `/library all`, `artist`, `origin`, `taxonomy`, `incomplete` | Browse the library |
 | `/set_metadata title`, `artist`, `origin` | Edit track metadata |
 | `/fix` | Fill missing metadata |
-| `/add_tag`, `/reset_tags` | Manage track tags |
+| `/set_taxonomy`, `/add_texture`, `/add_environment`, `/add_label`, `/reset_taxonomy` | Manage controlled taxonomy and custom labels |
 | `/recording start`, `/recording stop` | Record a voice session; start accepts an optional initial scene |
 | `/chronicle scene` | Add a scene marker to an active recording |
 | `/transcript generate`, `/transcript show` | Create or display a transcript; generation can ignore scene markers |
@@ -206,17 +206,6 @@ The main application commands are:
 | `/help` | Show command help |
 
 Chronicle recording and transcription produce files below `.chronicle/recordings/<guild-id>/`. Obtain consent from voice participants before recording. Participants in the recording will be notified that they are being recorded.
-
-## Library downloads and migration
-
-The bot automatically synchronizes tracks in the Jester database at startup. To manually download every track with the helper script:
-
-```bash
-./download.sh
-./download.sh --parallel
-```
-
-The script reads IDs from `data/jester.sqlite3`, writes MP3 files to `audio/`, and skips existing files. Parallel mode uses eight jobs; edit `PARALLEL_JOBS` in the script if the host or network needs a lower limit.
 
 ## Troubleshooting
 
@@ -227,6 +216,22 @@ The script reads IDs from `data/jester.sqlite3`, writes MP3 files to `audio/`, a
 - **`Failed to read config file`:** ensure `.chronicle/config.toml` exists and is valid TOML.
 - **No slash commands:** run `>register` and register commands in guild.
 - **Startup fails around SQLite:** verify that the configured database parent directory is writable and that the database URLs point to valid SQLite locations. Chester creates missing database files and schemas automatically.
+
+## Music taxonomy
+
+Jester classifies tracks with a small controlled taxonomy intended for quick, consistent TTRPG music selection. A track may remain unclassified after download, but `/set_taxonomy` assigns exactly one primary mood and intensity, plus an optional scene function. These are the primary axes intended for predictable playlist filtering; for example, an `eerie`, `subtle`, `exploratory` selection can return only tracks matching those values.
+
+Textures and environments are controlled multi-value annotations. Use them when a track can suit more than one sound or location: a cue may be both `orchestral` and `choral`, or both `desert` and `ruined`. Custom labels are free-form and are useful for campaign-specific references such as places, NPCs, or factions; they are not part of the controlled playlist taxonomy.
+
+Use `/set_taxonomy` to set mood, intensity, and function; `/add_texture` and `/add_environment` to append controlled values; `/add_label` to append a custom label; and `/reset_taxonomy` to clear all of a track's taxonomy, textures, environments, and labels. `/library taxonomy` groups the collection by every controlled value and custom label.
+
+### Allowed values
+
+- Moods: `serene`, `warm`, `playful`, `whimsical`, `hopeful`, `wistful`, `somber`, `mysterious`, `eerie`, `ominous`, `menacing`, `tense`, `anxious`, `majestic`, `chaotic`, `triumphant`
+- Intensities: `subtle`, `measured`, `driving`, `fierce`
+- Functions: `exploratory`, `investigative`, `traveling`, `social`, `romantic`, `combative`, `climactic`, `stealthy`, `ceremonial`, `celebratory`, `contemplative`, `conversational`
+- Textures: `ambient`, `acoustic`, `orchestral`, `electronic`, `synthetic`, `folk`, `piano`, `percussive`, `choral`, `vocal`, `minimalist`, `ethereal`, `dissonant`
+- Environments: `desert`, `forest`, `tundra`, `mountainous`, `coastal`, `oceanic`, `swampy`, `urban`, `rural`, `underground`, `ruined`, `sacred`, `otherworldly`, `celestial`, `infernal`
 
 ## License
 

@@ -26,6 +26,7 @@ transcript.md
 *.json
 *.webm
 *.opus
+*.txt
 
 libs
 cache

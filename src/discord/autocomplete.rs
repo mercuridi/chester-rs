@@ -7,6 +7,7 @@ use crate::discord::context::PoiseContext;
 use crate::discord::voice::require_guild;
 use crate::jester::db::metadata::MetadataKind;
 use crate::jester::db::repository::{search_incomplete_tracks, search_metadata, search_tracks};
+use crate::jester::db::taxonomy::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES};
 use crate::utils::format::{build_autocomplete_display, lightweight_trim};
 
 fn autocomplete_limit() -> i64 {
@@ -27,11 +28,52 @@ pub async fn autocomplete_origin(
     autocomplete_metadata(ctx, partial, MetadataKind::Origin).await
 }
 
-pub async fn autocomplete_tag(
-    ctx: PoiseContext<'_>,
+async fn autocomplete_taxonomy(
+    partial: &str,
+    values: &'static [&'static str],
+) -> impl Iterator<Item = String> {
+    let needle = partial.to_lowercase();
+    values
+        .iter()
+        .filter(|value| value.contains(&needle))
+        .map(|value| (*value).to_string())
+        .collect::<Vec<_>>()
+        .into_iter()
+}
+
+pub async fn autocomplete_mood(
+    _ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = String> {
-    autocomplete_metadata(ctx, partial, MetadataKind::Tag).await
+    autocomplete_taxonomy(partial, MOODS).await
+}
+
+pub async fn autocomplete_intensity(
+    _ctx: PoiseContext<'_>,
+    partial: &str,
+) -> impl Iterator<Item = String> {
+    autocomplete_taxonomy(partial, INTENSITIES).await
+}
+
+pub async fn autocomplete_function(
+    _ctx: PoiseContext<'_>,
+    partial: &str,
+) -> impl Iterator<Item = String> {
+    autocomplete_taxonomy(partial, FUNCTIONS).await
+}
+
+pub async fn autocomplete_texture(
+    _ctx: PoiseContext<'_>,
+    partial: &str,
+) -> impl Iterator<Item = String> {
+    autocomplete_taxonomy(partial, TEXTURES).await
+}
+
+pub async fn autocomplete_environment(
+    _ctx: PoiseContext<'_>,
+    partial: &str,
+) -> impl Iterator<Item = String> {
+    autocomplete_taxonomy(partial, ENVIRONMENTS).await
 }
 
 async fn autocomplete_metadata(
