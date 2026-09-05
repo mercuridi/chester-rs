@@ -30,7 +30,7 @@ pub async fn autocomplete_origin(
     autocomplete_metadata(ctx, partial, MetadataKind::Origin).await
 }
 
-async fn autocomplete_taxonomy(
+fn autocomplete_taxonomy(
     partial: &str,
     values: &'static [&'static str],
 ) -> impl Iterator<Item = String> {
@@ -47,35 +47,35 @@ pub async fn autocomplete_mood(
     _ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = String> {
-    autocomplete_taxonomy(partial, MOODS).await
+    autocomplete_taxonomy(partial, MOODS)
 }
 
 pub async fn autocomplete_intensity(
     _ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = String> {
-    autocomplete_taxonomy(partial, INTENSITIES).await
+    autocomplete_taxonomy(partial, INTENSITIES)
 }
 
 pub async fn autocomplete_function(
     _ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = String> {
-    autocomplete_taxonomy(partial, FUNCTIONS).await
+    autocomplete_taxonomy(partial, FUNCTIONS)
 }
 
 pub async fn autocomplete_texture(
     _ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = String> {
-    autocomplete_taxonomy(partial, TEXTURES).await
+    autocomplete_taxonomy(partial, TEXTURES)
 }
 
 pub async fn autocomplete_environment(
     _ctx: PoiseContext<'_>,
     partial: &str,
 ) -> impl Iterator<Item = String> {
-    autocomplete_taxonomy(partial, ENVIRONMENTS).await
+    autocomplete_taxonomy(partial, ENVIRONMENTS)
 }
 
 pub async fn autocomplete_mix_filter(

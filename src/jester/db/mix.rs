@@ -1,3 +1,5 @@
+use std::fmt::Write as _;
+
 use sqlx::SqlitePool;
 
 use crate::{
@@ -45,7 +47,17 @@ pub fn parse_tag(raw: &str) -> Result<MixTag, Error> {
         return Err(format!("Empty mix tag in `{raw}`.").into());
     }
 
-    let tag = match namespace.map(str::trim) {
+    let namespace = match namespace.map(str::trim) {
+        Some(namespace) => Some(namespace),
+        None if MOODS.contains(&value.as_str()) => Some("mood"),
+        None if INTENSITIES.contains(&value.as_str()) => Some("intensity"),
+        None if FUNCTIONS.contains(&value.as_str()) => Some("function"),
+        None if TEXTURES.contains(&value.as_str()) => Some("texture"),
+        None if ENVIRONMENTS.contains(&value.as_str()) => Some("environment"),
+        None => None,
+    };
+
+    let tag = match namespace {
         Some("mood") if MOODS.contains(&value.as_str()) => MixTag::Mood(value),
         Some("intensity") if INTENSITIES.contains(&value.as_str()) => MixTag::Intensity(value),
         Some("function") if FUNCTIONS.contains(&value.as_str()) => MixTag::Function(value),
@@ -58,11 +70,6 @@ pub fn parse_tag(raw: &str) -> Result<MixTag, Error> {
             )
             .into());
         }
-        None if MOODS.contains(&value.as_str()) => MixTag::Mood(value),
-        None if INTENSITIES.contains(&value.as_str()) => MixTag::Intensity(value),
-        None if FUNCTIONS.contains(&value.as_str()) => MixTag::Function(value),
-        None if TEXTURES.contains(&value.as_str()) => MixTag::Texture(value),
-        None if ENVIRONMENTS.contains(&value.as_str()) => MixTag::Environment(value),
         None => {
             return Err(format!(
                 "Unknown mix tag `{raw}`. Custom labels must use the `label=` prefix."
@@ -123,10 +130,10 @@ fn append_condition(sql: &mut String, values: &mut Vec<String>, tag: &MixTag, ex
         MixTag::Mood(value) => append_scalar(sql, values, "tracks.mood", value, exclude),
         MixTag::Intensity(value) => append_scalar(sql, values, "tracks.intensity", value, exclude),
         MixTag::Function(value) => {
-            append_scalar(sql, values, "tracks.function_tag", value, exclude)
+            append_scalar(sql, values, "tracks.function_tag", value, exclude);
         }
         MixTag::Texture(value) => {
-            append_exists(sql, values, "track_textures", "texture", value, exclude)
+            append_exists(sql, values, "track_textures", "texture", value, exclude);
         }
         MixTag::Environment(value) => {
             append_exists(
@@ -150,9 +157,9 @@ fn append_scalar(
     exclude: bool,
 ) {
     if exclude {
-        sql.push_str(&format!("COALESCE({column}, '') <> ?"));
+        let _ = write!(sql, "COALESCE({column}, '') <> ?");
     } else {
-        sql.push_str(&format!("{column} = ?"));
+        let _ = write!(sql, "{column} = ?");
     }
     values.push(value.to_string());
 }
@@ -168,9 +175,10 @@ fn append_exists(
     if exclude {
         sql.push_str("NOT ");
     }
-    sql.push_str(&format!(
+    let _ = write!(
+        sql,
         "EXISTS (SELECT 1 FROM {table} WHERE track_id = tracks.id AND LOWER({column}) = LOWER(?))"
-    ));
+    );
     values.push(value.to_string());
 }
 
@@ -180,16 +188,17 @@ mod tests {
 
     #[test]
     fn parses_bare_controlled_values_and_explicit_labels() {
-        assert_eq!(parse_tag(" eerie ").unwrap(), MixTag::Mood("eerie".into()));
-        assert_eq!(
-            parse_tag("label=Baron").unwrap(),
-            MixTag::Label("baron".into())
-        );
-        assert_eq!(
+        assert!(matches!(
+            parse_tag(" eerie "),
+            Ok(MixTag::Mood(value)) if value == "eerie"
+        ));
+        assert!(matches!(
+            parse_tag("label=Baron"),
+            Ok(MixTag::Label(value)) if value == "baron"
+        ));
+        assert!(
             parse_filter(Some("eerie, texture=choral, label=night"))
-                .unwrap()
-                .len(),
-            3
+                .is_ok_and(|tags| tags.len() == 3)
         );
     }
 
