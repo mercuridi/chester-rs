@@ -121,6 +121,7 @@ fn build_commands() -> Vec<poise::Command<Data, Error>> {
         discord::commands::admin::register(),
         discord::commands::controls::join(),
         discord::commands::controls::play(),
+        discord::commands::controls::mix(),
         discord::commands::controls::queue(),
         discord::commands::controls::skip(),
         discord::commands::controls::history(),

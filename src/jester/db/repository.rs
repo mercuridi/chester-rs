@@ -270,6 +270,25 @@ pub async fn search_metadata(
         .map_err(|e| format!("Autocomplete metadata query failed: {e}").into())
 }
 
+pub async fn search_labels(
+    db_pool: &SqlitePool,
+    needle: &str,
+    limit: i64,
+) -> Result<Vec<String>, Error> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT label
+         FROM track_labels
+         WHERE LOWER(label) LIKE LOWER(?1)
+         ORDER BY label
+         LIMIT ?2",
+    )
+    .bind(format!("%{needle}%"))
+    .bind(limit)
+    .fetch_all(db_pool)
+    .await
+    .map_err(|e| format!("Autocomplete label query failed: {e}").into())
+}
+
 pub async fn search_tracks(
     db_pool: &SqlitePool,
     needle: &str,

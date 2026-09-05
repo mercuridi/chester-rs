@@ -6,7 +6,9 @@ use crate::discord::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGT
 use crate::discord::context::PoiseContext;
 use crate::discord::voice::require_guild;
 use crate::jester::db::metadata::MetadataKind;
-use crate::jester::db::repository::{search_incomplete_tracks, search_metadata, search_tracks};
+use crate::jester::db::repository::{
+    search_incomplete_tracks, search_labels, search_metadata, search_tracks,
+};
 use crate::jester::db::taxonomy::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES};
 use crate::utils::format::{build_autocomplete_display, lightweight_trim};
 
@@ -74,6 +76,70 @@ pub async fn autocomplete_environment(
     partial: &str,
 ) -> impl Iterator<Item = String> {
     autocomplete_taxonomy(partial, ENVIRONMENTS).await
+}
+
+pub async fn autocomplete_mix_filter(
+    ctx: PoiseContext<'_>,
+    partial: &str,
+) -> impl Iterator<Item = AutocompleteChoice> {
+    let (prefix, current) = partial.rsplit_once(',').map_or_else(
+        || (String::new(), partial),
+        |(prefix, current)| (format!("{}, ", prefix.trim()), current),
+    );
+    let current = current.trim().to_lowercase();
+    let candidates = mix_filter_candidates(ctx, &current).await;
+
+    candidates
+        .into_iter()
+        .map(|candidate| {
+            let value = format!("{prefix}{candidate}");
+            AutocompleteChoice::new(value.clone(), value)
+        })
+        .take(AUTOCOMPLETE_MAX_CHOICES)
+        .collect::<Vec<_>>()
+        .into_iter()
+}
+
+async fn mix_filter_candidates(ctx: PoiseContext<'_>, partial: &str) -> Vec<String> {
+    let (namespace, needle) = partial
+        .split_once('=')
+        .map_or((None, partial), |(kind, needle)| (Some(kind), needle));
+    let needle = needle.trim();
+
+    if namespace == Some("label") {
+        return search_labels(&ctx.data().db_pool, needle, autocomplete_limit())
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|label| format!("label={label}"))
+            .collect();
+    }
+
+    let values: &[&str] = match namespace {
+        Some("mood") => MOODS,
+        Some("intensity") => INTENSITIES,
+        Some("function") => FUNCTIONS,
+        Some("texture") => TEXTURES,
+        Some("environment") => ENVIRONMENTS,
+        Some(_) => &[],
+        None => {
+            return [MOODS, INTENSITIES, FUNCTIONS, TEXTURES, ENVIRONMENTS]
+                .into_iter()
+                .flatten()
+                .filter(|value| value.contains(needle))
+                .map(ToString::to_string)
+                .collect();
+        }
+    };
+
+    values
+        .iter()
+        .filter(|value| value.contains(needle))
+        .map(|value| match namespace {
+            Some(namespace) => format!("{namespace}={value}"),
+            None => (*value).to_string(),
+        })
+        .collect()
 }
 
 async fn autocomplete_metadata(

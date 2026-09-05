@@ -1,10 +1,11 @@
 use crate::{
     discord::{
-        autocomplete::{autocomplete_queue_position, autocomplete_track},
+        autocomplete::{autocomplete_mix_filter, autocomplete_queue_position, autocomplete_track},
         context::{Error, PoiseContext},
         voice::{ensure_vc, leave_vc, require_guild},
     },
     jester::{
+        db::mix::{MIX_LIMIT, MixFilter, fetch_mix_tracks, parse_filter},
         player::queue::{HistoryOutcome, RepeatMode},
         track::resolver::resolve_track,
     },
@@ -61,6 +62,49 @@ pub async fn play(
         .play_now(guild_id, call, track_info.clone())
         .await?;
     ctx.say(play_message(&track_info)).await?;
+    Ok(())
+}
+
+/// Creates a shuffled mix from taxonomy values and labels.
+#[poise::command(slash_command)]
+pub async fn mix(
+    ctx: PoiseContext<'_>,
+    #[description = "Comma-separated tags to require, e.g. eerie,texture=orchestral"]
+    #[autocomplete = "autocomplete_mix_filter"]
+    include: Option<String>,
+    #[description = "Comma-separated tags to exclude, e.g. choral,label=boss"]
+    #[autocomplete = "autocomplete_mix_filter"]
+    exclude: Option<String>,
+) -> Result<(), Error> {
+    let filter = MixFilter {
+        include: parse_filter(include.as_deref())?,
+        exclude: parse_filter(exclude.as_deref())?,
+    };
+    let tracks = fetch_mix_tracks(&ctx.data().db_pool, &filter, MIX_LIMIT).await?;
+    if tracks.is_empty() {
+        ctx.say("No tracks matched those filters; the current queue was unchanged.")
+            .await?;
+        return Ok(());
+    }
+
+    let (guild_id, _, call) = ensure_vc(ctx).await?;
+    ctx.data().player.clear_queue(guild_id).await;
+    let count = tracks.len();
+    let next_track = tracks
+        .first()
+        .map(|track| format!("`{}` by `{}`", track.title, track.artist))
+        .ok_or("Mix unexpectedly contained no tracks.")?;
+    for track in tracks {
+        ctx.data()
+            .player
+            .enqueue(guild_id, call.clone(), track, ctx.author().id, false)
+            .await?;
+    }
+
+    ctx.say(format!(
+        "Created a shuffled mix of {count} track(s); replaced the upcoming queue.\nNext track: {next_track}."
+    ))
+    .await?;
     Ok(())
 }
 
