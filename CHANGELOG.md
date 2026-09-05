@@ -1,6 +1,25 @@
 # Changelog
 
-## [2.7.0] — 2026-08-30
+## [2.8.0] — 2026-09-05
+
+### Features
+
+- Mvp for queue system
+- Queue history command
+- Tagging taxonomy rework
+- Automix system based on database tagging
+
+
+### Bug Fixes
+
+- Log question and answer for chronicle
+- Improve LLM VRAM usage
+- Queue show moves to subcommand
+- Queue remove now autocompleted tracks in the queue
+- All tracks organised into new taxonomy
+- Clippy fixes
+
+## [v2.7.0] — 2026-08-30
 
 ### Features
 
