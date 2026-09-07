@@ -195,6 +195,7 @@ const CHARACTER_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::optional("life_status", ValueType::FixedEnum(&LIFE_STATUS)),
     FieldDefinition::optional("life_status_cause", ValueType::StringOrWikilink),
     FieldDefinition::optional("life_status_since", ValueType::String),
+    FieldDefinition::optional("appearances", ValueType::WikilinkList),
     FieldDefinition::optional("affiliations", ValueType::WikilinkList),
     FieldDefinition::optional("allies", ValueType::WikilinkList),
     FieldDefinition::optional("enemies", ValueType::WikilinkList),

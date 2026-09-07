@@ -489,7 +489,7 @@ mod tests {
             ),
             (
                 "character",
-                "race: '[[Human]]'\nrole: npc\nlife_status: alive\nlife_status_cause: old_age\nlife_status_since: \"1608\"\naffiliations: ['[[Guild]]']\nallies: ['[[Ada]]']\nenemies: ['[[Orc]]']\nparents: ['[[Parent]]']\nsiblings: ['[[Sibling]]']\nchildren: ['[[Child]]']\npartners: ['[[Partner]]']\nother_family: ['[[Family]]']\nlocation: '[[Northmere]]'\npatron_deities: ['[[Aurelia]]']\nbirthplace: '[[Northmere]]'\nbirth_year: \"1560\"\nnationality: Northmerian\nplayed_by: Player\npronouns: they/them\n",
+                "race: '[[Human]]'\nrole: npc\nlife_status: alive\nlife_status_cause: old_age\nlife_status_since: \"1608\"\nappearances: ['[[The Long Road]]']\naffiliations: ['[[Guild]]']\nallies: ['[[Ada]]']\nenemies: ['[[Orc]]']\nparents: ['[[Parent]]']\nsiblings: ['[[Sibling]]']\nchildren: ['[[Child]]']\npartners: ['[[Partner]]']\nother_family: ['[[Family]]']\nlocation: '[[Northmere]]'\npatron_deities: ['[[Aurelia]]']\nbirthplace: '[[Northmere]]'\nbirth_year: \"1560\"\nnationality: Northmerian\nplayed_by: Player\npronouns: they/them\n",
             ),
             (
                 "deity",
