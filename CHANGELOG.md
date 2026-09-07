@@ -1,6 +1,24 @@
 # Changelog
 
-## [2.9.0] — 2026-09-07
+## [2.10.0] — 2026-09-07
+
+### Features
+
+- Schema definition for frontmatter
+- Improved frontmatter parsing behaviour
+- Unknown field and enum value handling
+- Sqlite database models all frontmatter metadata
+- Testing for frontmatter handling
+
+
+### Bug Fixes
+
+- Searchable context expanded to tags
+- Schema validation at runtime with errors
+- Clippy fixes
+- Cargo fmt
+
+## [v2.9.0] — 2026-09-07
 
 ### Features
 
