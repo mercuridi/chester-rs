@@ -574,11 +574,13 @@ fn string_field<'a>(
     name: &str,
 ) -> Option<&'a str> {
     match metadata.fields.get(name) {
-        Some(crate::chronicle::indexer::frontmatter::MetadataValue::String(value)
+        Some(
+            crate::chronicle::indexer::frontmatter::MetadataValue::String(value)
             | crate::chronicle::indexer::frontmatter::MetadataValue::Date(value)
             | crate::chronicle::indexer::frontmatter::MetadataValue::FantasyDate(value)
             | crate::chronicle::indexer::frontmatter::MetadataValue::Wikilink(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::Enum(value)) => Some(value),
+            | crate::chronicle::indexer::frontmatter::MetadataValue::Enum(value),
+        ) => Some(value),
         _ => None,
     }
 }

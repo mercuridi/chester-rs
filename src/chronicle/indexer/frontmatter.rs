@@ -306,9 +306,7 @@ fn required_non_empty_string(
 fn required_string_value(fields: &BTreeMap<String, MetadataValue>, field: &str) -> Result<String> {
     match fields.get(field) {
         Some(
-            MetadataValue::String(value)
-            | MetadataValue::Date(value)
-            | MetadataValue::Enum(value),
+            MetadataValue::String(value) | MetadataValue::Date(value) | MetadataValue::Enum(value),
         ) => Ok(value.clone()),
         _ => bail!("Frontmatter field `{field}` must be a scalar string"),
     }
