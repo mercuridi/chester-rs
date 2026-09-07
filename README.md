@@ -9,7 +9,9 @@ This document describes a Linux deployment from an empty machine. Windows and ma
 - Chester itself is a Rust binary started from the repository root.
 - `data/jester.sqlite3` stores the local music library and metadata.
 - `audio/` stores downloaded MP3 files.
-- `data/chronicle.sqlite3` stores Chronicle's local index database.
+- `data/chronicle.index-v<version>.sqlite3` stores Chronicle's local derived index.
+  The configured `chronicle` database path is a base name; Chronicle adds its
+  index-format version and rebuilds into a fresh file when that version changes.
 - `.chronicle/` stores voice recordings and Chronicle configuration.
 - `corpus/` contains the documents indexed by Chronicle.
 - `yt-dlp` must be an executable file in the repository root. The bot does not search `PATH` for it.

@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use sqlx::{Row, sqlite::SqlitePool};
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct IndexedDocument {
@@ -50,7 +51,8 @@ impl IndexerDb {
     pub async fn open(path: &str) -> Result<Self> {
         register_sqlite_vec();
 
-        let pool = crate::database::pool::open_sqlite_pool(path, "Chronicle").await?;
+        let database_url = versioned_database_url(path);
+        let pool = crate::database::pool::open_sqlite_pool(&database_url, "Chronicle").await?;
 
         super::schema::initialise(&pool).await?;
 
@@ -408,6 +410,38 @@ impl IndexerDb {
     }
 }
 
+/// Returns the cache location for the current derived-index format.
+///
+/// The format is encoded in the filename rather than tracked inside `SQLite`:
+/// bumping `INDEX_FORMAT_VERSION` therefore always selects a fresh database.
+fn versioned_database_url(database_url: &str) -> String {
+    let Some(path_and_query) = database_url.strip_prefix("sqlite://") else {
+        return database_url.to_owned();
+    };
+    let (path, query) = path_and_query
+        .split_once('?')
+        .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
+    if path == ":memory:" {
+        return database_url.to_owned();
+    }
+
+    let path = Path::new(path);
+    let (Some(stem), Some(extension)) = (path.file_stem(), path.extension()) else {
+        return database_url.to_owned();
+    };
+    let versioned_filename = format!(
+        "{}.index-v{}.{}",
+        stem.to_string_lossy(),
+        super::schema::INDEX_FORMAT_VERSION,
+        extension.to_string_lossy()
+    );
+    let versioned_path = path.with_file_name(versioned_filename);
+    match query {
+        Some(query) => format!("sqlite://{}?{query}", versioned_path.display()),
+        None => format!("sqlite://{}", versioned_path.display()),
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 async fn write_metadata(
     connection: &mut sqlx::SqliteConnection,
@@ -654,6 +688,21 @@ mod tests {
             directory.path().join("chronicle.db").display()
         );
         Ok((directory, IndexerDb::open(&url).await?))
+    }
+
+    #[test]
+    fn versioned_database_filename_selects_the_current_index_format() {
+        assert_eq!(
+            versioned_database_url("sqlite:///data/chronicle.sqlite3?mode=rwc"),
+            format!(
+                "sqlite:///data/chronicle.index-v{}.sqlite3?mode=rwc",
+                super::super::schema::INDEX_FORMAT_VERSION
+            )
+        );
+        assert_eq!(
+            versioned_database_url("sqlite://:memory:"),
+            "sqlite://:memory:"
+        );
     }
 
     #[tokio::test]
