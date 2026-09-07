@@ -23,9 +23,9 @@ pub enum MetadataValue {
 ///
 /// `fields` is the complete normalized representation of declared fields.
 /// `unknown_fields` retains undeclared YAML values until the runtime schema is
-/// extended. The role and character_status fields are retained for the current
+/// extended. The `role` and `character_status` fields are retained for the current
 /// structured-query implementation and mirror values in `fields`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Metadata {
     pub id: String,
     pub note_type: String,
@@ -39,31 +39,13 @@ pub struct Metadata {
     pub role: Option<crate::chronicle::query::plan::CharacterRole>,
     pub character_status: Option<crate::chronicle::query::plan::CharacterStatus>,
     pub fields: BTreeMap<String, MetadataValue>,
+    #[allow(dead_code)]
     pub unknown_fields: BTreeMap<String, Value>,
-}
-
-impl Default for Metadata {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            note_type: String::new(),
-            aliases: Vec::new(),
-            tags: Vec::new(),
-            summary: String::new(),
-            status: String::new(),
-            visibility: String::new(),
-            created: String::new(),
-            updated: String::new(),
-            role: None,
-            character_status: None,
-            fields: BTreeMap::new(),
-            unknown_fields: BTreeMap::new(),
-        }
-    }
 }
 
 /// Missing frontmatter is ineligible; malformed frontmatter is an ingestion
 /// error. Unknown fields are preserved and warned about.
+#[allow(clippy::too_many_lines)]
 pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
     let source = source.trim_start_matches('\u{feff}');
     let mut lines = source.split_inclusive('\n');
@@ -219,7 +201,9 @@ fn parse_declared_field(
 
 fn parse_value(field: &FieldDefinition, raw: &Value) -> Result<MetadataValue> {
     match field.value_type {
-        ValueType::String => Ok(MetadataValue::String(required_yaml_string(raw)?)),
+        ValueType::String | ValueType::ExtensibleVocabulary => {
+            Ok(MetadataValue::String(required_yaml_string(raw)?))
+        }
         ValueType::StringList => Ok(MetadataValue::StringList(required_yaml_string_list(raw)?)),
         ValueType::Boolean => raw
             .as_bool()
@@ -254,7 +238,6 @@ fn parse_value(field: &FieldDefinition, raw: &Value) -> Result<MetadataValue> {
             );
             Ok(MetadataValue::Enum(value))
         }
-        ValueType::ExtensibleVocabulary => Ok(MetadataValue::String(required_yaml_string(raw)?)),
     }
 }
 
@@ -322,8 +305,11 @@ fn required_non_empty_string(
 
 fn required_string_value(fields: &BTreeMap<String, MetadataValue>, field: &str) -> Result<String> {
     match fields.get(field) {
-        Some(MetadataValue::String(value) | MetadataValue::Date(value)) => Ok(value.clone()),
-        Some(MetadataValue::Enum(value)) => Ok(value.clone()),
+        Some(
+            MetadataValue::String(value)
+            | MetadataValue::Date(value)
+            | MetadataValue::Enum(value),
+        ) => Ok(value.clone()),
         _ => bail!("Frontmatter field `{field}` must be a scalar string"),
     }
 }
@@ -541,11 +527,7 @@ mod tests {
                 .with_context(|| format!("vocabulary `{vocabulary_name}`"))?;
             for value in vocabulary.values {
                 let actual_type = if field == "type" { value } else { note_type };
-                let extra = if field == "type" {
-                    String::new()
-                } else if field == "status" {
-                    String::new()
-                } else if field == "visibility" {
+                let extra = if matches!(field, "type" | "status" | "visibility") {
                     String::new()
                 } else {
                     format!("{field}: {value}\n")
@@ -565,20 +547,23 @@ mod tests {
     }
 
     #[test]
-    fn reports_all_invalid_fixed_enum_values_in_one_note() {
+    fn reports_all_invalid_fixed_enum_values_in_one_note() -> Result<()> {
         let source = "---\nid: deity\ntype: deity\nstatus: imaginary\nvisibility: everyone\ncreated: 2026-09-07\nupdated: 2026-09-07\npantheon: demi-god\n---\n";
-        let error = parse(source).expect_err("invalid fixed enums must fail ingestion");
+        let Err(error) = parse(source) else {
+            bail!("invalid fixed enums must fail ingestion");
+        };
         let rendered = format!("{error:#}");
         assert!(rendered.contains("imaginary"));
         assert!(rendered.contains("everyone"));
         assert!(rendered.contains("demi-god"));
         assert!(rendered.contains("PANTHEON") || rendered.contains("pantheon"));
+        Ok(())
     }
 
     #[test]
     fn accepts_extensible_vocabularies() -> Result<()> {
         let source = "---\nid: event\ntype: event\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nevent_type: eclipse\n---\n";
-        let (metadata, _) = parse(&source)?.context("Expected parsed note")?;
+        let (metadata, _) = parse(source)?.context("Expected parsed note")?;
         assert_eq!(
             metadata.fields.get("event_type"),
             Some(&MetadataValue::String("eclipse".into()))

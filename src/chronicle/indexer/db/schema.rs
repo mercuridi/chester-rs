@@ -3,6 +3,7 @@ use sqlx::{Row, SqlitePool};
 
 const SCHEMA: &str = include_str!("../../../../database/chronicle.sql");
 
+#[allow(clippy::too_many_lines)]
 pub async fn initialise(pool: &SqlitePool) -> Result<()> {
     sqlx::query(SCHEMA)
         .execute(pool)
@@ -60,7 +61,7 @@ pub async fn initialise(pool: &SqlitePool) -> Result<()> {
                 "tags" => "TEXT NOT NULL DEFAULT '[]'",
                 "created" | "updated" => "TEXT NOT NULL DEFAULT ''",
                 "role" | "character_status" => "TEXT",
-                _ => unreachable!("field is listed above"),
+                _ => continue,
             };
             sqlx::query(&format!(
                 "ALTER TABLE note_metadata ADD COLUMN {field} {definition}"

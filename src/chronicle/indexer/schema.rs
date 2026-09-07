@@ -404,6 +404,7 @@ pub fn vocabulary_contains(vocabulary: &'static Vocabulary, value: &str) -> bool
     vocabulary.values.contains(&value)
 }
 
+#[cfg(test)]
 pub fn fixed_vocabulary(name: &str) -> Option<&'static Vocabulary> {
     match name {
         "document_types" => Some(&DOCUMENT_TYPES_VOCABULARY),
@@ -473,8 +474,11 @@ mod tests {
     }
 
     #[test]
-    fn distinguishes_fixed_and_extensible_vocabularies() {
-        let status = field_definition("location", "status").expect("status field");
+    fn distinguishes_fixed_and_extensible_vocabularies() -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        let status = field_definition("location", "status")
+            .context("status field must be defined for locations")?;
         assert_eq!(status.value_type, ValueType::FixedEnum(&STATUS));
         assert!(vocabulary_contains(&STATUS, "canon"));
         assert!(!vocabulary_contains(&STATUS, "future"));
@@ -483,6 +487,7 @@ mod tests {
             field_definition("event", "event_type").map(|field| field.value_type),
             Some(ValueType::ExtensibleVocabulary)
         );
+        Ok(())
     }
 
     #[test]
