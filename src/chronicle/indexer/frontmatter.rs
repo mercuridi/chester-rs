@@ -116,7 +116,7 @@ pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
         unknown_fields.insert(name.to_owned(), value.clone());
     }
 
-    if let Err(error) = validate_event_occurrence_conflict(mapping, &note_type) {
+    if let Err(error) = validate_event_occurrence_conflict(&fields, &note_type) {
         validation_errors.push(format!("event occurrence: {error:#}"));
     }
     if !validation_errors.is_empty() {
@@ -404,15 +404,22 @@ fn validate_wikilink(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_event_occurrence_conflict(mapping: &Mapping, note_type: &str) -> Result<()> {
+/// An optional field is omitted from `fields` when its YAML value is null or a
+/// blank string. Validate against that normalized representation so note
+/// templates may include all three occurrence keys without creating a false
+/// conflict.
+fn validate_event_occurrence_conflict(
+    fields: &BTreeMap<String, MetadataValue>,
+    note_type: &str,
+) -> Result<()> {
     if note_type != "event" {
         return Ok(());
     }
     let (field, conflicts) = schema::EVENT_OCCURRENCE_CONFLICT;
-    if mapping.contains_key(Value::String(field.to_owned())) {
+    if fields.contains_key(field) {
         for conflict in conflicts {
             ensure!(
-                !mapping.contains_key(Value::String((*conflict).to_owned())),
+                !fields.contains_key(*conflict),
                 "Frontmatter fields `{field}` and `{conflict}` cannot be used together"
             );
         }
@@ -606,6 +613,17 @@ mod tests {
     fn rejects_conflicting_event_dates() {
         let source = "---\nid: event\ntype: event\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\noccurred: 418 NY\noccurred_start: 418 NY\n---\n";
         assert!(parse(source).is_err());
+    }
+
+    #[test]
+    fn accepts_empty_event_occurrence_template_fields() -> Result<()> {
+        let source = "---\nid: event\ntype: event\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\noccurred: \"\"\noccurred_start:\noccurred_end: \"  \"\n---\n";
+
+        let (metadata, _) = parse(source)?.context("Expected parsed note")?;
+        assert!(!metadata.fields.contains_key("occurred"));
+        assert!(!metadata.fields.contains_key("occurred_start"));
+        assert!(!metadata.fields.contains_key("occurred_end"));
+        Ok(())
     }
 
     #[test]
