@@ -110,7 +110,7 @@ impl Indexer {
         }
     }
 
-    #[expect(dead_code, reason = "dependency injection seam for higher-level tests")]
+    #[cfg(test)]
     pub fn with_embedding_model(
         root: PathBuf,
         db: IndexerDb,
@@ -161,13 +161,23 @@ impl Indexer {
             seen_paths.insert(path.clone());
 
             if let Some(indexed) = indexed_by_path.get(path.as_str()) {
-                if indexed.content_hash
-                    == index_fingerprint(
+                let fingerprint =
+                    index_fingerprint(&document, self.max_chunk_tokens, self.chunk_overlap_tokens);
+                let unchanged = if indexed.content_hash == fingerprint {
+                    true
+                } else {
+                    let chunks = chunker::chunk::chunk(
                         &document,
+                        self.embedder.chunking_tokenizer(),
                         self.max_chunk_tokens,
                         self.chunk_overlap_tokens,
-                    )
-                {
+                    )?;
+                    self.db.chunks_match(indexed.id, &chunks).await?
+                };
+                if unchanged {
+                    self.db
+                        .refresh_metadata(indexed.id, &fingerprint, &document.metadata)
+                        .await?;
                     stats.unchanged += 1;
                     continue;
                 }
@@ -390,6 +400,91 @@ fn index_fingerprint(
 mod tests {
     use super::*;
     use tokenizers::Token;
+
+    struct CountingEmbedder {
+        tokenizer: tokenizers::Tokenizer,
+        batches: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+    impl EmbeddingModel for CountingEmbedder {
+        fn chunking_tokenizer(&self) -> &tokenizers::Tokenizer {
+            &self.tokenizer
+        }
+        fn encode(&self, text: &str) -> Result<Encoding> {
+            self.tokenizer
+                .encode(text, true)
+                .map_err(|e| anyhow::anyhow!("{e}"))
+        }
+        fn embed_encodings(&self, encodings: &[Encoding]) -> Result<Vec<Vec<f32>>> {
+            self.batches
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![
+                vec![0.0; super::super::embedder::EMBEDDING_DIMENSIONS];
+                encodings.len()
+            ])
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_backfill_and_changes_reuse_embeddings_and_remove_noncanon_notes() -> Result<()>
+    {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokenizers::{models::wordlevel::WordLevel, pre_tokenizers::whitespace::Whitespace};
+        let temp = tempfile::tempdir()?;
+        let corpus = temp.path().join("corpus");
+        std::fs::create_dir(&corpus)?;
+        let path = corpus.join("Ada.md");
+        let source = "---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\nrole: npc\ncharacter_status: alive\n---\nAda tends a garden.\n";
+        std::fs::write(&path, source)?;
+        let model = WordLevel::builder()
+            .vocab([("[UNK]".into(), 0)].into_iter().collect())
+            .unk_token("[UNK]".into())
+            .build()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut tokenizer = tokenizers::Tokenizer::new(model);
+        tokenizer.with_pre_tokenizer(Some(Whitespace {}));
+        let batches = Arc::new(AtomicUsize::new(0));
+        let db = IndexerDb::open(&format!(
+            "sqlite://{}",
+            temp.path().join("test.sqlite3").display()
+        ))
+        .await?;
+        let indexer = Indexer::with_embedding_model(
+            corpus,
+            db.clone(),
+            Box::new(CountingEmbedder {
+                tokenizer,
+                batches: batches.clone(),
+            }),
+            128,
+            0,
+        );
+        indexer.index().await?;
+        let initial_batches = batches.load(Ordering::SeqCst);
+        assert!(initial_batches > 0);
+        let docs = db.all_documents().await?;
+        let (mut metadata, _) = super::super::frontmatter::parse(source)?.context("note")?;
+        // Simulate an existing index whose new metadata columns have not been populated.
+        metadata.role = None;
+        db.refresh_metadata(docs[0].id, &docs[0].content_hash, &metadata)
+            .await?;
+        assert_eq!(indexer.index().await?.unchanged, 1);
+        let plan = crate::chronicle::query::planner::parse(
+            r#"{"operation":"count","note_type":"character","filters":{"role":"npc"}}"#,
+        )?;
+        assert_eq!(db.execute_plan(&plan).await?.total, 1);
+        std::fs::write(&path, source.replace("role: npc", "role: pc"))?;
+        assert_eq!(indexer.index().await?.unchanged, 1);
+        assert_eq!(db.execute_plan(&plan).await?.total, 0);
+        assert_eq!(batches.load(Ordering::SeqCst), initial_batches);
+        std::fs::write(&path, source.replace("status: canon", "status: draft"))?;
+        assert_eq!(indexer.index().await?.removed, 1);
+        assert!(!db.has_chunks().await?);
+        assert!(db.search_lexical("garden", 10).await?.is_empty());
+        Ok(())
+    }
 
     fn prepared_chunk(index: usize, text: &str, embedding: Option<Vec<f32>>) -> PreparedChunk {
         PreparedChunk {

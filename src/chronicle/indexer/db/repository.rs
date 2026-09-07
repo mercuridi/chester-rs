@@ -30,6 +30,18 @@ pub struct SearchResult {
     pub distance: f32,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct StructuredNote {
+    pub id: String,
+    pub title: String,
+}
+#[derive(Debug, serde::Serialize)]
+pub struct StructuredResult {
+    pub total: i64,
+    pub notes: Vec<StructuredNote>,
+}
+
+#[derive(Clone)]
 pub struct IndexerDb {
     pool: SqlitePool,
 }
@@ -227,17 +239,87 @@ impl IndexerDb {
             .context("Failed to insert chunk embedding")?;
         }
 
-        sqlx::query("INSERT OR REPLACE INTO note_metadata(document_id, note_id, note_type, status, visibility, aliases, summary) VALUES (?, ?, ?, ?, ?, ?, ?)")
-            .bind(document_id).bind(&metadata.id).bind(&metadata.note_type)
-            .bind(&metadata.status).bind(&metadata.visibility)
-            .bind(serde_json::to_string(&metadata.aliases)?).bind(&metadata.summary)
-            .execute(&mut *tx).await?;
+        write_metadata(&mut tx, document_id, metadata).await?;
 
         tx.commit()
             .await
             .context("Failed to commit document replacement")?;
 
         Ok(document_id)
+    }
+
+    /// Refresh frontmatter independently of chunk/vector storage.
+    pub async fn refresh_metadata(
+        &self,
+        document_id: i64,
+        fingerprint: &str,
+        metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+    ) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        write_metadata(&mut tx, document_id, metadata).await?;
+        sqlx::query("UPDATE documents SET content_hash = ? WHERE id = ?")
+            .bind(fingerprint)
+            .bind(document_id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn chunks_match(
+        &self,
+        document_id: i64,
+        chunks: &[crate::chronicle::indexer::document::Chunk],
+    ) -> Result<bool> {
+        let rows = sqlx::query("SELECT chunk_index, heading, text, overlaps_previous FROM chunks WHERE document_id = ? ORDER BY chunk_index")
+            .bind(document_id).fetch_all(&self.pool).await?;
+        Ok(rows.len() == chunks.len()
+            && rows.iter().zip(chunks).all(|(row, chunk)| {
+                usize::try_from(row.get::<i64, _>("chunk_index")).ok() == Some(chunk.index)
+                    && row.get::<Option<String>, _>("heading") == chunk.heading
+                    && row.get::<String, _>("text") == chunk.content
+                    && row.get::<bool, _>("overlaps_previous") == (chunk.overlap_tokens > 0)
+            }))
+    }
+
+    pub async fn execute_plan(
+        &self,
+        plan: &crate::chronicle::query::plan::Plan,
+    ) -> Result<StructuredResult> {
+        use crate::chronicle::query::{plan::Plan, render::LIST_LIMIT};
+        plan.validate()?;
+        let (note_type, filters) = plan.selection().context("Plan is not a structured query")?;
+        let role = filters
+            .role
+            .map(crate::chronicle::query::plan::CharacterRole::as_str);
+        let status = filters
+            .character_status
+            .map(crate::chronicle::query::plan::CharacterStatus::as_str);
+        let mut tx = self.pool.begin().await?;
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT note_id) FROM note_metadata
+            WHERE status = 'canon' AND note_type = ? AND (? IS NULL OR role = ?) AND (? IS NULL OR character_status = ?)")
+            .bind(note_type).bind(role).bind(role).bind(status).bind(status).fetch_one(&mut *tx).await?;
+        let mut notes = Vec::new();
+        if matches!(plan, Plan::List { .. }) {
+            let rows = sqlx::query("SELECT m.note_id, MIN(d.path) AS path FROM note_metadata m JOIN documents d ON d.id = m.document_id
+                WHERE m.status = 'canon' AND m.note_type = ? AND (? IS NULL OR m.role = ?) AND (? IS NULL OR m.character_status = ?)
+                GROUP BY m.note_id ORDER BY m.note_id LIMIT ?")
+                .bind(note_type).bind(role).bind(role).bind(status).bind(status).bind(i64::try_from(LIST_LIMIT)?)
+                .fetch_all(&mut *tx).await?;
+            for row in rows {
+                let path: String = row.get("path");
+                notes.push(StructuredNote {
+                    id: row.get("note_id"),
+                    title: std::path::Path::new(&path)
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                });
+            }
+        }
+        tx.commit().await?;
+        Ok(StructuredResult { total, notes })
     }
 
     pub async fn search_lexical(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
@@ -326,6 +408,21 @@ impl IndexerDb {
     }
 }
 
+async fn write_metadata(
+    connection: &mut sqlx::SqliteConnection,
+    document_id: i64,
+    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+) -> Result<()> {
+    sqlx::query("INSERT OR REPLACE INTO note_metadata(document_id, note_id, note_type, status, visibility, aliases, summary, role, character_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(document_id).bind(&metadata.id).bind(&metadata.note_type)
+        .bind(&metadata.status).bind(&metadata.visibility)
+        .bind(serde_json::to_string(&metadata.aliases)?).bind(&metadata.summary)
+        .bind(metadata.role.map(crate::chronicle::query::plan::CharacterRole::as_str))
+        .bind(metadata.character_status.map(crate::chronicle::query::plan::CharacterStatus::as_str))
+        .execute(connection).await?;
+    Ok(())
+}
+
 /// Quote literal words so user input cannot become FTS query syntax.
 fn lexical_expression(query: &str) -> String {
     query
@@ -385,6 +482,28 @@ mod tests {
             directory.path().join("chronicle.db").display()
         );
         Ok((directory, IndexerDb::open(&url).await?))
+    }
+
+    #[tokio::test]
+    async fn structured_lists_are_capped_but_counts_are_distinct_and_complete() -> Result<()> {
+        let (_directory, db) = test_database().await?;
+        let (mut metadata, _) = crate::chronicle::indexer::frontmatter::parse("---\nid: initial\ntype: character\nstatus: canon\nvisibility: player\nrole: npc\n---\n")?.context("note")?;
+        for i in 0..25 {
+            metadata.id = format!("id-{i:02}");
+            db.replace_note(&format!("Note {i}.md"), "hash", &[], &[], &metadata)
+                .await?;
+        }
+        db.replace_note("Duplicate.md", "hash", &[], &[], &metadata)
+            .await?;
+        let plan = crate::chronicle::query::planner::parse(
+            r#"{"operation":"list","note_type":"character","filters":{"role":"npc"}}"#,
+        )?;
+        let result = db.execute_plan(&plan).await?;
+        assert_eq!(result.total, 25);
+        assert_eq!(result.notes.len(), 20);
+        assert_eq!(result.notes[0].id, "id-00");
+        assert_eq!(result.notes[19].id, "id-19");
+        Ok(())
     }
 
     #[tokio::test]

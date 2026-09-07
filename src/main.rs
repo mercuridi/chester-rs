@@ -34,6 +34,7 @@ use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_CHRONICLE_EVAL_SUITE: &str = "tests/fixtures/chronicle/suite.toml";
+const DEFAULT_CHRONICLE_QUERY_EVAL_SUITE: &str = "tests/fixtures/chronicle-query/suite.toml";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
@@ -265,8 +266,32 @@ async fn main() {
     }
 }
 
-async fn run() -> Result<()> {
+async fn run_evaluation_command() -> Result<bool> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments
+        .first()
+        .is_some_and(|arg| arg == "--chronicle-query-eval")
+    {
+        let mut args = arguments.iter().skip(1).collect::<Vec<_>>();
+        let test_planner = args.last().is_some_and(|arg| arg.as_str() == "--planner");
+        if test_planner {
+            args.pop();
+        }
+        anyhow::ensure!(
+            args.len() <= 2,
+            "Usage: chester-rs --chronicle-query-eval [SUITE.toml] [REPORT.json] [--planner]"
+        );
+        let suite_path = args
+            .first()
+            .map_or(DEFAULT_CHRONICLE_QUERY_EVAL_SUITE, |path| path.as_str());
+        chronicle::query::eval::run(
+            std::path::Path::new(suite_path),
+            args.get(1).map(std::path::Path::new),
+            test_planner,
+        )
+        .await?;
+        return Ok(true);
+    }
     if arguments
         .first()
         .is_some_and(|arg| arg == "--chronicle-eval")
@@ -278,11 +303,19 @@ async fn run() -> Result<()> {
         let suite_path = arguments
             .get(1)
             .map_or(DEFAULT_CHRONICLE_EVAL_SUITE, String::as_str);
-        return chronicle::eval::run(
+        chronicle::eval::run(
             std::path::Path::new(suite_path),
             arguments.get(2).map(std::path::Path::new),
         )
-        .await;
+        .await?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+async fn run() -> Result<()> {
+    if run_evaluation_command().await? {
+        return Ok(());
     }
     let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     from_path(project_root.join(".env")).ok();

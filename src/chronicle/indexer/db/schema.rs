@@ -42,10 +42,29 @@ pub async fn initialise(pool: &SqlitePool) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS note_metadata (
         document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
         note_id TEXT NOT NULL, note_type TEXT NOT NULL, status TEXT NOT NULL,
-        visibility TEXT NOT NULL, aliases TEXT NOT NULL, summary TEXT NOT NULL)",
+        visibility TEXT NOT NULL, aliases TEXT NOT NULL, summary TEXT NOT NULL,
+        role TEXT, character_status TEXT)",
     )
     .execute(pool)
     .await?;
+    let columns = sqlx::query("PRAGMA table_info(note_metadata)")
+        .fetch_all(pool)
+        .await?;
+    for field in ["role", "character_status"] {
+        if !columns
+            .iter()
+            .any(|column| column.get::<String, _>("name") == field)
+        {
+            // Identifiers are the two fixed column names above, never model output.
+            sqlx::query(&format!(
+                "ALTER TABLE note_metadata ADD COLUMN {field} TEXT"
+            ))
+            .execute(pool)
+            .await?;
+        }
+    }
+    sqlx::query("CREATE INDEX IF NOT EXISTS note_metadata_selection ON note_metadata(status, note_type, role, character_status)")
+        .execute(pool).await?;
     Ok(())
 }
 
@@ -54,6 +73,31 @@ mod tests {
     use super::initialise;
     use sqlx::{Row, SqlitePool};
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn adds_character_columns_to_existing_metadata_without_losing_values()
+    -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        super::super::repository::register_sqlite_vec();
+        let pool = crate::database::pool::open_sqlite_pool(
+            &format!("sqlite://{}", temp.path().join("legacy.sqlite3").display()),
+            "test",
+        )
+        .await?;
+        sqlx::query(super::SCHEMA).execute(&pool).await?;
+        sqlx::raw_sql("CREATE TABLE note_metadata (document_id INTEGER PRIMARY KEY, note_id TEXT NOT NULL, note_type TEXT NOT NULL, status TEXT NOT NULL, visibility TEXT NOT NULL, aliases TEXT NOT NULL, summary TEXT NOT NULL);
+            INSERT INTO note_metadata VALUES (1, 'ada', 'character', 'canon', 'player', '[]', 'A gardener');")
+            .execute(&pool).await?;
+        initialise(&pool).await?;
+        let row = sqlx::query("SELECT note_id, summary, role, character_status FROM note_metadata")
+            .fetch_one(&pool)
+            .await?;
+        assert_eq!(row.get::<String, _>("summary"), "A gardener");
+        assert_eq!(row.get::<String, _>("note_id"), "ada");
+        assert!(row.get::<Option<String>, _>("role").is_none());
+        assert!(row.get::<Option<String>, _>("character_status").is_none());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn migrates_legacy_chunks_table_and_remains_idempotent() -> anyhow::Result<()> {

@@ -2,6 +2,7 @@ pub mod config;
 pub mod eval;
 pub mod indexer;
 pub mod llm;
+pub mod query;
 pub mod recording;
 pub mod runtime;
 pub mod service;

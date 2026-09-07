@@ -11,13 +11,14 @@ use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::Tokenizer;
 
 use super::{config::ChronicleConfig, runtime::GpuRuntime};
-use tracing::{debug, info, instrument};
+use tracing::{info, instrument};
 
 #[async_trait::async_trait]
 pub trait LanguageModel: Send + Sync {
     fn prompt_token_budget(&self) -> usize;
     fn count_input_tokens(&self, prompt: &str) -> Result<usize>;
     async fn generate(&self, prompt: &str) -> Result<String>;
+    async fn generate_plan(&self, question: &str) -> Result<String>;
     async fn load(&self) -> Result<()>;
     async fn unload(&self) -> Result<()>;
 }
@@ -151,16 +152,30 @@ impl Llm {
 
     #[instrument(skip(self, prompt), fields(prompt_len = prompt.len()))]
     pub async fn generate(&self, prompt: &str) -> Result<String> {
-        debug!(
-            max_tokens = self.max_tokens,
-            temperature = self.temperature,
-            "Starting LLM inference"
-        );
+        self.generate_with_system(
+            &self.system_prompt,
+            prompt,
+            self.max_tokens,
+            self.temperature,
+        )
+        .await
+    }
+
+    pub async fn generate_plan(&self, question: &str) -> Result<String> {
+        self.generate_with_system(crate::chronicle::query::planner::SYSTEM, question, 256, 0.0)
+            .await
+    }
+
+    async fn generate_with_system(
+        &self,
+        system: &str,
+        prompt: &str,
+        max_tokens: usize,
+        temperature: f64,
+    ) -> Result<String> {
         let model = Arc::clone(&self.model);
-        let user_prompt = self.format_input_prompt(prompt);
-        let max_tokens = self.max_tokens;
+        let user_prompt = format_chat_prompt(system, prompt);
         let context_limit = self.context_limit;
-        let temperature = self.temperature;
         let seed = self.seed;
 
         tokio::task::spawn_blocking(move || {
@@ -241,11 +256,14 @@ impl Llm {
     }
 
     fn format_input_prompt(&self, prompt: &str) -> String {
-        format!(
-            "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n",
-            self.system_prompt
-        )
+        format_chat_prompt(&self.system_prompt, prompt)
     }
+}
+
+fn format_chat_prompt(system: &str, prompt: &str) -> String {
+    format!(
+        "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+    )
 }
 
 #[async_trait::async_trait]
@@ -258,6 +276,9 @@ impl LanguageModel for Llm {
     }
     async fn generate(&self, prompt: &str) -> Result<String> {
         self.generate(prompt).await
+    }
+    async fn generate_plan(&self, question: &str) -> Result<String> {
+        self.generate_plan(question).await
     }
     async fn load(&self) -> Result<()> {
         self.load().await

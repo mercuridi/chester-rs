@@ -275,3 +275,39 @@ in a temporary database without loading the chat LLM or connecting to Discord.
 Reports include recall, precision, reciprocal rank, evidence coverage and per-candidate
 selection diagnostics. Enable normal retrieval diagnostics with
 `RUST_LOG=info,chester_rs::chronicle::indexer::retriever=debug`; these stay outside prompts.
+
+### Structured counts and lists
+
+Chronicle now plans each standalone question before answering. Supported counts
+and lists run as parameterized SQLite queries and are rendered directly:
+
+- “How many characters are recorded?”
+- “List the organisations.”
+- “How many living NPCs are recorded?”
+- “List the missing PCs.”
+
+Supported filters are character `role` (`pc`, `npc`, `ex-pc`) and
+`character_status` (`alive`, `dead`, `missing`, `unknown`), combined with AND.
+Only canon notes participate; templates remain excluded. Counts use distinct note
+IDs. Lists show at most 20 matches, further bounded by the reply length, and report
+the full matching total when abbreviated. Display names come from filenames.
+Missing metadata means no known value; zero matches means none are recorded, not
+proof of absence. Explicit `unknown` status is queryable and differs from omission.
+
+The planner uses separate JSON-only instructions, a 256-token output budget, and
+zero-temperature generation. Invalid plans and unsupported counts/lists fall back
+to hybrid retrieval with an explicit non-exhaustive qualification. Ordinary factual
+questions retain hybrid retrieval and answer generation. Ambiguous references such
+as “List them” ask for clarification; conversation memory is not implemented.
+Negation, OR, location/relationship restrictions, non-canon selection, historical
+queries, numeric totals, and arbitrary SQL are unsupported for structured execution.
+Visibility remains unenforced.
+
+Startup refreshes these properties from frontmatter, including existing unchanged
+notes. Metadata-only edits reuse embeddings when their prepared searchable chunks
+are unchanged. No embedding-version bump or full reindex is required for this feature.
+Malformed character fields fail ingestion with the note path in the diagnostic.
+
+See the [structured evaluation guide](tests/fixtures/chronicle-query/README.md) for
+deterministic and real-planner checks. Structured plans are logged at debug level;
+planning JSON and database bookkeeping are not passed into answer context.
