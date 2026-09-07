@@ -460,6 +460,111 @@ mod tests {
     }
 
     #[test]
+    fn parses_all_declared_value_shapes_for_each_document_type() -> Result<()> {
+        let cases = [
+            (
+                "adventure",
+                "adventure_status: completed\nstart_date: 2026-01-01\nend_date: 2026-01-02\nparty: ['[[Ada]]']\nregions: ['[[Northmere]]']\nrelated_events: ['[[Treaty]]']\nsystem: 5e\npart_of_adventure: '[[Campaign]]'\nlevel_range: 1-5\nantagonists: ['[[Dragon]]']\n",
+            ),
+            (
+                "aspect",
+                "ruling_deities: ['[[Aurelia]]']\nnative_races: ['[[Human]]']\n",
+            ),
+            (
+                "character",
+                "race: '[[Human]]'\nrole: npc\ncharacter_status: alive\naffiliation: ['[[Guild]]']\nallies: ['[[Ada]]']\nenemies: ['[[Orc]]']\nparents: ['[[Parent]]']\nsiblings: ['[[Sibling]]']\nchildren: ['[[Child]]']\npartners: ['[[Partner]]']\nother_family: ['[[Family]]']\nlocation: '[[Northmere]]'\npatron_deity: ['[[Aurelia]]']\nbirthplace: '[[Northmere]]'\nnationality: Northmerian\nplayed_by: Player\npronouns: they/them\n",
+            ),
+            (
+                "deity",
+                "pantheon: major\ndomain: life\nantidomain: death\nalignment: good\nform: humanoid\ncrystal: blue\nrival_deities: ['[[Veyra]]']\nworshippers: ['[[Ember Guild]]']\nholy_sites: ['[[Moonspire]]']\nassociated_aspects: ['[[Harvest]]']\n",
+            ),
+            (
+                "event",
+                "event_type: treaty\noccurred: 418 NY\nlocations: ['[[Alderwatch]]']\nparticipants: ['[[Tovan]]']\ncauses: ['[[Dispute]]']\nconsequences: ['[[Peace]]']\nhistoricity: historical\naffected_regions: ['[[Northmere]]']\nresult: settled\n",
+            ),
+            (
+                "language",
+                "speakers: ['[[Humans]]']\nscripts: [Common, Runes]\n",
+            ),
+            (
+                "location",
+                "location_type: city\ncontained_in: '[[Northmere]]'\npolitical_affiliation: ['[[Kingdom]]']\npopulation: many\ndemonym: Northmerian\n",
+            ),
+            ("lore", "lore_type: tradition\ncommon_knowledge: true\n"),
+            (
+                "metagame",
+                "category: mechanic\nsystem: draw-steel\nsession_date: 2026-01-03\n",
+            ),
+            (
+                "monster",
+                "creature_type: dragon\nhabitat: ['[[Mountain]]']\nthreat_level: high\nalignment: evil\nfactions: ['[[Horde]]']\nweaknesses: [cold, silence]\nsize: huge\nsource_inspiration: folklore\nnotable_examples: ['[[Smaug]]']\n",
+            ),
+            (
+                "object",
+                "object_type: weapon\nrarity: rare\nowner: '[[Ada]]'\nlocation: '[[Vault]]'\ncreator: '[[Smith]]'\nattunement: wizard\n",
+            ),
+            (
+                "organisation",
+                "organisation_type: guild\nleader: '[[Tovan]]'\nfounder: '[[Ada]]'\nmembers: ['[[Ada]]']\nallies: ['[[Kingdom]]']\nenemies: ['[[Horde]]']\nheadquarters: '[[Alderwatch]]'\nfounded: 400 NY\npatron_deity: ['[[Aurelia]]', '[[Veyra]]']\ndissolved: 500 NY\njurisdiction: ['[[Northmere]]']\nideology: [craft, trade]\nmotto: Light for all\n",
+            ),
+            (
+                "race",
+                "homeland: ['[[Northmere]]']\nlifespan: 80 years\nplayable: true\nrelated_organisations: ['[[Guild]]']\nlanguages: ['[[Common]]']\nsubraces: ['[[Highland]]']\n",
+            ),
+            ("template", ""),
+        ];
+        for (note_type, fields) in cases {
+            let source = format!(
+                "---\nid: {note_type}\ntype: {note_type}\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\n{fields}---\n"
+            );
+            parse(&source)?.context(note_type)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_every_value_in_each_fixed_vocabulary() -> Result<()> {
+        let cases = [
+            ("type", "location", "document_types"),
+            ("status", "location", "status"),
+            ("visibility", "location", "visibility"),
+            ("adventure_status", "adventure", "adventure_status"),
+            ("system", "adventure", "system"),
+            ("role", "character", "character_role"),
+            ("character_status", "character", "character_status"),
+            ("pantheon", "deity", "pantheon"),
+            ("category", "metagame", "metagame_category"),
+            ("historicity", "event", "historicity"),
+        ];
+        for (field, note_type, vocabulary_name) in cases {
+            let vocabulary = schema::fixed_vocabulary(vocabulary_name)
+                .with_context(|| format!("vocabulary `{vocabulary_name}`"))?;
+            for value in vocabulary.values {
+                let actual_type = if field == "type" { value } else { note_type };
+                let extra = if field == "type" {
+                    String::new()
+                } else if field == "status" {
+                    String::new()
+                } else if field == "visibility" {
+                    String::new()
+                } else {
+                    format!("{field}: {value}\n")
+                };
+                let mut source = format!(
+                    "---\nid: enum-test\ntype: {actual_type}\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\n{extra}---\n"
+                );
+                if field == "status" {
+                    source = source.replace("status: canon", &format!("status: {value}"));
+                } else if field == "visibility" {
+                    source = source.replace("visibility: player", &format!("visibility: {value}"));
+                }
+                parse(&source)?.with_context(|| format!("{field}={value}"))?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn reports_all_invalid_fixed_enum_values_in_one_note() {
         let source = "---\nid: deity\ntype: deity\nstatus: imaginary\nvisibility: everyone\ncreated: 2026-09-07\nupdated: 2026-09-07\npantheon: demi-god\n---\n";
         let error = parse(source).expect_err("invalid fixed enums must fail ingestion");

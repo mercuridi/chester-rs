@@ -174,13 +174,44 @@ mod tests {
             INSERT INTO note_metadata VALUES (1, 'ada', 'character', 'canon', 'player', '[]', 'A gardener');")
             .execute(&pool).await?;
         initialise(&pool).await?;
-        let row = sqlx::query("SELECT note_id, summary, role, character_status FROM note_metadata")
+        let row = sqlx::query("SELECT note_id, summary, tags, created, updated, role, character_status FROM note_metadata")
             .fetch_one(&pool)
             .await?;
         assert_eq!(row.get::<String, _>("summary"), "A gardener");
         assert_eq!(row.get::<String, _>("note_id"), "ada");
+        assert_eq!(row.get::<String, _>("tags"), "[]");
+        assert_eq!(row.get::<String, _>("created"), "");
+        assert_eq!(row.get::<String, _>("updated"), "");
         assert!(row.get::<Option<String>, _>("role").is_none());
         assert!(row.get::<Option<String>, _>("character_status").is_none());
+        for table in [
+            "adventure_metadata",
+            "aspect_metadata",
+            "character_metadata",
+            "deity_metadata",
+            "event_metadata",
+            "language_metadata",
+            "location_metadata",
+            "lore_metadata",
+            "metagame_metadata",
+            "monster_metadata",
+            "object_metadata",
+            "organisation_metadata",
+            "race_metadata",
+            "note_wikilinks",
+            "note_string_lists",
+        ] {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+                )
+                .bind(table)
+                .fetch_one(&pool)
+                .await?,
+                1,
+                "missing table {table}"
+            );
+        }
         Ok(())
     }
 

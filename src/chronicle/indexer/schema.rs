@@ -117,6 +117,10 @@ const METAGAME_CATEGORIES: &[&str] = &[
 ];
 const HISTORICITIES: &[&str] = &["historical", "legend", "disputed", "prophecy"];
 
+pub const DOCUMENT_TYPES_VOCABULARY: Vocabulary = Vocabulary {
+    name: "document_types",
+    values: DOCUMENT_TYPES,
+};
 pub const STATUS: Vocabulary = Vocabulary {
     name: "status",
     values: STATUSES,
@@ -156,13 +160,7 @@ pub const HISTORICITY: Vocabulary = Vocabulary {
 
 const UNIVERSAL_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::required("id", ValueType::String),
-    FieldDefinition::required(
-        "type",
-        ValueType::FixedEnum(&Vocabulary {
-            name: "document_types",
-            values: DOCUMENT_TYPES,
-        }),
-    ),
+    FieldDefinition::required("type", ValueType::FixedEnum(&DOCUMENT_TYPES_VOCABULARY)),
     FieldDefinition::default_empty_list("aliases"),
     FieldDefinition::default_empty_list("tags"),
     FieldDefinition::default_empty_string_with_warning("summary"),
@@ -406,6 +404,22 @@ pub fn vocabulary_contains(vocabulary: &'static Vocabulary, value: &str) -> bool
     vocabulary.values.contains(&value)
 }
 
+pub fn fixed_vocabulary(name: &str) -> Option<&'static Vocabulary> {
+    match name {
+        "document_types" => Some(&DOCUMENT_TYPES_VOCABULARY),
+        "status" => Some(&STATUS),
+        "visibility" => Some(&VISIBILITY),
+        "adventure_status" => Some(&ADVENTURE_STATUS),
+        "system" => Some(&SYSTEM),
+        "character_role" => Some(&CHARACTER_ROLE),
+        "character_status" => Some(&CHARACTER_STATUS),
+        "pantheon" => Some(&PANTHEON),
+        "metagame_category" => Some(&METAGAME_CATEGORY),
+        "historicity" => Some(&HISTORICITY),
+        _ => None,
+    }
+}
+
 /// The only currently declared cross-field constraint.
 pub const EVENT_OCCURRENCE_CONFLICT: (&str, &[&str]) =
     ("occurred", &["occurred_start", "occurred_end"]);
@@ -478,5 +492,78 @@ mod tests {
             EVENT_OCCURRENCE_CONFLICT.1,
             &["occurred_start", "occurred_end"]
         );
+    }
+
+    #[test]
+    fn matches_every_runtime_field_and_vocabulary_in_the_migration_spec() -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        let specification: toml::Value =
+            toml::from_str(include_str!("../../../tmp/taxonomy.toml"))?;
+        let universal_fields = specification
+            .get("universal_fields")
+            .and_then(toml::Value::as_table)
+            .context("taxonomy universal_fields table")?;
+        for field_name in universal_fields.keys() {
+            assert!(
+                UNIVERSAL_FIELDS
+                    .iter()
+                    .any(|field| field.name == field_name),
+                "universal field `{field_name}` has no runtime definition"
+            );
+        }
+
+        let type_fields = specification
+            .get("type_fields")
+            .and_then(toml::Value::as_table)
+            .context("taxonomy type_fields table")?;
+        for field_name in type_fields.keys() {
+            assert!(
+                field_is_declared_anywhere(field_name),
+                "type field `{field_name}` has no runtime definition"
+            );
+        }
+
+        let type_definitions = specification
+            .get("types")
+            .and_then(toml::Value::as_table)
+            .context("taxonomy types table")?;
+        for (type_name, definition) in type_definitions {
+            let fields = definition
+                .get("fields")
+                .and_then(toml::Value::as_array)
+                .context("taxonomy type fields list")?;
+            let runtime = document_type_definition(type_name)
+                .with_context(|| format!("runtime definition for `{type_name}`"))?;
+            for field in fields {
+                let field_name = field.as_str().context("taxonomy field name")?;
+                assert!(
+                    runtime.fields.iter().any(|field| field.name == field_name)
+                        || field_definition(type_name, field_name).is_some(),
+                    "field `{field_name}` is not defined for type `{type_name}`"
+                );
+            }
+        }
+
+        let enums = specification
+            .get("enums")
+            .and_then(toml::Value::as_table)
+            .context("taxonomy enums table")?;
+        for (name, values) in enums {
+            let vocabulary =
+                fixed_vocabulary(name).with_context(|| format!("runtime vocabulary `{name}`"))?;
+            let expected = values
+                .as_array()
+                .context("taxonomy enum values")?
+                .iter()
+                .map(|value| value.as_str().context("taxonomy enum value"))
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            assert_eq!(
+                vocabulary.values,
+                expected.as_slice(),
+                "vocabulary `{name}`"
+            );
+        }
+        Ok(())
     }
 }

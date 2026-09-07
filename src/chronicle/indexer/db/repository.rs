@@ -722,6 +722,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replacing_a_note_type_removes_the_old_type_metadata() -> Result<()> {
+        let (_directory, db) = test_database().await?;
+        let character = "---\nid: shifting-note\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\ncharacter_status: alive\nlocation: '[[Northmere]]'\n---\n";
+        let (metadata, _) =
+            crate::chronicle::indexer::frontmatter::parse(character)?.context("character")?;
+        let document_id = db
+            .replace_note("Shifting.md", "character", &[], &[], &metadata)
+            .await?;
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM character_metadata WHERE document_id = ?"
+            )
+            .bind(document_id)
+            .fetch_one(&db.pool)
+            .await?,
+            1
+        );
+
+        let organisation = character
+            .replace("type: character", "type: organisation")
+            .replace(
+                "role: npc\ncharacter_status: alive\nlocation: '[[Northmere]]'",
+                "organisation_type: guild\npatron_deity: ['[[Aurelia]]']",
+            );
+        let (metadata, _) = crate::chronicle::indexer::frontmatter::parse(&organisation)?
+            .context("organisation")?;
+        db.replace_note("Shifting.md", "organisation", &[], &[], &metadata)
+            .await?;
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM character_metadata WHERE document_id = ?"
+            )
+            .bind(document_id)
+            .fetch_one(&db.pool)
+            .await?,
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM organisation_metadata WHERE document_id = ?"
+            )
+            .bind(document_id)
+            .fetch_one(&db.pool)
+            .await?,
+            1
+        );
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM note_wikilinks WHERE document_id = ? AND field_name = 'patron_deity'").bind(document_id).fetch_one(&db.pool).await?, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn lexical_index_tracks_replacements_deletions_and_reopen() -> Result<()> {
         let (directory, database) = test_database().await?;
         let id = database
