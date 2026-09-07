@@ -89,21 +89,22 @@ pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
         .as_mapping()
         .context("Chronicle frontmatter must be a YAML mapping")?;
     let note_type = required_string(mapping, "type")?;
-    ensure!(
-        schema::is_document_type(&note_type),
-        "Invalid frontmatter type `{note_type}`"
-    );
 
     let mut fields = BTreeMap::new();
+    let mut validation_errors = Vec::new();
     for field in schema::UNIVERSAL_FIELD_DEFINITIONS {
-        parse_declared_field(mapping, field, &mut fields)?;
+        if let Err(error) = parse_declared_field(mapping, field, &mut fields) {
+            validation_errors.push(format!("{}: {error:#}", field.name));
+        }
     }
-    let type_definition = schema::document_type_definition(&note_type)
-        .with_context(|| format!("No schema definition for frontmatter type `{note_type}`"))?;
-    for field in type_definition.fields {
-        let field = schema::field_definition(&note_type, field.name)
-            .with_context(|| format!("No schema definition for field `{}`", field.name))?;
-        parse_declared_field(mapping, &field, &mut fields)?;
+    if let Some(type_definition) = schema::document_type_definition(&note_type) {
+        for field in type_definition.fields {
+            let field = schema::field_definition(&note_type, field.name)
+                .with_context(|| format!("No schema definition for field `{}`", field.name))?;
+            if let Err(error) = parse_declared_field(mapping, &field, &mut fields) {
+                validation_errors.push(format!("{}: {error:#}", field.name));
+            }
+        }
     }
 
     let declared_names = mapping
@@ -126,7 +127,19 @@ pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
         unknown_fields.insert(name.to_owned(), value.clone());
     }
 
-    validate_event_occurrence_conflict(mapping, &note_type)?;
+    if let Err(error) = validate_event_occurrence_conflict(mapping, &note_type) {
+        validation_errors.push(format!("event occurrence: {error:#}"));
+    }
+    if !validation_errors.is_empty() {
+        bail!(
+            "Chronicle frontmatter validation failed:\n{}",
+            validation_errors
+                .into_iter()
+                .map(|error| format!("- {error}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
 
     let id = required_non_empty_string(&fields, "id")?;
     let status = required_enum_string(&fields, "status")?;
@@ -406,6 +419,17 @@ mod tests {
         assert!(parse(&note("role: villain\n")).is_err());
         assert!(parse(&note("created: 2026-99-99\n")).is_err());
         assert!(parse(&note("race: Human\n")).is_err());
+    }
+
+    #[test]
+    fn reports_all_invalid_fixed_enum_values_in_one_note() {
+        let source = "---\nid: deity\ntype: deity\nstatus: imaginary\nvisibility: everyone\ncreated: 2026-09-07\nupdated: 2026-09-07\npantheon: demi-god\n---\n";
+        let error = parse(source).expect_err("invalid fixed enums must fail ingestion");
+        let rendered = format!("{error:#}");
+        assert!(rendered.contains("imaginary"));
+        assert!(rendered.contains("everyone"));
+        assert!(rendered.contains("demi-god"));
+        assert!(rendered.contains("PANTHEON") || rendered.contains("pantheon"));
     }
 
     #[test]

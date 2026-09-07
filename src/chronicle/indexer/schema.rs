@@ -399,10 +399,6 @@ pub fn document_type_definition(note_type: &str) -> Option<&'static DocumentType
         .find(|definition| definition.name == note_type)
 }
 
-pub fn is_document_type(value: &str) -> bool {
-    DOCUMENT_TYPES.contains(&value)
-}
-
 pub fn vocabulary_contains(vocabulary: &'static Vocabulary, value: &str) -> bool {
     vocabulary.values.contains(&value)
 }
