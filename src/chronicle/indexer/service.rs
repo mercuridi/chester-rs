@@ -311,11 +311,12 @@ impl Indexer {
         let (indexed_chunks, embeddings) = prepared.into_index_data(path)?;
 
         self.db
-            .replace_document(
+            .replace_note(
                 path,
                 &index_fingerprint(document, self.max_chunk_tokens, self.chunk_overlap_tokens),
                 &indexed_chunks,
                 &embeddings,
+                &document.metadata,
             )
             .await
             .with_context(|| format!("Failed to persist document: {path}"))?;
@@ -380,7 +381,7 @@ fn index_fingerprint(
     chunk_overlap_tokens: usize,
 ) -> String {
     format!(
-        "{}:chunker-v8-overlap-provenance:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
+        "{}:chunker-v9-clean-frontmatter:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
         document.content_hash
     )
 }
@@ -457,12 +458,13 @@ mod tests {
     #[test]
     fn index_fingerprint_includes_content_and_chunking_configuration() {
         let document = Document {
+            metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "doc.md".into(),
             content: "content".into(),
             content_hash: "hash".into(),
         };
         let baseline = index_fingerprint(&document, 100, 10);
-        assert!(baseline.starts_with("hash:chunker-v8-overlap-provenance:"));
+        assert!(baseline.starts_with("hash:chunker-v9-clean-frontmatter:"));
         assert_ne!(baseline, index_fingerprint(&document, 101, 10));
         assert_ne!(baseline, index_fingerprint(&document, 100, 11));
 

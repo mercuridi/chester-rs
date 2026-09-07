@@ -236,3 +236,27 @@ Use `/set_taxonomy` to set mood, intensity, and function; `/add_texture` and `/a
 ## License
 
 See [LICENSE](LICENSE).
+
+## Chronicle hybrid retrieval
+
+Chronicle indexes canon Markdown notes with YAML frontmatter. Required metadata is
+`id` (unique non-empty string), `type` (non-empty string), `status` (`canon`,
+`draft`, `deprecated`, or `speculative`), and `visibility` (`player`, `secret`, or
+`mixed`). `aliases` is an optional string list and `summary` an optional string.
+Other frontmatter fields are accepted but excluded from search and model context.
+Notes without frontmatter, non-canon notes, and template notes are skipped;
+malformed metadata and duplicate eligible IDs fail ingestion with a diagnostic.
+
+Searchable content contains the filename stem, aliases, summary, and Markdown body.
+Wikilinks remain readable Markdown text; no relationship graph is inferred.
+SQLite FTS5 BM25 and vector retrieval each fetch `retrieval_candidate_limit`
+candidates. Equal-weight reciprocal rank fusion (constant 60) merges the lists,
+then existing duplicate removal, document caps, and context budgeting apply.
+`retrieval_distance_threshold` applies only to vector candidates. Lexical query
+words are quoted as literals rather than interpreted as FTS operators.
+
+Startup incrementally updates both indexes, removing deleted or newly ineligible
+notes. FTS5 triggers maintain the lexical index as chunks change; opening the
+database does not rebuild it. Model loading and `/chronicle ask` remain unchanged.
+Visibility is stored but **not enforced** in this MVP: secret and mixed canon notes
+are searchable by every caller. Player/GM access control is deferred.

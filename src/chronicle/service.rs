@@ -432,7 +432,7 @@ mod tests {
             .lock()
             .map_err(|_| anyhow!("prompts poisoned"))?;
         assert_eq!(prompts.len(), 1);
-        assert!(prompts[0].contains("Document: doc.md"));
+        assert!(prompts[0].contains("Document: doc"));
         assert!(prompts[0].contains("Question:\nquestion"));
         Ok(())
     }

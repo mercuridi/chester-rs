@@ -118,48 +118,26 @@ impl Retriever {
                 .with_context(|| "Failed to embed search query")?
         };
 
-        self.db
-            .search_similar(&embedding, candidate_limit)
-            .await
-            .context("Failed to search index")
-            .map(|results| {
-                let threshold_results = results
-                    .into_iter()
-                    .filter(|result| result.distance <= distance_threshold)
-                    .collect::<Vec<_>>();
-                let threshold_result_count = threshold_results.len();
-                let (results, exact_duplicates, near_duplicates, document_cap) =
-                    deduplicate_and_diversify(
-                        threshold_results,
-                        limit,
-                        near_duplicate_threshold,
-                        max_chunks_per_document,
-                    );
-
-                debug!(
-                    result_count = results.len(),
-                    threshold_result_count,
-                    exact_duplicates,
-                    near_duplicates,
-                    document_cap,
-                    distinct_documents = results
-                        .iter()
-                        .map(|result| result.document_path.as_str())
-                        .collect::<HashSet<_>>()
-                        .len(),
-                    candidate_limit,
-                    distance_threshold,
-                    near_duplicate_threshold,
-                    max_chunks_per_document,
-                    "Completed Chronicle retrieval"
-                );
-
-                if results.is_empty() {
-                    RetrievalOutcome::NoResultMeetsThreshold
-                } else {
-                    RetrievalOutcome::Results(results)
-                }
-            })
+        let (vector, lexical) = tokio::try_join!(
+            self.db.search_similar(&embedding, candidate_limit),
+            self.db.search_lexical(query, candidate_limit),
+        )?;
+        let vector = vector
+            .into_iter()
+            .filter(|r| r.distance <= distance_threshold)
+            .collect();
+        let fused = reciprocal_rank_fusion(vector, lexical);
+        let (results, _, _, _) = deduplicate_and_diversify(
+            fused,
+            limit,
+            near_duplicate_threshold,
+            max_chunks_per_document,
+        );
+        if results.is_empty() {
+            Ok(RetrievalOutcome::NoResultMeetsThreshold)
+        } else {
+            Ok(RetrievalOutcome::Results(results))
+        }
     }
 }
 
@@ -190,6 +168,30 @@ impl RetrieverApi for Retriever {
     fn unload_embedder(&self) -> Result<()> {
         self.unload_embedder()
     }
+}
+
+/// Equal-weight RRF; identities are chunks, never raw similarity scores.
+fn reciprocal_rank_fusion(
+    vector: Vec<SearchResult>,
+    lexical: Vec<SearchResult>,
+) -> Vec<SearchResult> {
+    let mut candidates: HashMap<(String, i64), (f64, SearchResult)> = HashMap::new();
+    for ranking in [vector, lexical] {
+        for (rank, result) in ranking.into_iter().enumerate() {
+            #[allow(clippy::cast_precision_loss)]
+            let score = 1.0 / (60.0 + (rank + 1) as f64);
+            let entry = candidates
+                .entry((result.document_path.clone(), result.chunk_index))
+                .or_insert((0.0, result));
+            entry.0 += score;
+        }
+    }
+    let mut candidates = candidates.into_iter().collect::<Vec<_>>();
+    candidates.sort_by(|a, b| b.1.0.total_cmp(&a.1.0).then_with(|| a.0.cmp(&b.0)));
+    candidates
+        .into_iter()
+        .map(|(_, (_, result))| result)
+        .collect()
 }
 
 fn deduplicate_and_diversify(
@@ -312,6 +314,22 @@ mod tests {
             overlaps_previous,
             distance: 0.0,
         }
+    }
+
+    #[test]
+    fn fusion_rewards_agreement_and_preserves_lexical_only_hits() {
+        let vector = vec![
+            result("vector", 0, "semantic", false),
+            result("both", 0, "shared", false),
+        ];
+        let mut lexical_only = result("lexical", 0, "exact name", false);
+        lexical_only.distance = f32::INFINITY;
+        let lexical = vec![lexical_only, result("both", 0, "shared", false)];
+        let fused = reciprocal_rank_fusion(vector, lexical);
+        assert_eq!(fused.len(), 3);
+        assert_eq!(fused[0].document_path, "both");
+        assert!(fused.iter().any(|r| r.document_path == "lexical"));
+        assert!(reciprocal_rank_fusion(Vec::new(), Vec::new()).is_empty());
     }
 
     #[test]

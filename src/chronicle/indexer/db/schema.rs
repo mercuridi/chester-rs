@@ -25,6 +25,27 @@ pub async fn initialise(pool: &SqlitePool) -> Result<()> {
             .context("Failed to migrate Chronicle chunk overlap metadata")?;
     }
 
+    // External-content FTS is maintained inside the same transactions as chunks.
+    sqlx::raw_sql("CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(heading, text, content='chunks', content_rowid='id');
+        CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN
+            INSERT INTO chunk_fts(rowid, heading, text) VALUES (new.id, new.heading, new.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS chunks_fts_delete AFTER DELETE ON chunks BEGIN
+            INSERT INTO chunk_fts(chunk_fts, rowid, heading, text) VALUES ('delete', old.id, old.heading, old.text);
+        END;
+        CREATE TRIGGER IF NOT EXISTS chunks_fts_update AFTER UPDATE ON chunks BEGIN
+            INSERT INTO chunk_fts(chunk_fts, rowid, heading, text) VALUES ('delete', old.id, old.heading, old.text);
+            INSERT INTO chunk_fts(rowid, heading, text) VALUES (new.id, new.heading, new.text);
+        END;")
+        .execute(pool).await.context("Failed to initialise FTS5")?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS note_metadata (
+        document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+        note_id TEXT NOT NULL, note_type TEXT NOT NULL, status TEXT NOT NULL,
+        visibility TEXT NOT NULL, aliases TEXT NOT NULL, summary TEXT NOT NULL)",
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

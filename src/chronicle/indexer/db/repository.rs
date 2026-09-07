@@ -105,12 +105,31 @@ impl IndexerDb {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn replace_document(
         &self,
         path: &str,
         content_hash: &str,
         chunks: &[IndexedChunk],
         embeddings: &[Vec<f32>],
+    ) -> Result<i64> {
+        self.replace_note(
+            path,
+            content_hash,
+            chunks,
+            embeddings,
+            &crate::chronicle::indexer::frontmatter::Metadata::default(),
+        )
+        .await
+    }
+
+    pub async fn replace_note(
+        &self,
+        path: &str,
+        content_hash: &str,
+        chunks: &[IndexedChunk],
+        embeddings: &[Vec<f32>],
+        metadata: &crate::chronicle::indexer::frontmatter::Metadata,
     ) -> Result<i64> {
         if chunks.len() != embeddings.len() {
             anyhow::bail!(
@@ -208,11 +227,46 @@ impl IndexerDb {
             .context("Failed to insert chunk embedding")?;
         }
 
+        sqlx::query("INSERT OR REPLACE INTO note_metadata(document_id, note_id, note_type, status, visibility, aliases, summary) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind(document_id).bind(&metadata.id).bind(&metadata.note_type)
+            .bind(&metadata.status).bind(&metadata.visibility)
+            .bind(serde_json::to_string(&metadata.aliases)?).bind(&metadata.summary)
+            .execute(&mut *tx).await?;
+
         tx.commit()
             .await
             .context("Failed to commit document replacement")?;
 
         Ok(document_id)
+    }
+
+    pub async fn search_lexical(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        let expression = lexical_expression(query);
+        if expression.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT d.path, c.chunk_index, c.heading, c.text, c.overlaps_previous
+            FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid
+            JOIN documents d ON d.id = c.document_id
+            WHERE chunk_fts MATCH ? ORDER BY bm25(chunk_fts, 2.0, 1.0), c.id LIMIT ?",
+        )
+        .bind(expression)
+        .bind(i64::try_from(limit)?)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to search FTS5")?;
+        Ok(rows
+            .into_iter()
+            .map(|row| SearchResult {
+                document_path: row.get("path"),
+                chunk_index: row.get("chunk_index"),
+                heading: row.get("heading"),
+                text: row.get("text"),
+                overlaps_previous: row.get("overlaps_previous"),
+                distance: f32::INFINITY,
+            })
+            .collect())
     }
 
     pub async fn search_similar(
@@ -272,6 +326,17 @@ impl IndexerDb {
     }
 }
 
+/// Quote literal words so user input cannot become FTS query syntax.
+fn lexical_expression(query: &str) -> String {
+    query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .take(128)
+        .map(|word| format!("\"{word}\""))
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
+
 pub(super) fn register_sqlite_vec() {
     unsafe {
         libsqlite3_sys::sqlite3_auto_extension(Some(std::mem::transmute::<
@@ -320,6 +385,46 @@ mod tests {
             directory.path().join("chronicle.db").display()
         );
         Ok((directory, IndexerDb::open(&url).await?))
+    }
+
+    #[tokio::test]
+    async fn lexical_index_tracks_replacements_deletions_and_reopen() -> Result<()> {
+        let (directory, database) = test_database().await?;
+        let id = database
+            .replace_document(
+                "guide.md",
+                "a",
+                &chunks(),
+                &[embedding(0.0), embedding(1.0)],
+            )
+            .await?;
+        assert_eq!(database.search_lexical("First", 10).await?.len(), 1);
+        assert_eq!(database.search_lexical("Introduction", 10).await?.len(), 2);
+        assert!(database.search_lexical("\" * : ()", 10).await?.is_empty());
+        let replacement = vec![IndexedChunk {
+            text: "Moonspire sanctuary".into(),
+            ..chunks().remove(0)
+        }];
+        database
+            .replace_document("guide.md", "b", &replacement, &[embedding(0.0)])
+            .await?;
+        assert!(database.search_lexical("First", 10).await?.is_empty());
+        assert_eq!(
+            database
+                .search_lexical("Where is Moonspire?", 10)
+                .await?
+                .len(),
+            1
+        );
+        let reopened = IndexerDb::open(&format!(
+            "sqlite://{}",
+            directory.path().join("chronicle.db").display()
+        ))
+        .await?;
+        assert_eq!(reopened.search_lexical("Moonspire", 10).await?.len(), 1);
+        database.delete_document(id).await?;
+        assert!(reopened.search_lexical("Moonspire", 10).await?.is_empty());
+        Ok(())
     }
 
     #[tokio::test]

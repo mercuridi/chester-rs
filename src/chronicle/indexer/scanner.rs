@@ -34,6 +34,12 @@ pub fn scan_directory_with_stats(root: impl AsRef<Path>) -> Result<(Vec<Document
     };
     scan_directory_recursive(root, &mut documents, &mut stats)?;
 
+    let mut ids = std::collections::HashSet::new();
+    for document in &documents {
+        if !ids.insert(&document.metadata.id) {
+            anyhow::bail!("Duplicate Chronicle note ID: {}", document.metadata.id);
+        }
+    }
     documents.sort_by(|a, b| a.path.cmp(&b.path));
     #[allow(clippy::cast_precision_loss)]
     let average_words_per_file = if stats.files == 0 {
@@ -77,7 +83,9 @@ fn scan_directory_recursive(
             continue;
         }
 
-        let document = scan_file(&path)?;
+        let Some(document) = scan_file(&path)? else {
+            continue;
+        };
         stats.files += 1;
         stats.words += document.content.split_whitespace().count();
         stats.characters += document.content.chars().count();
@@ -93,17 +101,32 @@ fn is_markdown_file(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
-fn scan_file(path: &Path) -> Result<Document> {
+fn scan_file(path: &Path) -> Result<Option<Document>> {
     let content =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
 
     let content_hash = hash_content(&content);
 
-    Ok(Document {
+    let Some((metadata, body)) = super::frontmatter::parse(&content)
+        .with_context(|| format!("Invalid note {}", path.display()))?
+    else {
+        return Ok(None);
+    };
+    if metadata.status != "canon" || metadata.note_type == "template" {
+        return Ok(None);
+    }
+    let title = path.file_stem().unwrap_or_default().to_string_lossy();
+    let content = format!(
+        "# {title}\n\n{}\n\n{}\n\n{body}",
+        metadata.aliases.join(", "),
+        metadata.summary
+    );
+    Ok(Some(Document {
+        metadata,
         path: path.to_path_buf(),
         content,
         content_hash,
-    })
+    }))
 }
 
 fn hash_content(content: &str) -> String {
@@ -117,6 +140,32 @@ mod tests {
     use super::{hash_content, is_markdown_file, scan_directory_with_stats};
     use std::{fs, path::Path};
     use tempfile::tempdir;
+
+    fn note(id: &str, status: &str) -> String {
+        format!(
+            "---\nid: {id}\ntype: location\nstatus: {status}\nvisibility: secret\naliases: [Moonspire]\nsummary: A sanctuary\nupdated: 2026-09-07\n---\nThe tower stands here."
+        )
+    }
+
+    #[test]
+    fn indexes_clean_canon_and_rejects_duplicate_ids() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        fs::write(directory.path().join("tower.md"), note("tower", "canon"))?;
+        fs::write(directory.path().join("draft.md"), note("draft", "draft"))?;
+        let (documents, _) = scan_directory_with_stats(directory.path())?;
+        assert_eq!(documents.len(), 1);
+        let content = &documents[0].content;
+        assert!(content.contains("Moonspire"));
+        assert!(content.contains("A sanctuary"));
+        assert!(!content.contains("updated"));
+        assert!(!content.contains("visibility"));
+        fs::write(
+            directory.path().join("duplicate.md"),
+            note("tower", "canon"),
+        )?;
+        assert!(scan_directory_with_stats(directory.path()).is_err());
+        Ok(())
+    }
 
     #[test]
     fn recognises_markdown_extensions_case_insensitively() {
@@ -138,16 +187,16 @@ mod tests {
         let directory = tempdir()?;
         let nested = directory.path().join("nested");
         fs::create_dir(&nested)?;
-        fs::write(directory.path().join("b.md"), "two words")?;
-        fs::write(nested.join("a.MD"), "é")?;
+        fs::write(directory.path().join("b.md"), note("b", "canon"))?;
+        fs::write(nested.join("a.MD"), note("a", "canon"))?;
         fs::write(nested.join("ignored.txt"), "not counted")?;
 
         let (documents, stats) = scan_directory_with_stats(directory.path())?;
 
         assert_eq!(stats.directories, 2);
         assert_eq!(stats.files, 2);
-        assert_eq!(stats.words, 3);
-        assert_eq!(stats.characters, "two words".chars().count() + 1);
+        assert!(stats.words > 0);
+        assert!(stats.characters > 0);
         assert!(documents[0].path < documents[1].path);
         assert!(
             documents

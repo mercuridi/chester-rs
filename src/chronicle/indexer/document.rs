@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone)]
 pub struct Document {
+    pub metadata: super::frontmatter::Metadata,
     pub path: PathBuf,
     pub content: String,
     pub content_hash: String,

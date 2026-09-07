@@ -26,7 +26,11 @@ pub fn build_prompt(question: &str, results: &[SearchResult]) -> String {
 
     for (index, result) in results.iter().enumerate() {
         let _ = writeln!(prompt, "<source id=\"{}\">", index + 1);
-        let _ = writeln!(prompt, "Document: {}", result.document_path);
+        let label = std::path::Path::new(&result.document_path)
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let _ = writeln!(prompt, "Document: {label}");
 
         if let Some(heading) = &result.heading {
             let _ = writeln!(prompt, "Heading: {heading}");
@@ -174,7 +178,7 @@ mod tests {
         );
         assert!(prompt.contains("<chronicle_context>"));
         assert!(prompt.contains("<source id=\"1\">"));
-        assert!(prompt.contains("Document: one.md\nHeading: Heading\nContent:\nFirst"));
+        assert!(prompt.contains("Document: one\nHeading: Heading\nContent:\nFirst"));
         assert!(prompt.contains("<source id=\"2\">"));
         assert!(!prompt.contains("Heading: None"));
         assert!(prompt.ends_with("Question:\nWhat happened?\n\nAnswer:"));

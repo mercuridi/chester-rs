@@ -6,3 +6,5 @@ pub mod prompt;
 pub mod retriever;
 pub mod scanner;
 pub mod service;
+
+pub mod frontmatter;
