@@ -487,7 +487,7 @@ mod tests {
     #[tokio::test]
     async fn structured_lists_are_capped_but_counts_are_distinct_and_complete() -> Result<()> {
         let (_directory, db) = test_database().await?;
-        let (mut metadata, _) = crate::chronicle::indexer::frontmatter::parse("---\nid: initial\ntype: character\nstatus: canon\nvisibility: player\nrole: npc\n---\n")?.context("note")?;
+        let (mut metadata, _) = crate::chronicle::indexer::frontmatter::parse("---\nid: initial\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\n---\n")?.context("note")?;
         for i in 0..25 {
             metadata.id = format!("id-{i:02}");
             db.replace_note(&format!("Note {i}.md"), "hash", &[], &[], &metadata)

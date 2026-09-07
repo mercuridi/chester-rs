@@ -1,82 +1,76 @@
-use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Deserializer, de::Error as DeError};
+use std::collections::{BTreeMap, HashSet};
 
-#[derive(Debug, Clone, Default, Deserialize)]
+use anyhow::{Context, Result, bail, ensure};
+use chrono::NaiveDate;
+use serde_yaml::{Mapping, Value};
+use tracing::warn;
+
+use super::schema::{self, FieldDefinition, Presence, ValueType};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetadataValue {
+    String(String),
+    StringList(Vec<String>),
+    Boolean(bool),
+    Date(String),
+    FantasyDate(String),
+    Wikilink(String),
+    WikilinkList(Vec<String>),
+    Enum(String),
+}
+
+/// Parsed Chronicle frontmatter.
+///
+/// `fields` is the complete normalized representation of declared fields.
+/// `unknown_fields` retains undeclared YAML values until the runtime schema is
+/// extended. The role and character_status fields are retained for the current
+/// structured-query implementation and mirror values in `fields`.
+#[derive(Debug, Clone)]
 pub struct Metadata {
     pub id: String,
-    #[serde(rename = "type")]
     pub note_type: String,
+    pub aliases: Vec<String>,
+    pub tags: Vec<String>,
+    pub summary: String,
     pub status: String,
     pub visibility: String,
-    #[serde(default)]
-    pub aliases: Vec<String>,
-    #[serde(default)]
-    pub summary: String,
-    #[serde(default, deserialize_with = "deserialize_optional_role")]
+    pub created: String,
+    pub updated: String,
     pub role: Option<crate::chronicle::query::plan::CharacterRole>,
-    #[serde(default, deserialize_with = "deserialize_optional_status")]
     pub character_status: Option<crate::chronicle::query::plan::CharacterStatus>,
+    pub fields: BTreeMap<String, MetadataValue>,
+    pub unknown_fields: BTreeMap<String, Value>,
 }
 
-fn deserialize_optional_role<'de, D>(
-    deserializer: D,
-) -> Result<Option<crate::chronicle::query::plan::CharacterRole>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    deserialize_optional_enum(deserializer, "role", |value| match value {
-        "pc" => Some(crate::chronicle::query::plan::CharacterRole::Pc),
-        "npc" => Some(crate::chronicle::query::plan::CharacterRole::Npc),
-        "ex-pc" => Some(crate::chronicle::query::plan::CharacterRole::ExPc),
-        _ => None,
-    })
-}
-
-fn deserialize_optional_status<'de, D>(
-    deserializer: D,
-) -> Result<Option<crate::chronicle::query::plan::CharacterStatus>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    deserialize_optional_enum(deserializer, "character_status", |value| match value {
-        "alive" => Some(crate::chronicle::query::plan::CharacterStatus::Alive),
-        "dead" => Some(crate::chronicle::query::plan::CharacterStatus::Dead),
-        "missing" => Some(crate::chronicle::query::plan::CharacterStatus::Missing),
-        "unknown" => Some(crate::chronicle::query::plan::CharacterStatus::Unknown),
-        _ => None,
-    })
-}
-
-fn deserialize_optional_enum<'de, D, T, F>(
-    deserializer: D,
-    field: &str,
-    parse: F,
-) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    F: FnOnce(&str) -> Option<T>,
-{
-    let value = Option::<String>::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    let value = value.trim();
-    if value.is_empty() {
-        tracing::warn!(field, "Empty Chronicle frontmatter value treated as unset");
-        return Ok(None);
+impl Default for Metadata {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            note_type: String::new(),
+            aliases: Vec::new(),
+            tags: Vec::new(),
+            summary: String::new(),
+            status: String::new(),
+            visibility: String::new(),
+            created: String::new(),
+            updated: String::new(),
+            role: None,
+            character_status: None,
+            fields: BTreeMap::new(),
+            unknown_fields: BTreeMap::new(),
+        }
     }
-    parse(value)
-        .ok_or_else(|| D::Error::custom(format!("Invalid {field} value")))
-        .map(Some)
 }
 
-/// Missing frontmatter is ineligible; malformed frontmatter is an ingestion error.
+/// Missing frontmatter is ineligible; malformed frontmatter is an ingestion
+/// error. Unknown fields are preserved and warned about.
 pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
     let source = source.trim_start_matches('\u{feff}');
     let mut lines = source.split_inclusive('\n');
     if lines.next().map(str::trim) != Some("---") {
         return Ok(None);
     }
+
     let mut yaml = String::new();
     let mut closed = false;
     for line in lines.by_ref() {
@@ -89,68 +83,362 @@ pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
     if !closed {
         bail!("Unclosed YAML frontmatter");
     }
-    let metadata: Metadata =
-        serde_yaml::from_str(&yaml).context("Invalid Chronicle frontmatter")?;
-    if metadata.id.trim().is_empty() || metadata.note_type.trim().is_empty() {
-        bail!("Frontmatter id and type must be non-empty strings");
+
+    let document: Value = serde_yaml::from_str(&yaml).context("Invalid Chronicle frontmatter")?;
+    let mapping = document
+        .as_mapping()
+        .context("Chronicle frontmatter must be a YAML mapping")?;
+    let note_type = required_string(mapping, "type")?;
+    ensure!(
+        schema::is_document_type(&note_type),
+        "Invalid frontmatter type `{note_type}`"
+    );
+
+    let mut fields = BTreeMap::new();
+    for field in schema::UNIVERSAL_FIELD_DEFINITIONS {
+        parse_declared_field(mapping, field, &mut fields)?;
     }
-    if !["canon", "draft", "deprecated", "speculative"].contains(&metadata.status.as_str()) {
-        bail!("Invalid frontmatter status");
+    let type_definition = schema::document_type_definition(&note_type)
+        .with_context(|| format!("No schema definition for frontmatter type `{note_type}`"))?;
+    for field in type_definition.fields {
+        let field = schema::field_definition(&note_type, field.name)
+            .with_context(|| format!("No schema definition for field `{}`", field.name))?;
+        parse_declared_field(mapping, &field, &mut fields)?;
     }
-    if !["player", "secret", "mixed"].contains(&metadata.visibility.as_str()) {
-        bail!("Invalid frontmatter visibility");
+
+    let declared_names = mapping
+        .keys()
+        .filter_map(Value::as_str)
+        .filter(|name| schema::field_definition(&note_type, name).is_some())
+        .collect::<HashSet<_>>();
+    let mut unknown_fields = BTreeMap::new();
+    for (key, value) in mapping {
+        let Some(name) = key.as_str() else {
+            bail!("Chronicle frontmatter field names must be strings");
+        };
+        if declared_names.contains(name) {
+            continue;
+        }
+        warn!(
+            field = name,
+            "Unknown Chronicle frontmatter field preserved; declare it in src/chronicle/indexer/schema.rs and recompile"
+        );
+        unknown_fields.insert(name.to_owned(), value.clone());
     }
-    if !crate::chronicle::query::plan::NOTE_TYPES.contains(&metadata.note_type.as_str()) {
-        bail!("Invalid frontmatter note type");
+
+    validate_event_occurrence_conflict(mapping, &note_type)?;
+
+    let id = required_non_empty_string(&fields, "id")?;
+    let status = required_enum_string(&fields, "status")?;
+    let visibility = required_enum_string(&fields, "visibility")?;
+    let aliases = required_string_list(&fields, "aliases")?;
+    let tags = required_string_list(&fields, "tags")?;
+    let summary = required_string_value(&fields, "summary")?;
+    let created = required_string_value(&fields, "created")?;
+    let updated = required_string_value(&fields, "updated")?;
+
+    Ok(Some((
+        Metadata {
+            id,
+            note_type,
+            aliases,
+            tags,
+            summary,
+            status,
+            visibility,
+            created,
+            updated,
+            role: optional_character_role(&fields),
+            character_status: optional_character_status(&fields),
+            fields,
+            unknown_fields,
+        },
+        lines.collect(),
+    )))
+}
+
+fn parse_declared_field(
+    mapping: &Mapping,
+    field: &FieldDefinition,
+    fields: &mut BTreeMap<String, MetadataValue>,
+) -> Result<()> {
+    let Some(raw) = mapping.get(Value::String(field.name.to_owned())) else {
+        match field.presence {
+            Presence::Required => bail!("Missing required frontmatter field `{}`", field.name),
+            Presence::DefaultEmptyList => {
+                fields.insert(field.name.to_owned(), MetadataValue::StringList(Vec::new()));
+            }
+            Presence::DefaultEmptyStringWithWarning => {
+                warn!(
+                    field = field.name,
+                    "Missing Chronicle frontmatter summary; defaulting to an empty string"
+                );
+                fields.insert(field.name.to_owned(), MetadataValue::String(String::new()));
+            }
+            Presence::Optional => {}
+        }
+        return Ok(());
+    };
+
+    if raw.is_null() {
+        if field.presence == Presence::Required {
+            bail!("Required frontmatter field `{}` cannot be null", field.name);
+        }
+        return Ok(());
     }
-    if metadata.note_type != "character"
-        && (metadata.role.is_some() || metadata.character_status.is_some())
-    {
-        bail!("role and character_status are only valid on character notes");
+
+    let value = parse_value(field, raw)
+        .with_context(|| format!("Invalid value for frontmatter field `{}`", field.name))?;
+    fields.insert(field.name.to_owned(), value);
+    Ok(())
+}
+
+fn parse_value(field: &FieldDefinition, raw: &Value) -> Result<MetadataValue> {
+    match field.value_type {
+        ValueType::String => Ok(MetadataValue::String(required_yaml_string(raw)?)),
+        ValueType::StringList => Ok(MetadataValue::StringList(required_yaml_string_list(raw)?)),
+        ValueType::Boolean => raw
+            .as_bool()
+            .map(MetadataValue::Boolean)
+            .context("expected a boolean"),
+        ValueType::Date => {
+            let value = required_yaml_string(raw)?;
+            NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+                .with_context(|| format!("expected ISO date YYYY-MM-DD, got `{value}`"))?;
+            Ok(MetadataValue::Date(value))
+        }
+        ValueType::FantasyDate => Ok(MetadataValue::FantasyDate(required_yaml_string(raw)?)),
+        ValueType::Wikilink => {
+            let value = required_yaml_string(raw)?;
+            validate_wikilink(&value)?;
+            Ok(MetadataValue::Wikilink(value))
+        }
+        ValueType::WikilinkList => {
+            let values = required_yaml_string_list(raw)?;
+            for value in &values {
+                validate_wikilink(value)?;
+            }
+            Ok(MetadataValue::WikilinkList(values))
+        }
+        ValueType::FixedEnum(vocabulary) => {
+            let value = required_yaml_string(raw)?;
+            ensure!(
+                schema::vocabulary_contains(vocabulary, &value),
+                "Invalid `{value}` for fixed enum `{}`; add it to the vocabulary in src/chronicle/indexer/schema.rs and recompile",
+                vocabulary.name
+            );
+            Ok(MetadataValue::Enum(value))
+        }
+        ValueType::ExtensibleVocabulary => Ok(MetadataValue::String(required_yaml_string(raw)?)),
     }
-    Ok(Some((metadata, lines.collect())))
+}
+
+fn required_string(mapping: &Mapping, field: &str) -> Result<String> {
+    let value = mapping
+        .get(Value::String(field.to_owned()))
+        .with_context(|| format!("Missing required frontmatter field `{field}`"))?;
+    required_yaml_string(value)
+        .with_context(|| format!("Frontmatter field `{field}` must be a string"))
+}
+
+fn required_yaml_string(value: &Value) -> Result<String> {
+    value
+        .as_str()
+        .map(ToOwned::to_owned)
+        .context("expected a string")
+}
+
+fn required_yaml_string_list(value: &Value) -> Result<Vec<String>> {
+    value
+        .as_sequence()
+        .context("expected a list")?
+        .iter()
+        .map(|item| required_yaml_string(item).context("list items must be strings"))
+        .collect()
+}
+
+fn required_non_empty_string(
+    fields: &BTreeMap<String, MetadataValue>,
+    field: &str,
+) -> Result<String> {
+    let value = required_string_value(fields, field)?;
+    ensure!(
+        !value.trim().is_empty(),
+        "Frontmatter `{field}` must be non-empty"
+    );
+    Ok(value)
+}
+
+fn required_string_value(fields: &BTreeMap<String, MetadataValue>, field: &str) -> Result<String> {
+    match fields.get(field) {
+        Some(MetadataValue::String(value) | MetadataValue::Date(value)) => Ok(value.clone()),
+        Some(MetadataValue::Enum(value)) => Ok(value.clone()),
+        _ => bail!("Frontmatter field `{field}` must be a scalar string"),
+    }
+}
+
+fn required_enum_string(fields: &BTreeMap<String, MetadataValue>, field: &str) -> Result<String> {
+    match fields.get(field) {
+        Some(MetadataValue::Enum(value)) => Ok(value.clone()),
+        _ => bail!("Frontmatter field `{field}` must be a fixed enum"),
+    }
+}
+
+fn required_string_list(
+    fields: &BTreeMap<String, MetadataValue>,
+    field: &str,
+) -> Result<Vec<String>> {
+    match fields.get(field) {
+        Some(MetadataValue::StringList(values)) => Ok(values.clone()),
+        _ => bail!("Frontmatter field `{field}` must be a string list"),
+    }
+}
+
+fn optional_character_role(
+    fields: &BTreeMap<String, MetadataValue>,
+) -> Option<crate::chronicle::query::plan::CharacterRole> {
+    match fields.get("role") {
+        Some(MetadataValue::Enum(value)) => match value.as_str() {
+            "pc" => Some(crate::chronicle::query::plan::CharacterRole::Pc),
+            "npc" => Some(crate::chronicle::query::plan::CharacterRole::Npc),
+            "ex-pc" => Some(crate::chronicle::query::plan::CharacterRole::ExPc),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn optional_character_status(
+    fields: &BTreeMap<String, MetadataValue>,
+) -> Option<crate::chronicle::query::plan::CharacterStatus> {
+    match fields.get("character_status") {
+        Some(MetadataValue::Enum(value)) => match value.as_str() {
+            "alive" => Some(crate::chronicle::query::plan::CharacterStatus::Alive),
+            "dead" => Some(crate::chronicle::query::plan::CharacterStatus::Dead),
+            "missing" => Some(crate::chronicle::query::plan::CharacterStatus::Missing),
+            "unknown" => Some(crate::chronicle::query::plan::CharacterStatus::Unknown),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn validate_wikilink(value: &str) -> Result<()> {
+    let trimmed = value.trim();
+    ensure!(
+        trimmed.starts_with("[[") && trimmed.ends_with("]]"),
+        "expected an Obsidian wikilink such as `[[Target]]`"
+    );
+    ensure!(
+        trimmed.len() > 4 && !trimmed[2..trimmed.len() - 2].trim().is_empty(),
+        "wikilink target cannot be empty"
+    );
+    Ok(())
+}
+
+fn validate_event_occurrence_conflict(mapping: &Mapping, note_type: &str) -> Result<()> {
+    if note_type != "event" {
+        return Ok(());
+    }
+    let (field, conflicts) = schema::EVENT_OCCURRENCE_CONFLICT;
+    if mapping.contains_key(Value::String(field.to_owned())) {
+        for conflict in conflicts {
+            ensure!(
+                !mapping.contains_key(Value::String((*conflict).to_owned())),
+                "Frontmatter fields `{field}` and `{conflict}` cannot be used together"
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn note(extra: &str) -> String {
+        format!(
+            "---\nid: test\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\n{extra}---\n# Story\nHello"
+        )
+    }
+
     #[test]
-    fn validates_character_properties_and_preserves_missing_as_unknown() -> Result<()> {
-        let note = "---\nid: test\ntype: character\nstatus: canon\nvisibility: player\nrole: npc\ncharacter_status: alive\n---\n";
-        let (metadata, _) = parse(note)?.context("note")?;
+    fn parses_full_values_and_preserves_unknown_fields() -> Result<()> {
+        let (metadata, body) = parse(&note(
+            "aliases: [Someone]\ntags: [npc, garden]\nsummary: A gardener\nrace: '[[Human]]'\nrole: npc\ncharacter_status: alive\nallies: ['[[Ember Guild]]']\nplayed_by: Ada\ncustom: [one, two]\n",
+        ))?
+        .context("Expected parsed note")?;
+        assert_eq!(metadata.id, "test");
+        assert_eq!(metadata.aliases, ["Someone"]);
+        assert_eq!(metadata.tags, ["npc", "garden"]);
+        assert_eq!(metadata.created, "2026-09-07");
+        assert_eq!(metadata.updated, "2026-09-07");
         assert_eq!(
-            metadata
-                .role
-                .map(crate::chronicle::query::plan::CharacterRole::as_str),
-            Some("npc")
+            metadata.fields.get("race"),
+            Some(&MetadataValue::Wikilink("[[Human]]".into()))
         );
-        assert!(parse(&note.replace("role: npc", "role: villain")).is_err());
-        assert!(parse(&note.replace("type: character", "type: location")).is_err());
-        assert!(
-            parse(&note.replace("character_status: alive", "character_status: undead")).is_err()
-        );
-        let (missing, _) = parse(
-            &note
-                .replace("role: npc\n", "")
-                .replace("character_status: alive\n", ""),
-        )?
-        .context("note")?;
-        assert!(missing.role.is_none() && missing.character_status.is_none());
-        let (empty, _) = parse(
-            &note
-                .replace("role: npc", "role: ''")
-                .replace("character_status: alive", "character_status: '  '"),
-        )?
-        .context("note")?;
-        assert!(empty.role.is_none() && empty.character_status.is_none());
+        assert!(metadata.unknown_fields.contains_key("custom"));
+        assert_eq!(body, "# Story\nHello");
         Ok(())
     }
+
+    #[test]
+    fn defaults_aliases_and_tags_and_warns_for_missing_summary() -> Result<()> {
+        let (metadata, _) = parse(&note(""))?.context("Expected parsed note")?;
+        assert!(metadata.aliases.is_empty());
+        assert!(metadata.tags.is_empty());
+        assert!(metadata.summary.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn requires_non_default_universal_fields() {
+        for field in ["id", "type", "status", "visibility", "created", "updated"] {
+            assert!(
+                parse(&note(&format!("{field}:\n")).replace("id: test", "id: ")).is_err(),
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn validates_fixed_enums_shapes_dates_and_wikilinks() {
+        assert!(parse(&note("role: villain\n")).is_err());
+        assert!(parse(&note("created: 2026-99-99\n")).is_err());
+        assert!(parse(&note("race: Human\n")).is_err());
+    }
+
+    #[test]
+    fn accepts_extensible_vocabularies() -> Result<()> {
+        let source = "---\nid: event\ntype: event\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nevent_type: eclipse\n---\n";
+        let (metadata, _) = parse(&source)?.context("Expected parsed note")?;
+        assert_eq!(
+            metadata.fields.get("event_type"),
+            Some(&MetadataValue::String("eclipse".into()))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_conflicting_event_dates() {
+        let source = "---\nid: event\ntype: event\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\noccurred: 418 NY\noccurred_start: 418 NY\n---\n";
+        assert!(parse(source).is_err());
+    }
+
+    #[test]
+    fn preserves_type_specific_fields_on_other_types_as_unknown() -> Result<()> {
+        let (metadata, _) = parse(&note("pantheon: major\n"))?.context("Expected parsed note")?;
+        assert!(metadata.unknown_fields.contains_key("pantheon"));
+        Ok(())
+    }
+
     #[test]
     fn separates_metadata_and_body() -> Result<()> {
-        let (meta, body) = parse("---\r\nid: person\r\ntype: character\r\nstatus: canon\r\nvisibility: secret\r\naliases: [Someone]\r\nupdated: 2026-09-07\r\n---\r\n# Story\r\nHello")?.context("Expected parsed note")?;
+        let source = "---\r\nid: person\r\ntype: location\r\nstatus: canon\r\nvisibility: secret\r\ncreated: 2026-09-07\r\nupdated: 2026-09-07\r\naliases: [Someone]\r\nupdated_by_plugin: 2026-09-07\r\n---\r\n# Story\r\nHello";
+        let (meta, body) = parse(source)?.context("Expected parsed note")?;
         assert_eq!(meta.id, "person");
         assert_eq!(body, "# Story\r\nHello");
-        assert!(!body.contains("updated"));
+        assert!(meta.unknown_fields.contains_key("updated_by_plugin"));
         assert!(parse("no frontmatter")?.is_none());
         assert!(parse("---\nid: broken").is_err());
         assert!(parse("---\nid: 123\n---").is_err());

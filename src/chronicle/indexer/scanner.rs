@@ -143,7 +143,7 @@ mod tests {
 
     fn note(id: &str, status: &str) -> String {
         format!(
-            "---\nid: {id}\ntype: location\nstatus: {status}\nvisibility: secret\naliases: [Moonspire]\nsummary: A sanctuary\nupdated: 2026-09-07\n---\nThe tower stands here."
+            "---\nid: {id}\ntype: location\nstatus: {status}\nvisibility: secret\ncreated: 2026-09-07\nupdated: 2026-09-07\naliases: [Moonspire]\nsummary: A sanctuary\n---\nThe tower stands here."
         )
     }
 

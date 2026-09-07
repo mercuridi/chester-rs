@@ -493,7 +493,7 @@ mod tests {
             directory.path().join("test.sqlite3").display()
         ))
         .await?;
-        let (metadata, _) = crate::chronicle::indexer::frontmatter::parse("---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\nrole: npc\ncharacter_status: alive\n---\n")?.context("note")?;
+        let (metadata, _) = crate::chronicle::indexer::frontmatter::parse("---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\ncharacter_status: alive\n---\n")?.context("note")?;
         db.replace_note("Ada.md", "hash", &[], &[], &metadata)
             .await?;
         chronicle.db = Some(db);
