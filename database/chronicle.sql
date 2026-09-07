@@ -36,24 +36,24 @@ CREATE TABLE IF NOT EXISTS note_metadata (
     note_id TEXT NOT NULL, note_type TEXT NOT NULL, status TEXT NOT NULL,
     visibility TEXT NOT NULL, aliases TEXT NOT NULL, tags TEXT NOT NULL,
     summary TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL,
-    role TEXT, character_status TEXT
+    role TEXT, life_status TEXT
 );
 CREATE TABLE IF NOT EXISTS adventure_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, adventure_status TEXT, start_date TEXT, end_date TEXT, system TEXT, part_of_adventure TEXT, level_range TEXT);
 CREATE TABLE IF NOT EXISTS aspect_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS character_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, race TEXT, role TEXT, character_status TEXT, location TEXT, birthplace TEXT, nationality TEXT, played_by TEXT, pronouns TEXT);
-CREATE TABLE IF NOT EXISTS deity_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, pantheon TEXT, domain TEXT, antidomain TEXT, alignment TEXT, form TEXT, crystal TEXT);
+CREATE TABLE IF NOT EXISTS character_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, race TEXT, role TEXT, life_status TEXT, life_status_cause TEXT, life_status_since TEXT, location TEXT, birthplace TEXT, birth_year TEXT, nationality TEXT, played_by TEXT, pronouns TEXT);
+CREATE TABLE IF NOT EXISTS deity_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, deity_type TEXT, domain TEXT, antidomain TEXT, alignment TEXT, form TEXT, crystal TEXT);
 CREATE TABLE IF NOT EXISTS event_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, event_type TEXT, occurred TEXT, occurred_start TEXT, occurred_end TEXT, historicity TEXT, result TEXT);
 CREATE TABLE IF NOT EXISTS language_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS location_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, location_type TEXT, contained_in TEXT, population TEXT, demonym TEXT);
 CREATE TABLE IF NOT EXISTS lore_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, lore_type TEXT, common_knowledge INTEGER);
 CREATE TABLE IF NOT EXISTS metagame_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, category TEXT, system TEXT, session_date TEXT);
-CREATE TABLE IF NOT EXISTS monster_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, creature_type TEXT, threat_level TEXT, alignment TEXT, size TEXT, source_inspiration TEXT);
+CREATE TABLE IF NOT EXISTS monster_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, creature_type TEXT, threat_level TEXT, alignment TEXT, source_inspiration TEXT);
 CREATE TABLE IF NOT EXISTS object_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, object_type TEXT, rarity TEXT, owner TEXT, location TEXT, creator TEXT, attunement TEXT);
 CREATE TABLE IF NOT EXISTS organisation_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, organisation_type TEXT, leader TEXT, founder TEXT, headquarters TEXT, founded TEXT, dissolved TEXT, motto TEXT);
 CREATE TABLE IF NOT EXISTS race_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, lifespan TEXT, playable INTEGER);
 CREATE TABLE IF NOT EXISTS note_wikilinks (document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, field_name TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (document_id, field_name, position));
 CREATE TABLE IF NOT EXISTS note_string_lists (document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, field_name TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (document_id, field_name, position));
 
-CREATE INDEX IF NOT EXISTS note_metadata_selection ON note_metadata(status, note_type, role, character_status);
+CREATE INDEX IF NOT EXISTS note_metadata_selection ON note_metadata(status, note_type, role, life_status);
 CREATE INDEX IF NOT EXISTS note_wikilinks_lookup ON note_wikilinks(field_name, value);
 CREATE INDEX IF NOT EXISTS note_string_lists_lookup ON note_string_lists(field_name, value);

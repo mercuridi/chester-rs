@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 
 /// Bump whenever any stored Chronicle index output changes, including this
 /// schema, embedding dimensions, chunking, or retrieval-index semantics.
-pub const INDEX_FORMAT_VERSION: u32 = 1;
+pub const INDEX_FORMAT_VERSION: u32 = 2;
 
 const SCHEMA: &str = include_str!("../../../../database/chronicle.sql");
 

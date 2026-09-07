@@ -299,12 +299,12 @@ impl IndexerDb {
             .map(crate::chronicle::query::plan::CharacterStatus::as_str);
         let mut tx = self.pool.begin().await?;
         let total: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT note_id) FROM note_metadata
-            WHERE status = 'canon' AND note_type = ? AND (? IS NULL OR role = ?) AND (? IS NULL OR character_status = ?)")
+            WHERE status = 'canon' AND note_type = ? AND (? IS NULL OR role = ?) AND (? IS NULL OR life_status = ?)")
             .bind(note_type).bind(role).bind(role).bind(status).bind(status).fetch_one(&mut *tx).await?;
         let mut notes = Vec::new();
         if matches!(plan, Plan::List { .. }) {
             let rows = sqlx::query("SELECT m.note_id, MIN(d.path) AS path FROM note_metadata m JOIN documents d ON d.id = m.document_id
-                WHERE m.status = 'canon' AND m.note_type = ? AND (? IS NULL OR m.role = ?) AND (? IS NULL OR m.character_status = ?)
+                WHERE m.status = 'canon' AND m.note_type = ? AND (? IS NULL OR m.role = ?) AND (? IS NULL OR m.life_status = ?)
                 GROUP BY m.note_id ORDER BY m.note_id LIMIT ?")
                 .bind(note_type).bind(role).bind(role).bind(status).bind(status).bind(i64::try_from(LIST_LIMIT)?)
                 .fetch_all(&mut *tx).await?;
@@ -448,13 +448,13 @@ async fn write_metadata(
     document_id: i64,
     metadata: &crate::chronicle::indexer::frontmatter::Metadata,
 ) -> Result<()> {
-    sqlx::query("INSERT OR REPLACE INTO note_metadata(document_id, note_id, note_type, status, visibility, aliases, tags, summary, created, updated, role, character_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT OR REPLACE INTO note_metadata(document_id, note_id, note_type, status, visibility, aliases, tags, summary, created, updated, role, life_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(document_id).bind(&metadata.id).bind(&metadata.note_type)
         .bind(&metadata.status).bind(&metadata.visibility)
         .bind(serde_json::to_string(&metadata.aliases)?).bind(serde_json::to_string(&metadata.tags)?)
         .bind(&metadata.summary).bind(&metadata.created).bind(&metadata.updated)
         .bind(string_field(metadata, "role").or_else(|| metadata.role.map(crate::chronicle::query::plan::CharacterRole::as_str)))
-        .bind(string_field(metadata, "character_status").or_else(|| metadata.character_status.map(crate::chronicle::query::plan::CharacterStatus::as_str)))
+        .bind(string_field(metadata, "life_status").or_else(|| metadata.life_status.map(crate::chronicle::query::plan::CharacterStatus::as_str)))
         .execute(&mut *connection).await?;
 
     for table in [
@@ -521,17 +521,18 @@ async fn write_metadata(
                 .await?;
         }
         "character" => {
-            sqlx::query("INSERT INTO character_metadata(document_id, race, role, character_status, location, birthplace, nationality, played_by, pronouns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            sqlx::query("INSERT INTO character_metadata(document_id, race, role, life_status, life_status_cause, life_status_since, location, birthplace, birth_year, nationality, played_by, pronouns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(document_id).bind(string_field(metadata, "race"))
                 .bind(string_field(metadata, "role").or_else(|| metadata.role.map(crate::chronicle::query::plan::CharacterRole::as_str)))
-                .bind(string_field(metadata, "character_status").or_else(|| metadata.character_status.map(crate::chronicle::query::plan::CharacterStatus::as_str)))
-                .bind(string_field(metadata, "location")).bind(string_field(metadata, "birthplace"))
+                .bind(string_field(metadata, "life_status").or_else(|| metadata.life_status.map(crate::chronicle::query::plan::CharacterStatus::as_str)))
+                .bind(string_field(metadata, "life_status_cause")).bind(string_field(metadata, "life_status_since"))
+                .bind(string_field(metadata, "location")).bind(string_field(metadata, "birthplace")).bind(string_field(metadata, "birth_year"))
                 .bind(string_field(metadata, "nationality")).bind(string_field(metadata, "played_by"))
                 .bind(string_field(metadata, "pronouns")).execute(&mut *connection).await?;
         }
         "deity" => {
-            sqlx::query("INSERT INTO deity_metadata(document_id, pantheon, domain, antidomain, alignment, form, crystal) VALUES (?, ?, ?, ?, ?, ?, ?)")
-                .bind(document_id).bind(string_field(metadata, "pantheon"))
+            sqlx::query("INSERT INTO deity_metadata(document_id, deity_type, domain, antidomain, alignment, form, crystal) VALUES (?, ?, ?, ?, ?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "deity_type"))
                 .bind(string_field(metadata, "domain")).bind(string_field(metadata, "antidomain"))
                 .bind(string_field(metadata, "alignment")).bind(string_field(metadata, "form"))
                 .bind(string_field(metadata, "crystal")).execute(&mut *connection).await?;
@@ -567,10 +568,10 @@ async fn write_metadata(
                 .execute(&mut *connection).await?;
         }
         "monster" => {
-            sqlx::query("INSERT INTO monster_metadata(document_id, creature_type, threat_level, alignment, size, source_inspiration) VALUES (?, ?, ?, ?, ?, ?)")
+            sqlx::query("INSERT INTO monster_metadata(document_id, creature_type, threat_level, alignment, source_inspiration) VALUES (?, ?, ?, ?, ?)")
                 .bind(document_id).bind(string_field(metadata, "creature_type"))
                 .bind(string_field(metadata, "threat_level")).bind(string_field(metadata, "alignment"))
-                .bind(string_field(metadata, "size")).bind(string_field(metadata, "source_inspiration"))
+                .bind(string_field(metadata, "source_inspiration"))
                 .execute(&mut *connection).await?;
         }
         "object" => {
@@ -613,7 +614,8 @@ fn string_field<'a>(
             | crate::chronicle::indexer::frontmatter::MetadataValue::Date(value)
             | crate::chronicle::indexer::frontmatter::MetadataValue::FantasyDate(value)
             | crate::chronicle::indexer::frontmatter::MetadataValue::Wikilink(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::Enum(value),
+            | crate::chronicle::indexer::frontmatter::MetadataValue::Enum(value)
+            | crate::chronicle::indexer::frontmatter::MetadataValue::StringOrWikilink(value),
         ) => Some(value),
         _ => None,
     }
@@ -730,7 +732,7 @@ mod tests {
     #[tokio::test]
     async fn type_specific_metadata_round_trips_and_replaces_lists() -> Result<()> {
         let (_directory, db) = test_database().await?;
-        let source = "---\nid: ember-guild\ntype: organisation\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\norganisation_type: guild\nleader: '[[Tovan]]'\npatron_deity: ['[[Aurelia]]', '[[Veyra]]']\nideology: [craft, mutual-aid]\n---\n";
+        let source = "---\nid: ember-guild\ntype: organisation\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\norganisation_type: guild\nleader: '[[Tovan]]'\npatron_deities: ['[[Aurelia]]', '[[Veyra]]']\nideology: [craft, mutual-aid]\n---\n";
         let (metadata, _) =
             crate::chronicle::indexer::frontmatter::parse(source)?.context("note")?;
         let document_id = db
@@ -746,7 +748,7 @@ mod tests {
         let links = sqlx::query("SELECT field_name, position, value FROM note_wikilinks WHERE document_id = ? ORDER BY field_name, position")
             .bind(document_id).fetch_all(&db.pool).await?;
         assert_eq!(links.len(), 2);
-        assert_eq!(links[0].get::<String, _>("field_name"), "patron_deity");
+        assert_eq!(links[0].get::<String, _>("field_name"), "patron_deities");
         assert_eq!(links[0].get::<i64, _>("position"), 0);
         assert_eq!(links[0].get::<String, _>("value"), "[[Aurelia]]");
         assert_eq!(links[1].get::<String, _>("value"), "[[Veyra]]");
@@ -775,7 +777,7 @@ mod tests {
     #[tokio::test]
     async fn replacing_a_note_type_removes_the_old_type_metadata() -> Result<()> {
         let (_directory, db) = test_database().await?;
-        let character = "---\nid: shifting-note\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\ncharacter_status: alive\nlocation: '[[Northmere]]'\n---\n";
+        let character = "---\nid: shifting-note\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\nlife_status: alive\nlocation: '[[Northmere]]'\n---\n";
         let (metadata, _) =
             crate::chronicle::indexer::frontmatter::parse(character)?.context("character")?;
         let document_id = db
@@ -794,8 +796,8 @@ mod tests {
         let organisation = character
             .replace("type: character", "type: organisation")
             .replace(
-                "role: npc\ncharacter_status: alive\nlocation: '[[Northmere]]'",
-                "organisation_type: guild\npatron_deity: ['[[Aurelia]]']",
+                "role: npc\nlife_status: alive\nlocation: '[[Northmere]]'",
+                "organisation_type: guild\npatron_deities: ['[[Aurelia]]']",
             );
         let (metadata, _) = crate::chronicle::indexer::frontmatter::parse(&organisation)?
             .context("organisation")?;
@@ -819,7 +821,7 @@ mod tests {
             .await?,
             1
         );
-        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM note_wikilinks WHERE document_id = ? AND field_name = 'patron_deity'").bind(document_id).fetch_one(&db.pool).await?, 1);
+        assert_eq!(sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM note_wikilinks WHERE document_id = ? AND field_name = 'patron_deities'").bind(document_id).fetch_one(&db.pool).await?, 1);
         Ok(())
     }
 

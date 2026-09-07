@@ -8,7 +8,7 @@ updated: 2026-01-01
 aliases: []
 summary: ""
 role: npc
-character_status: dead
+life_status: dead
 ---
 # Corin
 

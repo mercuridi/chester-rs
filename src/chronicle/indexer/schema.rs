@@ -16,6 +16,7 @@ pub enum ValueType {
     FantasyDate,
     Wikilink,
     WikilinkList,
+    StringOrWikilink,
     FixedEnum(&'static Vocabulary),
     ExtensibleVocabulary,
 }
@@ -107,8 +108,8 @@ const VISIBILITIES: &[&str] = &["player", "secret", "mixed"];
 const ADVENTURE_STATUSES: &[&str] = &["completed", "planned", "ongoing"];
 const SYSTEMS: &[&str] = &["5e", "draw-steel"];
 const CHARACTER_ROLES: &[&str] = &["pc", "npc", "ex-pc"];
-const CHARACTER_STATUSES: &[&str] = &["alive", "dead", "missing", "unknown"];
-const PANTHEONS: &[&str] = &["minor", "major", "forsaken"];
+const LIFE_STATUSES: &[&str] = &["alive", "dead", "missing", "unknown"];
+const DEITY_TYPES: &[&str] = &["Minor", "Major", "Forsaken"];
 const METAGAME_CATEGORIES: &[&str] = &[
     "house-rule",
     "mechanic",
@@ -141,13 +142,13 @@ pub const CHARACTER_ROLE: Vocabulary = Vocabulary {
     name: "character_role",
     values: CHARACTER_ROLES,
 };
-pub const CHARACTER_STATUS: Vocabulary = Vocabulary {
-    name: "character_status",
-    values: CHARACTER_STATUSES,
+pub const LIFE_STATUS: Vocabulary = Vocabulary {
+    name: "life_status",
+    values: LIFE_STATUSES,
 };
-pub const PANTHEON: Vocabulary = Vocabulary {
-    name: "pantheon",
-    values: PANTHEONS,
+pub const DEITY_TYPE: Vocabulary = Vocabulary {
+    name: "deity_type",
+    values: DEITY_TYPES,
 };
 pub const METAGAME_CATEGORY: Vocabulary = Vocabulary {
     name: "metagame_category",
@@ -191,8 +192,10 @@ const ASPECT_FIELDS: &[FieldDefinition] = &[
 const CHARACTER_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::optional("race", ValueType::Wikilink),
     FieldDefinition::optional("role", ValueType::FixedEnum(&CHARACTER_ROLE)),
-    FieldDefinition::optional("character_status", ValueType::FixedEnum(&CHARACTER_STATUS)),
-    FieldDefinition::optional("affiliation", ValueType::WikilinkList),
+    FieldDefinition::optional("life_status", ValueType::FixedEnum(&LIFE_STATUS)),
+    FieldDefinition::optional("life_status_cause", ValueType::StringOrWikilink),
+    FieldDefinition::optional("life_status_since", ValueType::String),
+    FieldDefinition::optional("affiliations", ValueType::WikilinkList),
     FieldDefinition::optional("allies", ValueType::WikilinkList),
     FieldDefinition::optional("enemies", ValueType::WikilinkList),
     FieldDefinition::optional("parents", ValueType::WikilinkList),
@@ -201,15 +204,16 @@ const CHARACTER_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::optional("partners", ValueType::WikilinkList),
     FieldDefinition::optional("other_family", ValueType::WikilinkList),
     FieldDefinition::optional("location", ValueType::Wikilink),
-    FieldDefinition::optional("patron_deity", ValueType::WikilinkList),
+    FieldDefinition::optional("patron_deities", ValueType::WikilinkList),
     FieldDefinition::optional("birthplace", ValueType::Wikilink),
+    FieldDefinition::optional("birth_year", ValueType::String),
     FieldDefinition::optional("nationality", ValueType::String),
     FieldDefinition::optional("played_by", ValueType::String),
     FieldDefinition::optional("pronouns", ValueType::String),
 ];
 
 const DEITY_FIELDS: &[FieldDefinition] = &[
-    FieldDefinition::optional("pantheon", ValueType::FixedEnum(&PANTHEON)),
+    FieldDefinition::optional("deity_type", ValueType::FixedEnum(&DEITY_TYPE)),
     FieldDefinition::optional("domain", ValueType::String),
     FieldDefinition::optional("antidomain", ValueType::String),
     FieldDefinition::optional("alignment", ValueType::String),
@@ -243,7 +247,7 @@ const LANGUAGE_FIELDS: &[FieldDefinition] = &[
 const LOCATION_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::optional("location_type", ValueType::ExtensibleVocabulary),
     FieldDefinition::optional("contained_in", ValueType::Wikilink),
-    FieldDefinition::optional("political_affiliation", ValueType::WikilinkList),
+    FieldDefinition::optional("political_affiliations", ValueType::WikilinkList),
     FieldDefinition::optional("population", ValueType::String),
     FieldDefinition::optional("demonym", ValueType::String),
 ];
@@ -266,7 +270,7 @@ const MONSTER_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::optional("alignment", ValueType::String),
     FieldDefinition::optional("factions", ValueType::WikilinkList),
     FieldDefinition::optional("weaknesses", ValueType::StringList),
-    FieldDefinition::optional("size", ValueType::String),
+    FieldDefinition::optional("sizes", ValueType::StringList),
     FieldDefinition::optional("source_inspiration", ValueType::String),
     FieldDefinition::optional("notable_examples", ValueType::WikilinkList),
 ];
@@ -289,7 +293,7 @@ const ORGANISATION_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::optional("enemies", ValueType::WikilinkList),
     FieldDefinition::optional("headquarters", ValueType::Wikilink),
     FieldDefinition::optional("founded", ValueType::FantasyDate),
-    FieldDefinition::optional("patron_deity", ValueType::WikilinkList),
+    FieldDefinition::optional("patron_deities", ValueType::WikilinkList),
     FieldDefinition::optional("dissolved", ValueType::FantasyDate),
     FieldDefinition::optional("jurisdiction", ValueType::WikilinkList),
     FieldDefinition::optional("ideology", ValueType::StringList),
@@ -303,6 +307,7 @@ const RACE_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::optional("related_organisations", ValueType::WikilinkList),
     FieldDefinition::optional("languages", ValueType::WikilinkList),
     FieldDefinition::optional("subraces", ValueType::WikilinkList),
+    FieldDefinition::optional("sizes", ValueType::StringList),
 ];
 
 const TEMPLATE_FIELDS: &[FieldDefinition] = &[];
@@ -413,8 +418,8 @@ pub fn fixed_vocabulary(name: &str) -> Option<&'static Vocabulary> {
         "adventure_status" => Some(&ADVENTURE_STATUS),
         "system" => Some(&SYSTEM),
         "character_role" => Some(&CHARACTER_ROLE),
-        "character_status" => Some(&CHARACTER_STATUS),
-        "pantheon" => Some(&PANTHEON),
+        "life_status" => Some(&LIFE_STATUS),
+        "deity_type" => Some(&DEITY_TYPE),
         "metagame_category" => Some(&METAGAME_CATEGORY),
         "historicity" => Some(&HISTORICITY),
         _ => None,
@@ -464,11 +469,11 @@ mod tests {
             Some(ValueType::FantasyDate)
         );
         assert_eq!(
-            field_definition("character", "patron_deity").map(|field| field.value_type),
+            field_definition("character", "patron_deities").map(|field| field.value_type),
             Some(ValueType::WikilinkList)
         );
         assert_eq!(
-            field_definition("organisation", "patron_deity").map(|field| field.value_type),
+            field_definition("organisation", "patron_deities").map(|field| field.value_type),
             Some(ValueType::WikilinkList)
         );
     }

@@ -16,6 +16,7 @@ pub enum MetadataValue {
     FantasyDate(String),
     Wikilink(String),
     WikilinkList(Vec<String>),
+    StringOrWikilink(String),
     Enum(String),
 }
 
@@ -23,7 +24,7 @@ pub enum MetadataValue {
 ///
 /// `fields` is the complete normalized representation of declared fields.
 /// `unknown_fields` retains undeclared YAML values until the runtime schema is
-/// extended. The `role` and `character_status` fields are retained for the current
+/// extended. The `role` and `life_status` fields are retained for the current
 /// structured-query implementation and mirror values in `fields`.
 #[derive(Debug, Clone, Default)]
 pub struct Metadata {
@@ -37,7 +38,7 @@ pub struct Metadata {
     pub created: String,
     pub updated: String,
     pub role: Option<crate::chronicle::query::plan::CharacterRole>,
-    pub character_status: Option<crate::chronicle::query::plan::CharacterStatus>,
+    pub life_status: Option<crate::chronicle::query::plan::CharacterStatus>,
     pub fields: BTreeMap<String, MetadataValue>,
     #[allow(dead_code)]
     pub unknown_fields: BTreeMap<String, Value>,
@@ -150,7 +151,7 @@ pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
             created,
             updated,
             role: optional_character_role(&fields),
-            character_status: optional_character_status(&fields),
+            life_status: optional_life_status(&fields),
             fields,
             unknown_fields,
         },
@@ -181,9 +182,22 @@ fn parse_declared_field(
         return Ok(());
     };
 
-    if raw.is_null() {
-        if field.presence == Presence::Required {
-            bail!("Required frontmatter field `{}` cannot be null", field.name);
+    if raw.is_null() || raw.as_str().is_some_and(|value| value.trim().is_empty()) {
+        match field.presence {
+            Presence::Required => {
+                bail!("Required frontmatter field `{}` cannot be null", field.name)
+            }
+            Presence::DefaultEmptyList => {
+                fields.insert(field.name.to_owned(), MetadataValue::StringList(Vec::new()));
+            }
+            Presence::DefaultEmptyStringWithWarning => {
+                warn!(
+                    field = field.name,
+                    "Missing Chronicle frontmatter summary; defaulting to an empty string"
+                );
+                fields.insert(field.name.to_owned(), MetadataValue::String(String::new()));
+            }
+            Presence::Optional => {}
         }
         return Ok(());
     }
@@ -204,7 +218,12 @@ fn parse_value(field: &FieldDefinition, raw: &Value) -> Result<MetadataValue> {
         ValueType::String | ValueType::ExtensibleVocabulary => {
             Ok(MetadataValue::String(required_yaml_string(raw)?))
         }
-        ValueType::StringList => Ok(MetadataValue::StringList(required_yaml_string_list(raw)?)),
+        ValueType::StringList => Ok(MetadataValue::StringList(
+            required_yaml_string_list(raw)?
+                .into_iter()
+                .filter(|value| !value.trim().is_empty())
+                .collect(),
+        )),
         ValueType::Boolean => raw
             .as_bool()
             .map(MetadataValue::Boolean)
@@ -222,11 +241,21 @@ fn parse_value(field: &FieldDefinition, raw: &Value) -> Result<MetadataValue> {
             Ok(MetadataValue::Wikilink(value))
         }
         ValueType::WikilinkList => {
-            let values = required_yaml_string_list(raw)?;
+            let values = required_yaml_string_list(raw)?
+                .into_iter()
+                .filter(|value| !value.trim().is_empty())
+                .collect::<Vec<_>>();
             for value in &values {
                 validate_wikilink(value)?;
             }
             Ok(MetadataValue::WikilinkList(values))
+        }
+        ValueType::StringOrWikilink => {
+            let value = required_yaml_string(raw)?;
+            if value.trim_start().starts_with("[[") {
+                validate_wikilink(&value)?;
+            }
+            Ok(MetadataValue::StringOrWikilink(value))
         }
         ValueType::FixedEnum(vocabulary) => {
             let value = required_yaml_string(raw)?;
@@ -265,6 +294,7 @@ fn expected_value_type(value_type: ValueType) -> &'static str {
         ValueType::FantasyDate => "a fantasy-date string",
         ValueType::Wikilink => "a wikilink such as [[Target]]",
         ValueType::WikilinkList => "a list of wikilinks such as [[Target]]",
+        ValueType::StringOrWikilink => "a string or wikilink such as [[Target]]",
         ValueType::FixedEnum(vocabulary) => vocabulary.name,
         ValueType::ExtensibleVocabulary => "a string vocabulary value",
     }
@@ -306,7 +336,10 @@ fn required_non_empty_string(
 fn required_string_value(fields: &BTreeMap<String, MetadataValue>, field: &str) -> Result<String> {
     match fields.get(field) {
         Some(
-            MetadataValue::String(value) | MetadataValue::Date(value) | MetadataValue::Enum(value),
+            MetadataValue::String(value)
+            | MetadataValue::Date(value)
+            | MetadataValue::Enum(value)
+            | MetadataValue::StringOrWikilink(value),
         ) => Ok(value.clone()),
         _ => bail!("Frontmatter field `{field}` must be a scalar string"),
     }
@@ -343,10 +376,10 @@ fn optional_character_role(
     }
 }
 
-fn optional_character_status(
+fn optional_life_status(
     fields: &BTreeMap<String, MetadataValue>,
 ) -> Option<crate::chronicle::query::plan::CharacterStatus> {
-    match fields.get("character_status") {
+    match fields.get("life_status") {
         Some(MetadataValue::Enum(value)) => match value.as_str() {
             "alive" => Some(crate::chronicle::query::plan::CharacterStatus::Alive),
             "dead" => Some(crate::chronicle::query::plan::CharacterStatus::Dead),
@@ -456,11 +489,11 @@ mod tests {
             ),
             (
                 "character",
-                "race: '[[Human]]'\nrole: npc\ncharacter_status: alive\naffiliation: ['[[Guild]]']\nallies: ['[[Ada]]']\nenemies: ['[[Orc]]']\nparents: ['[[Parent]]']\nsiblings: ['[[Sibling]]']\nchildren: ['[[Child]]']\npartners: ['[[Partner]]']\nother_family: ['[[Family]]']\nlocation: '[[Northmere]]'\npatron_deity: ['[[Aurelia]]']\nbirthplace: '[[Northmere]]'\nnationality: Northmerian\nplayed_by: Player\npronouns: they/them\n",
+                "race: '[[Human]]'\nrole: npc\nlife_status: alive\nlife_status_cause: old_age\nlife_status_since: \"1608\"\naffiliations: ['[[Guild]]']\nallies: ['[[Ada]]']\nenemies: ['[[Orc]]']\nparents: ['[[Parent]]']\nsiblings: ['[[Sibling]]']\nchildren: ['[[Child]]']\npartners: ['[[Partner]]']\nother_family: ['[[Family]]']\nlocation: '[[Northmere]]'\npatron_deities: ['[[Aurelia]]']\nbirthplace: '[[Northmere]]'\nbirth_year: \"1560\"\nnationality: Northmerian\nplayed_by: Player\npronouns: they/them\n",
             ),
             (
                 "deity",
-                "pantheon: major\ndomain: life\nantidomain: death\nalignment: good\nform: humanoid\ncrystal: blue\nrival_deities: ['[[Veyra]]']\nworshippers: ['[[Ember Guild]]']\nholy_sites: ['[[Moonspire]]']\nassociated_aspects: ['[[Harvest]]']\n",
+                "deity_type: Major\ndomain: life\nantidomain: death\nalignment: good\nform: humanoid\ncrystal: blue\nrival_deities: ['[[Veyra]]']\nworshippers: ['[[Ember Guild]]']\nholy_sites: ['[[Moonspire]]']\nassociated_aspects: ['[[Harvest]]']\n",
             ),
             (
                 "event",
@@ -472,7 +505,7 @@ mod tests {
             ),
             (
                 "location",
-                "location_type: city\ncontained_in: '[[Northmere]]'\npolitical_affiliation: ['[[Kingdom]]']\npopulation: many\ndemonym: Northmerian\n",
+                "location_type: city\ncontained_in: '[[Northmere]]'\npolitical_affiliations: ['[[Kingdom]]']\npopulation: many\ndemonym: Northmerian\n",
             ),
             ("lore", "lore_type: tradition\ncommon_knowledge: true\n"),
             (
@@ -481,7 +514,7 @@ mod tests {
             ),
             (
                 "monster",
-                "creature_type: dragon\nhabitat: ['[[Mountain]]']\nthreat_level: high\nalignment: evil\nfactions: ['[[Horde]]']\nweaknesses: [cold, silence]\nsize: huge\nsource_inspiration: folklore\nnotable_examples: ['[[Smaug]]']\n",
+                "creature_type: dragon\nhabitat: ['[[Mountain]]']\nthreat_level: high\nalignment: evil\nfactions: ['[[Horde]]']\nweaknesses: [cold, silence]\nsizes: [huge]\nsource_inspiration: folklore\nnotable_examples: ['[[Smaug]]']\n",
             ),
             (
                 "object",
@@ -489,11 +522,11 @@ mod tests {
             ),
             (
                 "organisation",
-                "organisation_type: guild\nleader: '[[Tovan]]'\nfounder: '[[Ada]]'\nmembers: ['[[Ada]]']\nallies: ['[[Kingdom]]']\nenemies: ['[[Horde]]']\nheadquarters: '[[Alderwatch]]'\nfounded: 400 NY\npatron_deity: ['[[Aurelia]]', '[[Veyra]]']\ndissolved: 500 NY\njurisdiction: ['[[Northmere]]']\nideology: [craft, trade]\nmotto: Light for all\n",
+                "organisation_type: guild\nleader: '[[Tovan]]'\nfounder: '[[Ada]]'\nmembers: ['[[Ada]]']\nallies: ['[[Kingdom]]']\nenemies: ['[[Horde]]']\nheadquarters: '[[Alderwatch]]'\nfounded: 400 NY\npatron_deities: ['[[Aurelia]]', '[[Veyra]]']\ndissolved: 500 NY\njurisdiction: ['[[Northmere]]']\nideology: [craft, trade]\nmotto: Light for all\n",
             ),
             (
                 "race",
-                "homeland: ['[[Northmere]]']\nlifespan: 80 years\nplayable: true\nrelated_organisations: ['[[Guild]]']\nlanguages: ['[[Common]]']\nsubraces: ['[[Highland]]']\n",
+                "homeland: ['[[Northmere]]']\nlifespan: 80 years\nplayable: true\nrelated_organisations: ['[[Guild]]']\nlanguages: ['[[Common]]']\nsubraces: ['[[Highland]]']\nsizes: [medium]\n",
             ),
             ("template", ""),
         ];
@@ -515,8 +548,8 @@ mod tests {
             ("adventure_status", "adventure", "adventure_status"),
             ("system", "adventure", "system"),
             ("role", "character", "character_role"),
-            ("character_status", "character", "character_status"),
-            ("pantheon", "deity", "pantheon"),
+            ("life_status", "character", "life_status"),
+            ("deity_type", "deity", "deity_type"),
             ("category", "metagame", "metagame_category"),
             ("historicity", "event", "historicity"),
         ];
@@ -546,15 +579,15 @@ mod tests {
 
     #[test]
     fn reports_all_invalid_fixed_enum_values_in_one_note() -> Result<()> {
-        let source = "---\nid: deity\ntype: deity\nstatus: imaginary\nvisibility: everyone\ncreated: 2026-09-07\nupdated: 2026-09-07\npantheon: demi-god\n---\n";
+        let source = "---\nid: deity\ntype: deity\nstatus: imaginary\nvisibility: everyone\ncreated: 2026-09-07\nupdated: 2026-09-07\ndeity_type: Demi-god\n---\n";
         let Err(error) = parse(source) else {
             bail!("invalid fixed enums must fail ingestion");
         };
         let rendered = format!("{error:#}");
         assert!(rendered.contains("imaginary"));
         assert!(rendered.contains("everyone"));
-        assert!(rendered.contains("demi-god"));
-        assert!(rendered.contains("PANTHEON") || rendered.contains("pantheon"));
+        assert!(rendered.contains("Demi-god"));
+        assert!(rendered.contains("DEITY_TYPE") || rendered.contains("deity_type"));
         Ok(())
     }
 

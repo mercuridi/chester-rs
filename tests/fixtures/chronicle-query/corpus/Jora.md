@@ -8,7 +8,7 @@ updated: 2026-01-01
 aliases: []
 summary: ""
 role: pc
-character_status: alive
+life_status: alive
 ---
 # Jora
 

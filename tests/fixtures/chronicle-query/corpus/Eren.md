@@ -8,7 +8,7 @@ updated: 2026-01-01
 aliases: []
 summary: ""
 role: npc
-character_status: unknown
+life_status: unknown
 ---
 # Eren
 

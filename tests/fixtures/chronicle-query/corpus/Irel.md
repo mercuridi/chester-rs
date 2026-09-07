@@ -7,7 +7,7 @@ created: 2026-01-01
 updated: 2026-01-01
 aliases: []
 summary: ""
-character_status: alive
+life_status: alive
 ---
 # Irel
 
