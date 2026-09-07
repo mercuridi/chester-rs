@@ -413,14 +413,184 @@ async fn write_metadata(
     document_id: i64,
     metadata: &crate::chronicle::indexer::frontmatter::Metadata,
 ) -> Result<()> {
-    sqlx::query("INSERT OR REPLACE INTO note_metadata(document_id, note_id, note_type, status, visibility, aliases, summary, role, character_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT OR REPLACE INTO note_metadata(document_id, note_id, note_type, status, visibility, aliases, tags, summary, created, updated, role, character_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(document_id).bind(&metadata.id).bind(&metadata.note_type)
         .bind(&metadata.status).bind(&metadata.visibility)
-        .bind(serde_json::to_string(&metadata.aliases)?).bind(&metadata.summary)
-        .bind(metadata.role.map(crate::chronicle::query::plan::CharacterRole::as_str))
-        .bind(metadata.character_status.map(crate::chronicle::query::plan::CharacterStatus::as_str))
-        .execute(connection).await?;
+        .bind(serde_json::to_string(&metadata.aliases)?).bind(serde_json::to_string(&metadata.tags)?)
+        .bind(&metadata.summary).bind(&metadata.created).bind(&metadata.updated)
+        .bind(string_field(metadata, "role").or_else(|| metadata.role.map(crate::chronicle::query::plan::CharacterRole::as_str)))
+        .bind(string_field(metadata, "character_status").or_else(|| metadata.character_status.map(crate::chronicle::query::plan::CharacterStatus::as_str)))
+        .execute(&mut *connection).await?;
+
+    for table in [
+        "adventure_metadata",
+        "aspect_metadata",
+        "character_metadata",
+        "deity_metadata",
+        "event_metadata",
+        "language_metadata",
+        "location_metadata",
+        "lore_metadata",
+        "metagame_metadata",
+        "monster_metadata",
+        "object_metadata",
+        "organisation_metadata",
+        "race_metadata",
+    ] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE document_id = ?"))
+            .bind(document_id)
+            .execute(&mut *connection)
+            .await?;
+    }
+    sqlx::query("DELETE FROM note_wikilinks WHERE document_id = ?")
+        .bind(document_id)
+        .execute(&mut *connection)
+        .await?;
+    sqlx::query("DELETE FROM note_string_lists WHERE document_id = ?")
+        .bind(document_id)
+        .execute(&mut *connection)
+        .await?;
+
+    for (field_name, value) in &metadata.fields {
+        match value {
+            crate::chronicle::indexer::frontmatter::MetadataValue::WikilinkList(values) => {
+                for (position, value) in values.iter().enumerate() {
+                    sqlx::query("INSERT INTO note_wikilinks(document_id, field_name, position, value) VALUES (?, ?, ?, ?)")
+                        .bind(document_id).bind(field_name).bind(i64::try_from(position)?).bind(value)
+                        .execute(&mut *connection).await?;
+                }
+            }
+            crate::chronicle::indexer::frontmatter::MetadataValue::StringList(values) => {
+                for (position, value) in values.iter().enumerate() {
+                    sqlx::query("INSERT INTO note_string_lists(document_id, field_name, position, value) VALUES (?, ?, ?, ?)")
+                        .bind(document_id).bind(field_name).bind(i64::try_from(position)?).bind(value)
+                        .execute(&mut *connection).await?;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    match metadata.note_type.as_str() {
+        "adventure" => {
+            sqlx::query("INSERT INTO adventure_metadata(document_id, adventure_status, start_date, end_date, system, part_of_adventure, level_range) VALUES (?, ?, ?, ?, ?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "adventure_status"))
+                .bind(string_field(metadata, "start_date")).bind(string_field(metadata, "end_date"))
+                .bind(string_field(metadata, "system")).bind(string_field(metadata, "part_of_adventure"))
+                .bind(string_field(metadata, "level_range")).execute(&mut *connection).await?;
+        }
+        "aspect" => {
+            sqlx::query("INSERT INTO aspect_metadata(document_id) VALUES (?)")
+                .bind(document_id)
+                .execute(&mut *connection)
+                .await?;
+        }
+        "character" => {
+            sqlx::query("INSERT INTO character_metadata(document_id, race, role, character_status, location, birthplace, nationality, played_by, pronouns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "race"))
+                .bind(string_field(metadata, "role").or_else(|| metadata.role.map(crate::chronicle::query::plan::CharacterRole::as_str)))
+                .bind(string_field(metadata, "character_status").or_else(|| metadata.character_status.map(crate::chronicle::query::plan::CharacterStatus::as_str)))
+                .bind(string_field(metadata, "location")).bind(string_field(metadata, "birthplace"))
+                .bind(string_field(metadata, "nationality")).bind(string_field(metadata, "played_by"))
+                .bind(string_field(metadata, "pronouns")).execute(&mut *connection).await?;
+        }
+        "deity" => {
+            sqlx::query("INSERT INTO deity_metadata(document_id, pantheon, domain, antidomain, alignment, form, crystal) VALUES (?, ?, ?, ?, ?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "pantheon"))
+                .bind(string_field(metadata, "domain")).bind(string_field(metadata, "antidomain"))
+                .bind(string_field(metadata, "alignment")).bind(string_field(metadata, "form"))
+                .bind(string_field(metadata, "crystal")).execute(&mut *connection).await?;
+        }
+        "event" => {
+            sqlx::query("INSERT INTO event_metadata(document_id, event_type, occurred, occurred_start, occurred_end, historicity, result) VALUES (?, ?, ?, ?, ?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "event_type"))
+                .bind(string_field(metadata, "occurred")).bind(string_field(metadata, "occurred_start"))
+                .bind(string_field(metadata, "occurred_end")).bind(string_field(metadata, "historicity"))
+                .bind(string_field(metadata, "result")).execute(&mut *connection).await?;
+        }
+        "language" => {
+            sqlx::query("INSERT INTO language_metadata(document_id) VALUES (?)")
+                .bind(document_id)
+                .execute(&mut *connection)
+                .await?;
+        }
+        "location" => {
+            sqlx::query("INSERT INTO location_metadata(document_id, location_type, contained_in, population, demonym) VALUES (?, ?, ?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "location_type"))
+                .bind(string_field(metadata, "contained_in")).bind(string_field(metadata, "population"))
+                .bind(string_field(metadata, "demonym")).execute(&mut *connection).await?;
+        }
+        "lore" => {
+            sqlx::query("INSERT INTO lore_metadata(document_id, lore_type, common_knowledge) VALUES (?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "lore_type"))
+                .bind(bool_field(metadata, "common_knowledge")).execute(&mut *connection).await?;
+        }
+        "metagame" => {
+            sqlx::query("INSERT INTO metagame_metadata(document_id, category, system, session_date) VALUES (?, ?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "category"))
+                .bind(string_field(metadata, "system")).bind(string_field(metadata, "session_date"))
+                .execute(&mut *connection).await?;
+        }
+        "monster" => {
+            sqlx::query("INSERT INTO monster_metadata(document_id, creature_type, threat_level, alignment, size, source_inspiration) VALUES (?, ?, ?, ?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "creature_type"))
+                .bind(string_field(metadata, "threat_level")).bind(string_field(metadata, "alignment"))
+                .bind(string_field(metadata, "size")).bind(string_field(metadata, "source_inspiration"))
+                .execute(&mut *connection).await?;
+        }
+        "object" => {
+            sqlx::query("INSERT INTO object_metadata(document_id, object_type, rarity, owner, location, creator, attunement) VALUES (?, ?, ?, ?, ?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "object_type"))
+                .bind(string_field(metadata, "rarity")).bind(string_field(metadata, "owner"))
+                .bind(string_field(metadata, "location")).bind(string_field(metadata, "creator"))
+                .bind(string_field(metadata, "attunement")).execute(&mut *connection).await?;
+        }
+        "organisation" => {
+            sqlx::query("INSERT INTO organisation_metadata(document_id, organisation_type, leader, founder, headquarters, founded, dissolved, motto) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(document_id).bind(string_field(metadata, "organisation_type"))
+                .bind(string_field(metadata, "leader")).bind(string_field(metadata, "founder"))
+                .bind(string_field(metadata, "headquarters"))
+                .bind(string_field(metadata, "founded")).bind(string_field(metadata, "dissolved"))
+                .bind(string_field(metadata, "motto")).execute(&mut *connection).await?;
+        }
+        "race" => {
+            sqlx::query(
+                "INSERT INTO race_metadata(document_id, lifespan, playable) VALUES (?, ?, ?)",
+            )
+            .bind(document_id)
+            .bind(string_field(metadata, "lifespan"))
+            .bind(bool_field(metadata, "playable"))
+            .execute(&mut *connection)
+            .await?;
+        }
+        "template" => {}
+        _ => {}
+    }
     Ok(())
+}
+
+fn string_field<'a>(
+    metadata: &'a crate::chronicle::indexer::frontmatter::Metadata,
+    name: &str,
+) -> Option<&'a str> {
+    match metadata.fields.get(name) {
+        Some(crate::chronicle::indexer::frontmatter::MetadataValue::String(value))
+        | Some(crate::chronicle::indexer::frontmatter::MetadataValue::Date(value))
+        | Some(crate::chronicle::indexer::frontmatter::MetadataValue::FantasyDate(value))
+        | Some(crate::chronicle::indexer::frontmatter::MetadataValue::Wikilink(value))
+        | Some(crate::chronicle::indexer::frontmatter::MetadataValue::Enum(value)) => Some(value),
+        _ => None,
+    }
+}
+
+fn bool_field(
+    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+    name: &str,
+) -> Option<bool> {
+    match metadata.fields.get(name) {
+        Some(crate::chronicle::indexer::frontmatter::MetadataValue::Boolean(value)) => Some(*value),
+        _ => None,
+    }
 }
 
 /// Quote literal words so user input cannot become FTS query syntax.
@@ -503,6 +673,51 @@ mod tests {
         assert_eq!(result.notes.len(), 20);
         assert_eq!(result.notes[0].id, "id-00");
         assert_eq!(result.notes[19].id, "id-19");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn type_specific_metadata_round_trips_and_replaces_lists() -> Result<()> {
+        let (_directory, db) = test_database().await?;
+        let source = "---\nid: ember-guild\ntype: organisation\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\norganisation_type: guild\nleader: '[[Tovan]]'\npatron_deity: ['[[Aurelia]]', '[[Veyra]]']\nideology: [craft, mutual-aid]\n---\n";
+        let (metadata, _) =
+            crate::chronicle::indexer::frontmatter::parse(source)?.context("note")?;
+        let document_id = db
+            .replace_note("Ember Guild.md", "hash", &[], &[], &metadata)
+            .await?;
+
+        let row = sqlx::query("SELECT organisation_type, leader, motto FROM organisation_metadata WHERE document_id = ?")
+            .bind(document_id).fetch_one(&db.pool).await?;
+        assert_eq!(row.get::<String, _>("organisation_type"), "guild");
+        assert_eq!(row.get::<String, _>("leader"), "[[Tovan]]");
+        assert!(row.get::<Option<String>, _>("motto").is_none());
+
+        let links = sqlx::query("SELECT field_name, position, value FROM note_wikilinks WHERE document_id = ? ORDER BY field_name, position")
+            .bind(document_id).fetch_all(&db.pool).await?;
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].get::<String, _>("field_name"), "patron_deity");
+        assert_eq!(links[0].get::<i64, _>("position"), 0);
+        assert_eq!(links[0].get::<String, _>("value"), "[[Aurelia]]");
+        assert_eq!(links[1].get::<String, _>("value"), "[[Veyra]]");
+
+        let strings = sqlx::query("SELECT field_name, position, value FROM note_string_lists WHERE document_id = ? ORDER BY position")
+            .bind(document_id).fetch_all(&db.pool).await?;
+        assert_eq!(strings.len(), 2);
+        assert_eq!(strings[0].get::<String, _>("value"), "craft");
+        assert_eq!(strings[1].get::<String, _>("value"), "mutual-aid");
+
+        let replacement = source.replace("'[[Aurelia]]', '[[Veyra]]'", "'[[Veyra]]'");
+        let (metadata, _) =
+            crate::chronicle::indexer::frontmatter::parse(&replacement)?.context("note")?;
+        db.replace_note("Ember Guild.md", "hash-2", &[], &[], &metadata)
+            .await?;
+        let links =
+            sqlx::query("SELECT value FROM note_wikilinks WHERE document_id = ? ORDER BY position")
+                .bind(document_id)
+                .fetch_all(&db.pool)
+                .await?;
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].get::<String, _>("value"), "[[Veyra]]");
         Ok(())
     }
 

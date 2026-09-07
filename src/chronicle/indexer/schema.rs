@@ -291,7 +291,7 @@ const ORGANISATION_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::optional("enemies", ValueType::WikilinkList),
     FieldDefinition::optional("headquarters", ValueType::Wikilink),
     FieldDefinition::optional("founded", ValueType::FantasyDate),
-    FieldDefinition::optional("patron_deity", ValueType::Wikilink),
+    FieldDefinition::optional("patron_deity", ValueType::WikilinkList),
     FieldDefinition::optional("dissolved", ValueType::FantasyDate),
     FieldDefinition::optional("jurisdiction", ValueType::WikilinkList),
     FieldDefinition::optional("ideology", ValueType::StringList),
@@ -372,13 +372,6 @@ pub const UNIVERSAL_FIELD_DEFINITIONS: &[FieldDefinition] = UNIVERSAL_FIELDS;
 
 /// Overrides for fields whose shape differs by document type.
 pub fn field_definition(note_type: &str, field_name: &str) -> Option<FieldDefinition> {
-    if note_type == "organisation" && field_name == "patron_deity" {
-        return Some(FieldDefinition::optional(
-            "patron_deity",
-            ValueType::Wikilink,
-        ));
-    }
-
     if let Some(field) = UNIVERSAL_FIELDS
         .iter()
         .find(|field| field.name == field_name)
@@ -451,7 +444,7 @@ mod tests {
         );
         assert_eq!(
             field_definition("organisation", "patron_deity").map(|field| field.value_type),
-            Some(ValueType::Wikilink)
+            Some(ValueType::WikilinkList)
         );
     }
 
