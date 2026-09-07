@@ -247,7 +247,7 @@ Other frontmatter fields are accepted but excluded from search and model context
 Notes without frontmatter, non-canon notes, and template notes are skipped;
 malformed metadata and duplicate eligible IDs fail ingestion with a diagnostic.
 
-Searchable content contains the filename stem, aliases, summary, and Markdown body.
+Searchable content contains the filename stem, aliases, tags, summary, and Markdown body.
 Wikilinks remain readable Markdown text; no relationship graph is inferred.
 SQLite FTS5 BM25 and vector retrieval each fetch `retrieval_candidate_limit`
 candidates. Equal-weight reciprocal rank fusion (constant 60) merges the lists,

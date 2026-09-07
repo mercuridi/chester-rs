@@ -117,8 +117,9 @@ fn scan_file(path: &Path) -> Result<Option<Document>> {
     }
     let title = path.file_stem().unwrap_or_default().to_string_lossy();
     let content = format!(
-        "# {title}\n\n{}\n\n{}\n\n{body}",
+        "# {title}\n\n{}\n\n{}\n\n{}\n\n{body}",
         metadata.aliases.join(", "),
+        metadata.tags.join(", "),
         metadata.summary
     );
     Ok(Some(Document {
@@ -143,7 +144,7 @@ mod tests {
 
     fn note(id: &str, status: &str) -> String {
         format!(
-            "---\nid: {id}\ntype: location\nstatus: {status}\nvisibility: secret\ncreated: 2026-09-07\nupdated: 2026-09-07\naliases: [Moonspire]\nsummary: A sanctuary\n---\nThe tower stands here."
+            "---\nid: {id}\ntype: location\nstatus: {status}\nvisibility: secret\ncreated: 2026-09-07\nupdated: 2026-09-07\naliases: [Moonspire]\ntags: [sanctuary, tower]\nsummary: A sanctuary\n---\nThe tower stands here."
         )
     }
 
@@ -157,6 +158,7 @@ mod tests {
         let content = &documents[0].content;
         assert!(content.contains("Moonspire"));
         assert!(content.contains("A sanctuary"));
+        assert!(content.contains("sanctuary, tower"));
         assert!(!content.contains("updated"));
         assert!(!content.contains("visibility"));
         fs::write(
