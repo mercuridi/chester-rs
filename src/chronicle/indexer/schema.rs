@@ -392,6 +392,16 @@ pub fn document_type_definition(note_type: &str) -> Option<&'static DocumentType
         .find(|definition| definition.name == note_type)
 }
 
+pub fn field_is_declared_anywhere(field_name: &str) -> bool {
+    UNIVERSAL_FIELDS
+        .iter()
+        .any(|field| field.name == field_name)
+        || DOCUMENT_TYPE_DEFINITIONS
+            .iter()
+            .flat_map(|definition| definition.fields)
+            .any(|field| field.name == field_name)
+}
+
 pub fn vocabulary_contains(vocabulary: &'static Vocabulary, value: &str) -> bool {
     vocabulary.values.contains(&value)
 }

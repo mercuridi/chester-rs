@@ -120,9 +120,15 @@ pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
         if declared_names.contains(name) {
             continue;
         }
+        let applicability = if schema::field_is_declared_anywhere(name) {
+            format!("Field `{name}` is not declared for document type `{note_type}`")
+        } else {
+            format!("Field `{name}` is not declared in the Chronicle schema")
+        };
         warn!(
             field = name,
-            "Unknown Chronicle frontmatter field preserved; declare it in src/chronicle/indexer/schema.rs and recompile"
+            value_kind = yaml_value_kind(value),
+            "{applicability}; preserving value. Declare it in src/chronicle/indexer/schema.rs and recompile if it is intentional"
         );
         unknown_fields.insert(name.to_owned(), value.clone());
     }
@@ -200,8 +206,13 @@ fn parse_declared_field(
         return Ok(());
     }
 
-    let value = parse_value(field, raw)
-        .with_context(|| format!("Invalid value for frontmatter field `{}`", field.name))?;
+    let value = parse_value(field, raw).with_context(|| {
+        format!(
+            "Field `{}` has invalid value (expected {})",
+            field.name,
+            expected_value_type(field.value_type)
+        )
+    })?;
     fields.insert(field.name.to_owned(), value);
     Ok(())
 }
@@ -237,8 +248,9 @@ fn parse_value(field: &FieldDefinition, raw: &Value) -> Result<MetadataValue> {
             let value = required_yaml_string(raw)?;
             ensure!(
                 schema::vocabulary_contains(vocabulary, &value),
-                "Invalid `{value}` for fixed enum `{}`; add it to the vocabulary in src/chronicle/indexer/schema.rs and recompile",
-                vocabulary.name
+                "Invalid fixed-enum value `{value}` for `{}`; allowed values are [{}]. Add the value to the vocabulary in src/chronicle/indexer/schema.rs and recompile",
+                vocabulary.name,
+                vocabulary.values.join(", ")
             );
             Ok(MetadataValue::Enum(value))
         }
@@ -259,6 +271,32 @@ fn required_yaml_string(value: &Value) -> Result<String> {
         .as_str()
         .map(ToOwned::to_owned)
         .context("expected a string")
+}
+
+fn expected_value_type(value_type: ValueType) -> &'static str {
+    match value_type {
+        ValueType::String => "a string",
+        ValueType::StringList => "a list of strings",
+        ValueType::Boolean => "a boolean",
+        ValueType::Date => "an ISO date (YYYY-MM-DD)",
+        ValueType::FantasyDate => "a fantasy-date string",
+        ValueType::Wikilink => "a wikilink such as [[Target]]",
+        ValueType::WikilinkList => "a list of wikilinks such as [[Target]]",
+        ValueType::FixedEnum(vocabulary) => vocabulary.name,
+        ValueType::ExtensibleVocabulary => "a string vocabulary value",
+    }
+}
+
+fn yaml_value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Sequence(_) => "list",
+        Value::Mapping(_) => "mapping",
+        Value::Tagged(_) => "tagged value",
+    }
 }
 
 fn required_yaml_string_list(value: &Value) -> Result<Vec<String>> {
