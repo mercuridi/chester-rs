@@ -9,6 +9,7 @@ aliases: []
 summary: ""
 role: pc
 life_status: alive
+played_by: Rowan
 ---
 # Jora
 

@@ -7,7 +7,7 @@ covers generic scalar equality, wikilink-list membership, string-list membership
 and conjunctions across the declared frontmatter taxonomy. The retrieval baseline
 corpus is unchanged and remains a separate evaluation.
 
-The suite covers 37 questions: legacy and generic supported counts/lists, zero
+The suite covers 39 questions: legacy and generic supported counts/lists, zero
 results, missing values, ordinary retrieval questions, unsupported restrictions, and
 ambiguous follow-ups.
 
@@ -45,8 +45,9 @@ planning prompt, JSON parser, and validation as `/chronicle ask`. Each generated
 plan is compared to its expected plan; executor results are checked separately
 using the expected plans. No final-answer generation is evaluated.
 
-Reports record the input checksum, expected results, actual planner outputs,
-parse/validation failures, and planner accuracy (null in executor-only runs).
+Reports record the input checksum, expected results, raw planner responses,
+validated plans, parse/validation failures, and planner accuracy (null in
+executor-only runs).
 Use a new output filename each time. Failures in case results still write a report
 and exit unsuccessfully; model-loading failures stop before evaluation.
 

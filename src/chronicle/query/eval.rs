@@ -38,6 +38,7 @@ struct CaseReport {
     case: Case,
     result: Option<StructuredResult>,
     executor_correct: bool,
+    planner_responses: Vec<String>,
     actual_plan: Option<Plan>,
     planner_error: Option<String>,
     planner_correct: Option<bool>,
@@ -140,20 +141,50 @@ async fn evaluate(
         case,
         result,
         executor_correct,
+        planner_responses: Vec::new(),
         actual_plan: None,
         planner_error: None,
         planner_correct: None,
     };
     if let Some(llm) = llm {
         let _lease = runtime.acquire_inference()?;
-        match llm
-            .generate_plan(&report.case.question)
-            .await
-            .and_then(|s| planner::parse_for_question(&report.case.question, &s))
-        {
-            Ok(plan) => {
-                report.planner_correct = Some(plan == report.case.plan);
-                report.actual_plan = Some(plan);
+        match llm.generate_plan(&report.case.question).await {
+            Ok(response) => {
+                report.planner_responses.push(response.clone());
+                match planner::parse_for_question(&report.case.question, &response) {
+                    Ok(plan) => {
+                        report.planner_correct = Some(plan == report.case.plan);
+                        report.actual_plan = Some(plan);
+                    }
+                    Err(initial_error) => {
+                        match llm.repair_plan(&report.case.question, &response).await {
+                            Ok(retry_response) => {
+                                report.planner_responses.push(retry_response.clone());
+                                match planner::parse_for_question(
+                                    &report.case.question,
+                                    &retry_response,
+                                ) {
+                                    Ok(plan) => {
+                                        report.planner_correct = Some(plan == report.case.plan);
+                                        report.actual_plan = Some(plan);
+                                    }
+                                    Err(retry_error) => {
+                                        report.planner_correct = Some(false);
+                                        report.planner_error = Some(format!(
+                                            "Initial planner response rejected: {initial_error:#}\nPlanner retry response rejected: {retry_error:#}"
+                                        ));
+                                    }
+                                }
+                            }
+                            Err(retry_error) => {
+                                report.planner_correct = Some(false);
+                                report.planner_error = Some(format!(
+                                    "Initial planner response rejected: {initial_error:#}\nPlanner retry failed: {retry_error:#}"
+                                ));
+                            }
+                        }
+                    }
+                }
             }
             Err(error) => {
                 report.planner_correct = Some(false);

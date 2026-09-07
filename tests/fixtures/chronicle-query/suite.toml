@@ -127,6 +127,16 @@ note_type = "deity"
 [cases.plan.filters]
 
 [[cases]]
+id = "list-deities"
+question = "List the deities."
+expected_total = 1
+expected_ids = ["vey"]
+[cases.plan]
+operation = "list"
+note_type = "deity"
+[cases.plan.filters]
+
+[[cases]]
 id = "appearance-membership"
 question = "List characters who appeared in Riftweavers."
 expected_total = 3
@@ -194,6 +204,18 @@ operation = "list"
 note_type = "character"
 [cases.plan.filters]
 conditions = [{ field = "life_status_since", operator = "equals", value = "1608" }]
+
+[[cases]]
+id = "pcs-played-by-rowan"
+question = "List all PCs played by Rowan."
+expected_total = 2
+expected_ids = ["garr", "jora"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+role = "pc"
+conditions = [{ field = "played_by", operator = "equals", value = "Rowan" }]
 
 [[cases]]
 id = "deity-type"

@@ -9,6 +9,7 @@ aliases: []
 summary: ""
 role: pc
 life_status: missing
+played_by: Rowan
 ---
 # Garr
 

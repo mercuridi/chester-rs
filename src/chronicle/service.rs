@@ -99,13 +99,33 @@ impl Chronicle {
             return Ok("Please provide a non-empty question.".into());
         }
         use super::query::{plan::Plan, planner, render};
-        let plan = match self
-            .llm
-            .generate_plan(question)
-            .await
-            .and_then(|response| planner::parse_for_question(question, &response))
-        {
-            Ok(plan) => plan,
+        let plan = match self.llm.generate_plan(question).await {
+            Ok(response) => match planner::parse_for_question(question, &response) {
+                Ok(plan) => plan,
+                Err(error) => {
+                    debug!(%error, planner_response = %response, "Chronicle query planner response rejected");
+                    debug!("Retrying Chronicle query planner with correction request");
+                    match self.llm.repair_plan(question, &response).await {
+                        Ok(retry_response) => {
+                            match planner::parse_for_question(question, &retry_response) {
+                                Ok(plan) => {
+                                    debug!(?plan, "Chronicle query planner retry accepted");
+                                    plan
+                                }
+                                Err(retry_error) => {
+                                    debug!(%retry_error, planner_response = %retry_response, "Chronicle query planner retry response rejected");
+                                    tracing::warn!(%retry_error, "Query planning failed after retry; using non-exhaustive retrieval");
+                                    Plan::Unsupported {}
+                                }
+                            }
+                        }
+                        Err(retry_error) => {
+                            tracing::warn!(%retry_error, initial_error = %error, "Query planning retry failed; using non-exhaustive retrieval");
+                            Plan::Unsupported {}
+                        }
+                    }
+                }
+            },
             Err(error) => {
                 tracing::warn!(%error, "Query planning failed; using non-exhaustive retrieval");
                 Plan::Unsupported {}
@@ -381,6 +401,8 @@ mod tests {
         prompts: Mutex<Vec<String>>,
         budget: usize,
         plan_output: Mutex<String>,
+        repair_plan_output: Mutex<Option<String>>,
+        repair_requests: Mutex<Vec<(String, String)>>,
         fail_count: bool,
         fail_load: bool,
         loads: Mutex<usize>,
@@ -395,6 +417,8 @@ mod tests {
                 prompts: Mutex::new(Vec::new()),
                 budget: 10_000,
                 plan_output: Mutex::new(r#"{"operation":"search"}"#.into()),
+                repair_plan_output: Mutex::new(None),
+                repair_requests: Mutex::new(Vec::new()),
                 fail_count: false,
                 fail_load: false,
                 loads: Mutex::new(0),
@@ -422,6 +446,18 @@ mod tests {
                 .lock()
                 .map_err(|_| anyhow!("plan poisoned"))?
                 .clone())
+        }
+
+        async fn repair_plan(&self, question: &str, rejected_response: &str) -> Result<String> {
+            self.repair_requests
+                .lock()
+                .map_err(|_| anyhow!("repair requests poisoned"))?
+                .push((question.into(), rejected_response.into()));
+            self.repair_plan_output
+                .lock()
+                .map_err(|_| anyhow!("repair plan poisoned"))?
+                .take()
+                .ok_or_else(|| anyhow!("no fake repair output"))
         }
 
         async fn generate(&self, prompt: &str) -> Result<String> {
@@ -506,6 +542,64 @@ mod tests {
             r#"{"operation":"list","note_type":"character","filters":{"role":"npc"}}"#.into();
         let answer = chronicle.ask("List NPCs").await?;
         assert!(answer.contains("Ada [ada]"));
+        assert!(
+            retriever
+                .calls
+                .lock()
+                .map_err(|_| anyhow!("calls poisoned"))?
+                .is_empty()
+        );
+        assert!(
+            llm.prompts
+                .lock()
+                .map_err(|_| anyhow!("prompts poisoned"))?
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn structured_generic_played_by_list_bypasses_retrieval_and_answer_generation()
+    -> Result<()> {
+        let (mut chronicle, retriever, llm) = service(FakeOutcome::Error, [], 500)?;
+        let directory = tempfile::tempdir()?;
+        let db = IndexerDb::open(&format!(
+            "sqlite://{}",
+            directory.path().join("test.sqlite3").display()
+        ))
+        .await?;
+        for (id, title) in [("garr", "Garr"), ("jora", "Jora")] {
+            let (metadata, _) = crate::chronicle::indexer::frontmatter::parse(&format!(
+                "---\nid: {id}\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: pc\nplayed_by: Rowan\n---\n"
+            ))?
+            .context("note")?;
+            db.replace_note(&format!("{title}.md"), "hash", &[], &[], &metadata)
+                .await?;
+        }
+        chronicle.db = Some(db);
+        *llm.plan_output
+            .lock()
+            .map_err(|_| anyhow!("plan poisoned"))? = "This is not a JSON query plan.".into();
+        *llm
+            .repair_plan_output
+            .lock()
+            .map_err(|_| anyhow!("repair plan poisoned"))? = Some(r#"{"operation":"list","note_type":"character","filters":{"role":"pc","conditions":[{"field":"played_by","operator":"equals","value":"Rowan"}]}}"#.into());
+
+        let answer = chronicle.ask("List all PCs played by Rowan.").await?;
+
+        assert!(answer.starts_with("2 canon PCs recorded"));
+        assert!(answer.contains("Garr [garr]"));
+        assert!(answer.contains("Jora [jora]"));
+        assert_eq!(
+            llm.repair_requests
+                .lock()
+                .map_err(|_| anyhow!("repair requests poisoned"))?
+                .as_slice(),
+            &[(
+                "List all PCs played by Rowan.".into(),
+                "This is not a JSON query plan.".into()
+            )]
+        );
         assert!(
             retriever
                 .calls

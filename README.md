@@ -297,8 +297,9 @@ Missing metadata means no known value; zero matches means none are recorded, not
 proof of absence. Explicit `unknown` status is queryable and differs from omission.
 
 The planner uses separate JSON-only instructions, a 256-token output budget, and
-zero-temperature generation. Invalid plans and unsupported counts/lists fall back
-to hybrid retrieval with an explicit non-exhaustive qualification. Ordinary factual
+zero-temperature generation. An invalid planner response receives one corrective
+retry; a second invalid response and unsupported counts/lists fall back to hybrid
+retrieval with an explicit non-exhaustive qualification. Ordinary factual
 questions retain hybrid retrieval and answer generation. Ambiguous references such
 as “List them” ask for clarification; conversation memory is not implemented.
 Negation, OR, location/relationship restrictions, non-canon selection, historical

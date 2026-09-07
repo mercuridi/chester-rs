@@ -19,6 +19,9 @@ pub trait LanguageModel: Send + Sync {
     fn count_input_tokens(&self, prompt: &str) -> Result<usize>;
     async fn generate(&self, prompt: &str) -> Result<String>;
     async fn generate_plan(&self, question: &str) -> Result<String>;
+    async fn repair_plan(&self, question: &str, _rejected_response: &str) -> Result<String> {
+        self.generate_plan(question).await
+    }
     async fn load(&self) -> Result<()>;
     async fn unload(&self) -> Result<()>;
 }
@@ -166,6 +169,14 @@ impl Llm {
         self.generate_with_system(&system, question, 256, 0.0).await
     }
 
+    pub async fn repair_plan(&self, question: &str, rejected_response: &str) -> Result<String> {
+        let system = crate::chronicle::query::planner::system_prompt();
+        let prompt = format!(
+            "Original question:\n{question}\n\nYour previous response was rejected because it was not a valid query plan JSON:\n<rejected-plan>\n{rejected_response}\n</rejected-plan>\n\nReturn a corrected query plan for the original question. Output exactly one JSON object and nothing else."
+        );
+        self.generate_with_system(&system, &prompt, 256, 0.0).await
+    }
+
     async fn generate_with_system(
         &self,
         system: &str,
@@ -279,6 +290,9 @@ impl LanguageModel for Llm {
     }
     async fn generate_plan(&self, question: &str) -> Result<String> {
         self.generate_plan(question).await
+    }
+    async fn repair_plan(&self, question: &str, rejected_response: &str) -> Result<String> {
+        self.repair_plan(question, rejected_response).await
     }
     async fn load(&self) -> Result<()> {
         self.load().await
