@@ -1,0 +1,217 @@
+name = "Chronicle structured query MVP v1"
+minimum_planner_accuracy = 0.95
+
+[[cases]]
+id = "all-characters"
+question = "How many characters are recorded?"
+expected_total = 10
+[cases.plan]
+operation = "count"
+note_type = "character"
+[cases.plan.filters]
+
+[[cases]]
+id = "npcs"
+question = "How many NPCs are recorded?"
+expected_total = 6
+[cases.plan]
+operation = "count"
+note_type = "character"
+[cases.plan.filters]
+role = "npc"
+
+[[cases]]
+id = "living-npcs"
+question = "How many living NPCs are recorded?"
+expected_total = 2
+[cases.plan]
+operation = "count"
+note_type = "character"
+[cases.plan.filters]
+role = "npc"
+character_status = "alive"
+
+[[cases]]
+id = "list-living-npcs"
+question = "List the living NPCs."
+expected_total = 2
+expected_ids = ["ada", "bela"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+role = "npc"
+character_status = "alive"
+
+[[cases]]
+id = "missing-pcs"
+question = "How many missing PCs are recorded?"
+expected_total = 1
+[cases.plan]
+operation = "count"
+note_type = "character"
+[cases.plan.filters]
+role = "pc"
+character_status = "missing"
+
+[[cases]]
+id = "unknown-npcs"
+question = "List NPCs explicitly recorded with unknown character status."
+expected_total = 1
+expected_ids = ["eren"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+role = "npc"
+character_status = "unknown"
+
+[[cases]]
+id = "dead-pcs"
+question = "How many dead PCs are recorded?"
+expected_total = 0
+[cases.plan]
+operation = "count"
+note_type = "character"
+[cases.plan.filters]
+role = "pc"
+character_status = "dead"
+
+[[cases]]
+id = "former-pcs"
+question = "List former player characters."
+expected_total = 1
+expected_ids = ["hana"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+role = "ex-pc"
+
+[[cases]]
+id = "living-characters"
+question = "How many living characters are recorded?"
+expected_total = 5
+[cases.plan]
+operation = "count"
+note_type = "character"
+[cases.plan.filters]
+character_status = "alive"
+
+[[cases]]
+id = "organisations"
+question = "List the organisations."
+expected_total = 1
+expected_ids = ["ember-guild"]
+[cases.plan]
+operation = "list"
+note_type = "organisation"
+[cases.plan.filters]
+
+[[cases]]
+id = "locations"
+question = "How many locations are recorded?"
+expected_total = 2
+[cases.plan]
+operation = "count"
+note_type = "location"
+[cases.plan.filters]
+
+[[cases]]
+id = "deities"
+question = "How many deities are recorded?"
+expected_total = 0
+[cases.plan]
+operation = "count"
+note_type = "deity"
+[cases.plan.filters]
+
+[[cases]]
+id = "ordinary"
+question = "Where is Moonspire?"
+[cases.plan]
+operation = "search"
+
+[[cases]]
+id = "leadership"
+question = "Who leads the Ember Guild?"
+[cases.plan]
+operation = "search"
+
+[[cases]]
+id = "summary"
+question = "Summarise the history of Northmere."
+[cases.plan]
+operation = "search"
+
+[[cases]]
+id = "enemies"
+question = "How many enemies does Ada have?"
+[cases.plan]
+operation = "unsupported"
+
+[[cases]]
+id = "region"
+question = "List NPCs in Northmere."
+[cases.plan]
+operation = "unsupported"
+
+[[cases]]
+id = "cities"
+question = "How many cities are recorded?"
+[cases.plan]
+operation = "unsupported"
+
+[[cases]]
+id = "negation"
+question = "List characters who are not dead."
+[cases.plan]
+operation = "unsupported"
+
+[[cases]]
+id = "or"
+question = "List PCs or former PCs."
+[cases.plan]
+operation = "unsupported"
+
+[[cases]]
+id = "history"
+question = "How many NPCs were alive last year?"
+[cases.plan]
+operation = "unsupported"
+
+[[cases]]
+id = "noncanon"
+question = "How many draft NPCs are recorded?"
+[cases.plan]
+operation = "unsupported"
+
+[[cases]]
+id = "missing-metadata"
+question = "How many NPCs have no character status field?"
+[cases.plan]
+operation = "unsupported"
+
+[[cases]]
+id = "population"
+question = "What is the total population of all locations?"
+[cases.plan]
+operation = "unsupported"
+
+[[cases]]
+id = "followup"
+question = "List them."
+[cases.plan]
+operation = "clarify"
+
+[[cases]]
+id = "no-subject"
+question = "How many are there?"
+[cases.plan]
+operation = "clarify"
+
+[[cases]]
+id = "templates"
+question = "How many template notes are recorded?"
+[cases.plan]
+operation = "unsupported"
