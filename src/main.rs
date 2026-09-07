@@ -33,6 +33,8 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
 
+const DEFAULT_CHRONICLE_EVAL_SUITE: &str = "tests/fixtures/chronicle/suite.toml";
+
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
 
@@ -264,6 +266,24 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments
+        .first()
+        .is_some_and(|arg| arg == "--chronicle-eval")
+    {
+        anyhow::ensure!(
+            (1..=3).contains(&arguments.len()),
+            "Usage: chester-rs --chronicle-eval [SUITE.toml] [REPORT.json]"
+        );
+        let suite_path = arguments
+            .get(1)
+            .map_or(DEFAULT_CHRONICLE_EVAL_SUITE, String::as_str);
+        return chronicle::eval::run(
+            std::path::Path::new(suite_path),
+            arguments.get(2).map(std::path::Path::new),
+        )
+        .await;
+    }
     let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     from_path(project_root.join(".env")).ok();
 

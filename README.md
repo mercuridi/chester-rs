@@ -260,3 +260,18 @@ notes. FTS5 triggers maintain the lexical index as chunks change; opening the
 database does not rebuild it. Model loading and `/chronicle ask` remain unchanged.
 Visibility is stored but **not enforced** in this MVP: secret and mixed canon notes
 are searchable by every caller. Player/GM access control is deferred.
+
+### Retrieval evaluation and diagnostics
+
+A fixed fictional vault and retrieval evaluation suite live in
+[`tests/fixtures/chronicle`](tests/fixtures/chronicle/README.md). Run:
+
+```sh
+cargo run -- --chronicle-eval tests/fixtures/chronicle/suite.toml /tmp/chronicle-report.json
+```
+
+Use a new output filename. The command compares lexical, vector, and hybrid retrieval
+in a temporary database without loading the chat LLM or connecting to Discord.
+Reports include recall, precision, reciprocal rank, evidence coverage and per-candidate
+selection diagnostics. Enable normal retrieval diagnostics with
+`RUST_LOG=info,chester_rs::chronicle::indexer::retriever=debug`; these stay outside prompts.

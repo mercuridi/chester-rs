@@ -1,0 +1,95 @@
+name = "Chronicle fixed retrieval baseline v1"
+max_chunk_tokens = 160
+chunk_overlap_tokens = 0
+minimum_hybrid_recall = 0.8
+
+[retrieval]
+limit = 3
+candidate_limit = 12
+distance_threshold = 0.8
+near_duplicate_threshold = 0.85
+max_chunks_per_document = 2
+
+[[cases]]
+id = "exact"
+category = "exact-name"
+question = "Where is Moonspire?"
+relevant_notes = ["moonspire", "vey"]
+evidence = ["northern shore"]
+
+[[cases]]
+id = "alias"
+category = "alias"
+question = "Where is the Silver Beacon?"
+relevant_notes = ["moonspire"]
+evidence = ["northern shore"]
+
+[[cases]]
+id = "keeper"
+category = "fact"
+question = "Who tends the observatory at Moonspire?"
+relevant_notes = ["ilyra", "moonspire"]
+evidence = ["Ilyra Sen"]
+
+[[cases]]
+id = "guild-alias"
+category = "alias"
+question = "What do the Lanternwrights manufacture?"
+relevant_notes = ["ember-guild"]
+evidence = ["smokeless lanterns"]
+
+[[cases]]
+id = "paraphrase"
+category = "paraphrase"
+question = "What can protect a traveller from icy winds?"
+relevant_notes = ["frost-salve"]
+evidence = ["protects exposed skin"]
+
+[[cases]]
+id = "ingredients"
+category = "fact"
+question = "What is Winterbalm made from?"
+relevant_notes = ["frost-salve"]
+evidence = ["pine resin and blue moss"]
+
+[[cases]]
+id = "treaty"
+category = "event"
+question = "Who negotiated the Glassworkers Treaty?"
+relevant_notes = ["glass-treaty", "tovan"]
+evidence = ["Tovan Reed"]
+
+[[cases]]
+id = "disambiguation"
+category = "distractor"
+question = "Who leads the Ember Guild?"
+relevant_notes = ["tovan", "ember-guild"]
+evidence = ["Tovan Reed"]
+
+[[cases]]
+id = "archive"
+category = "paraphrase"
+question = "Where are records of ocean currents and wrecked ships kept?"
+relevant_notes = ["tide-archive"]
+evidence = ["sea charts and ship logs"]
+
+[[cases]]
+id = "illness"
+category = "distractor"
+question = "Does Frost Salve treat Ash Fever?"
+relevant_notes = ["ash-fever"]
+evidence = ["does not treat Ash Fever"]
+
+[[cases]]
+id = "unknown"
+category = "unanswerable"
+question = "Who is the emperor of the lost continent of Zorath?"
+relevant_notes = []
+evidence = []
+
+[[cases]]
+id = "excluded"
+category = "excluded-draft"
+question = "Where is the Quasar Crown?"
+relevant_notes = []
+evidence = []

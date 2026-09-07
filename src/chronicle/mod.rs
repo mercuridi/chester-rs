@@ -1,4 +1,5 @@
 pub mod config;
+pub mod eval;
 pub mod indexer;
 pub mod llm;
 pub mod recording;

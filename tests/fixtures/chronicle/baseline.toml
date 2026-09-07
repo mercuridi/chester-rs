@@ -1,0 +1,30 @@
+# Observed baseline; suite.toml defines the regression gate.
+suite = "Chronicle fixed retrieval baseline v1"
+fixture_sha256 = "9bcae43cb4979ce4b6f8e3d25d3ef38bb457a540bf9c4360efc1ee75d5025eb7"
+embedding_model = "BAAI/bge-small-en-v1.5"
+embedding_revision = "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+selected_chunk_limit = 3
+
+[hybrid]
+answerable_cases = 10
+mean_recall = 0.9500000000000001
+mean_precision = 0.6166666666666667
+mean_reciprocal_rank = 1.0
+unanswerable_cases = 2
+unanswerable_with_candidates = 2
+
+[lexical]
+answerable_cases = 10
+mean_recall = 0.9500000000000001
+mean_precision = 0.6000000000000001
+mean_reciprocal_rank = 0.9333333333333335
+unanswerable_cases = 2
+unanswerable_with_candidates = 2
+
+[vector]
+answerable_cases = 10
+mean_recall = 0.9
+mean_precision = 0.9500000000000001
+mean_reciprocal_rank = 1.0
+unanswerable_cases = 2
+unanswerable_with_candidates = 0

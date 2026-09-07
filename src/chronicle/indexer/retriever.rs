@@ -5,6 +5,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use candle_core::Device;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
 
 use super::{
@@ -33,6 +34,143 @@ pub enum RetrievalOutcome {
     BadQuestion,
     CorpusEmpty,
     NoResultMeetsThreshold,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchSettings {
+    pub limit: usize,
+    pub candidate_limit: usize,
+    pub distance_threshold: f32,
+    pub near_duplicate_threshold: f32,
+    pub max_chunks_per_document: usize,
+}
+
+impl SearchSettings {
+    pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.limit > 0 && self.candidate_limit >= self.limit && self.candidate_limit <= 1000,
+            "Invalid retrieval limits"
+        );
+        anyhow::ensure!(
+            self.distance_threshold.is_finite() && self.distance_threshold >= 0.0,
+            "Invalid distance threshold"
+        );
+        anyhow::ensure!(
+            (0.0..=1.0).contains(&self.near_duplicate_threshold),
+            "Invalid duplicate threshold"
+        );
+        anyhow::ensure!(
+            self.max_chunks_per_document > 0,
+            "Document cap must be positive"
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct CandidateDiagnostic {
+    pub document: String,
+    pub chunk_index: i64,
+    pub vector_rank: Option<usize>,
+    pub vector_distance: Option<f32>,
+    pub vector_passed_threshold: bool,
+    pub lexical_rank: Option<usize>,
+    pub fused_rank: Option<usize>,
+    pub rrf_score: f64,
+    pub decision: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RetrievalDiagnostics {
+    pub settings: SearchSettings,
+    pub candidates: Vec<CandidateDiagnostic>,
+}
+
+/// The production selection pipeline, also used by offline evaluation. Diagnostics
+/// contain identities and scores only and are never part of `SearchResult` or prompts.
+pub fn select_with_diagnostics(
+    vector: Vec<SearchResult>,
+    lexical: Vec<SearchResult>,
+    settings: SearchSettings,
+) -> (Vec<SearchResult>, RetrievalDiagnostics) {
+    let mut diagnostics = std::collections::BTreeMap::new();
+    for (is_vector, ranking) in [(true, &vector), (false, &lexical)] {
+        for (index, result) in ranking.iter().enumerate() {
+            let record = diagnostics
+                .entry((result.document_path.clone(), result.chunk_index))
+                .or_insert_with(|| CandidateDiagnostic {
+                    document: result.document_path.clone(),
+                    chunk_index: result.chunk_index,
+                    vector_rank: None,
+                    vector_distance: None,
+                    vector_passed_threshold: false,
+                    lexical_rank: None,
+                    fused_rank: None,
+                    rrf_score: 0.0,
+                    decision: "vector_threshold",
+                });
+            if is_vector {
+                record.vector_rank = Some(index + 1);
+                record.vector_distance = result.distance.is_finite().then_some(result.distance);
+                record.vector_passed_threshold = result.distance <= settings.distance_threshold;
+            } else {
+                record.lexical_rank = Some(index + 1);
+            }
+        }
+    }
+    let vector = vector
+        .into_iter()
+        .filter(|r| r.distance <= settings.distance_threshold)
+        .collect::<Vec<_>>();
+    for ranking in [&vector, &lexical] {
+        for (index, result) in ranking.iter().enumerate() {
+            if let Some(record) =
+                diagnostics.get_mut(&(result.document_path.clone(), result.chunk_index))
+            {
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    record.rrf_score += 1.0 / (60.0 + (index + 1) as f64);
+                }
+            }
+        }
+    }
+    let fused = reciprocal_rank_fusion(vector, lexical);
+    let mut accepted = Vec::new();
+    let mut exact_keys = HashSet::new();
+    let mut counts = HashMap::new();
+    for (index, candidate) in fused.into_iter().enumerate() {
+        let decision = if accepted.len() >= settings.limit {
+            "result_limit"
+        } else if !exact_keys.insert(canonical_text(&candidate.text)) {
+            "exact_duplicate"
+        } else if is_near_duplicate(&candidate, &accepted, settings.near_duplicate_threshold) {
+            "near_duplicate"
+        } else if counts.get(&candidate.document_path).copied().unwrap_or(0)
+            >= settings.max_chunks_per_document
+        {
+            "document_cap"
+        } else {
+            "selected"
+        };
+        if let Some(record) =
+            diagnostics.get_mut(&(candidate.document_path.clone(), candidate.chunk_index))
+        {
+            record.fused_rank = Some(index + 1);
+            record.decision = decision;
+        }
+        if decision == "selected" {
+            *counts.entry(candidate.document_path.clone()).or_insert(0) += 1;
+            accepted.push(candidate);
+        }
+    }
+    (
+        accepted,
+        RetrievalDiagnostics {
+            settings,
+            candidates: diagnostics.into_values().collect(),
+        },
+    )
 }
 
 pub struct Retriever {
@@ -122,17 +260,18 @@ impl Retriever {
             self.db.search_similar(&embedding, candidate_limit),
             self.db.search_lexical(query, candidate_limit),
         )?;
-        let vector = vector
-            .into_iter()
-            .filter(|r| r.distance <= distance_threshold)
-            .collect();
-        let fused = reciprocal_rank_fusion(vector, lexical);
-        let (results, _, _, _) = deduplicate_and_diversify(
-            fused,
-            limit,
-            near_duplicate_threshold,
-            max_chunks_per_document,
+        let (results, diagnostics) = select_with_diagnostics(
+            vector,
+            lexical,
+            SearchSettings {
+                limit,
+                candidate_limit,
+                distance_threshold,
+                near_duplicate_threshold,
+                max_chunks_per_document,
+            },
         );
+        debug!(?diagnostics, "Chronicle retrieval diagnostics");
         if results.is_empty() {
             Ok(RetrievalOutcome::NoResultMeetsThreshold)
         } else {
@@ -194,48 +333,37 @@ fn reciprocal_rank_fusion(
         .collect()
 }
 
+#[cfg(test)]
 fn deduplicate_and_diversify(
     candidates: Vec<SearchResult>,
     limit: usize,
     near_duplicate_threshold: f32,
     max_chunks_per_document: usize,
 ) -> (Vec<SearchResult>, usize, usize, usize) {
-    let mut accepted = Vec::with_capacity(limit);
-    let mut exact_keys = HashSet::new();
-    let mut document_counts = HashMap::new();
-    let mut exact_duplicates = 0;
-    let mut near_duplicates = 0;
-    let mut document_cap = 0;
-
-    for candidate in candidates {
-        if accepted.len() >= limit {
-            break;
-        }
-
-        let exact_key = canonical_text(&candidate.text);
-        if !exact_keys.insert(exact_key) {
-            exact_duplicates += 1;
-            continue;
-        }
-
-        if is_near_duplicate(&candidate, &accepted, near_duplicate_threshold) {
-            near_duplicates += 1;
-            continue;
-        }
-
-        let document_count = document_counts
-            .entry(candidate.document_path.clone())
-            .or_insert(0);
-        if *document_count >= max_chunks_per_document {
-            document_cap += 1;
-            continue;
-        }
-
-        *document_count += 1;
-        accepted.push(candidate);
-    }
-
-    (accepted, exact_duplicates, near_duplicates, document_cap)
+    let (results, diagnostics) = select_with_diagnostics(
+        Vec::new(),
+        candidates,
+        SearchSettings {
+            limit,
+            candidate_limit: 1000,
+            distance_threshold: 0.8,
+            near_duplicate_threshold,
+            max_chunks_per_document,
+        },
+    );
+    let count = |reason| {
+        diagnostics
+            .candidates
+            .iter()
+            .filter(|c| c.decision == reason)
+            .count()
+    };
+    (
+        results,
+        count("exact_duplicate"),
+        count("near_duplicate"),
+        count("document_cap"),
+    )
 }
 
 fn canonical_text(text: &str) -> String {
@@ -314,6 +442,73 @@ mod tests {
             overlaps_previous,
             distance: 0.0,
         }
+    }
+
+    #[test]
+    fn diagnostics_explain_each_selection_decision_without_passage_text() -> Result<()> {
+        let mut rejected = result("threshold", 0, "private body text", false);
+        rejected.distance = 2.0;
+        let lexical = vec![
+            result("a", 0, "one two three four five", false),
+            result("b", 0, "one two three four five", false),
+            result("c", 0, "one two three four five extra", false),
+            result("a", 1, "entirely different words", false),
+            result("d", 0, "another distinct passage", false),
+            result("e", 0, "beyond result budget", false),
+        ];
+        let (selected, report) = select_with_diagnostics(
+            vec![rejected],
+            lexical,
+            SearchSettings {
+                limit: 2,
+                candidate_limit: 10,
+                distance_threshold: 0.8,
+                near_duplicate_threshold: 0.75,
+                max_chunks_per_document: 1,
+            },
+        );
+        assert_eq!(selected.len(), 2);
+        let reasons = report
+            .candidates
+            .iter()
+            .map(|c| c.decision)
+            .collect::<HashSet<_>>();
+        for reason in [
+            "selected",
+            "vector_threshold",
+            "exact_duplicate",
+            "near_duplicate",
+            "document_cap",
+            "result_limit",
+        ] {
+            assert!(reasons.contains(reason), "Missing {reason}");
+        }
+        assert!(!serde_json::to_string(&report)?.contains("private body text"));
+        Ok(())
+    }
+
+    #[test]
+    fn diagnostics_keep_threshold_rejected_vector_when_lexical_matches() {
+        let mut candidate = result("a", 0, "passage", false);
+        candidate.distance = 2.0;
+        let (selected, report) = select_with_diagnostics(
+            vec![candidate.clone()],
+            vec![candidate],
+            SearchSettings {
+                limit: 1,
+                candidate_limit: 1,
+                distance_threshold: 0.8,
+                near_duplicate_threshold: 0.85,
+                max_chunks_per_document: 1,
+            },
+        );
+        assert_eq!(selected.len(), 1);
+        let candidate = &report.candidates[0];
+        assert!(!candidate.vector_passed_threshold);
+        assert_eq!(candidate.vector_rank, Some(1));
+        assert_eq!(candidate.lexical_rank, Some(1));
+        assert_eq!(candidate.decision, "selected");
+        assert!((candidate.rrf_score - 1.0 / 61.0).abs() < 1e-10);
     }
 
     #[test]

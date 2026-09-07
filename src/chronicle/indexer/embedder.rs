@@ -9,7 +9,7 @@ use candle_transformers::models::bert::{self, BertModel, Config};
 use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::{Encoding, PaddingParams, PaddingStrategy, Tokenizer, TruncationParams};
 
-const MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
+pub const MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
 
 pub const EMBEDDING_DIMENSIONS: usize = 384;
 const MAX_SEQUENCE_LENGTH: usize = 512;
@@ -24,6 +24,7 @@ pub trait EmbeddingModel: Send + Sync {
 
 pub struct Embedder {
     model: BertModel,
+    revision: String,
     chunking_tokenizer: Tokenizer,
     tokenizer: Tokenizer,
     padding: PaddingParams,
@@ -96,13 +97,24 @@ impl Embedder {
 
         tracing::info!("Embedding model loaded");
 
+        let revision = weights_path
+            .parent()
+            .and_then(std::path::Path::file_name)
+            .context("Missing embedding model snapshot revision")?
+            .to_string_lossy()
+            .into_owned();
         Ok(Self {
             model,
+            revision,
             chunking_tokenizer,
             tokenizer,
             padding,
             device,
         })
+    }
+
+    pub fn revision(&self) -> &str {
+        &self.revision
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
