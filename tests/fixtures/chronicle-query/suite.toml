@@ -120,11 +120,124 @@ note_type = "location"
 [[cases]]
 id = "deities"
 question = "How many deities are recorded?"
-expected_total = 0
+expected_total = 1
 [cases.plan]
 operation = "count"
 note_type = "deity"
 [cases.plan.filters]
+
+[[cases]]
+id = "appearance-membership"
+question = "List characters who appeared in Riftweavers."
+expected_total = 3
+expected_ids = ["ada", "bela", "corin"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+conditions = [{ field = "appearances", operator = "contains", value = "[[Riftweavers]]" }]
+
+[[cases]]
+id = "appearance-and-role"
+question = "List NPCs who appeared in Riftweavers."
+expected_total = 3
+expected_ids = ["ada", "bela", "corin"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+role = "npc"
+conditions = [{ field = "appearances", operator = "contains", value = "[[Riftweavers]]" }]
+
+[[cases]]
+id = "affiliation-membership"
+question = "How many characters are affiliated with the Ember Guild?"
+expected_total = 2
+[cases.plan]
+operation = "count"
+note_type = "character"
+[cases.plan.filters]
+conditions = [{ field = "affiliations", operator = "contains", value = "[[Ember Guild]]" }]
+
+[[cases]]
+id = "event-death-cause"
+question = "List characters whose life status cause is the Battle of Castle Vetra."
+expected_total = 1
+expected_ids = ["corin"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+conditions = [{ field = "life_status_cause", operator = "equals", value = "[[Battle of Castle Vetra]]" }]
+
+[[cases]]
+id = "combined-generic-conditions"
+question = "List characters who appeared in Riftweavers and whose life status cause is the Battle of Castle Vetra."
+expected_total = 1
+expected_ids = ["corin"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+conditions = [
+  { field = "appearances", operator = "contains", value = "[[Riftweavers]]" },
+  { field = "life_status_cause", operator = "equals", value = "[[Battle of Castle Vetra]]" },
+]
+
+[[cases]]
+id = "plain-string-equality"
+question = "List characters whose life status has been recorded since 1608."
+expected_total = 1
+expected_ids = ["corin"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+conditions = [{ field = "life_status_since", operator = "equals", value = "1608" }]
+
+[[cases]]
+id = "deity-type"
+question = "List deities whose deity type is Major."
+expected_total = 1
+expected_ids = ["vey"]
+[cases.plan]
+operation = "list"
+note_type = "deity"
+[cases.plan.filters]
+conditions = [{ field = "deity_type", operator = "equals", value = "Major" }]
+
+[[cases]]
+id = "location-political-affiliation"
+question = "List locations politically affiliated with the Northmere Council."
+expected_total = 1
+expected_ids = ["moonspire"]
+[cases.plan]
+operation = "list"
+note_type = "location"
+[cases.plan.filters]
+conditions = [{ field = "political_affiliations", operator = "contains", value = "[[Northmere Council]]" }]
+
+[[cases]]
+id = "organisation-patron-deity"
+question = "List organisations with Vey as a patron deity."
+expected_total = 1
+expected_ids = ["ember-guild"]
+[cases.plan]
+operation = "list"
+note_type = "organisation"
+[cases.plan.filters]
+conditions = [{ field = "patron_deities", operator = "contains", value = "[[Vey]]" }]
+
+[[cases]]
+id = "monster-size"
+question = "List monsters with huge sizes."
+expected_total = 1
+expected_ids = ["dragons"]
+[cases.plan]
+operation = "list"
+note_type = "monster"
+[cases.plan.filters]
+conditions = [{ field = "sizes", operator = "contains", value = "huge" }]
 
 [[cases]]
 id = "ordinary"

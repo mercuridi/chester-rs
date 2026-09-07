@@ -112,7 +112,7 @@ fn is_markdown_file(path: &Path) -> bool {
 fn is_templates_directory(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("templates"))
+        .is_some_and(|name| name.eq_ignore_ascii_case("99 templates"))
 }
 
 fn scan_file(path: &Path) -> Result<Option<Document>> {

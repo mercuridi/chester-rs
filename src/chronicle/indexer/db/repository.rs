@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use sqlx::{Row, sqlite::SqlitePool};
+use sqlx::{QueryBuilder, Row, Sqlite, sqlite::SqlitePool};
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -297,17 +297,27 @@ impl IndexerDb {
         let status = filters
             .character_status
             .map(crate::chronicle::query::plan::CharacterStatus::as_str);
-        let mut tx = self.pool.begin().await?;
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT note_id) FROM note_metadata
-            WHERE status = 'canon' AND note_type = ? AND (? IS NULL OR role = ?) AND (? IS NULL OR life_status = ?)")
-            .bind(note_type).bind(role).bind(role).bind(status).bind(status).fetch_one(&mut *tx).await?;
+        let mut count = structured_query(
+            "SELECT COUNT(DISTINCT m.note_id) FROM note_metadata m",
+            note_type,
+            filters,
+            role,
+            status,
+        );
+        let total: i64 = count.build_query_scalar().fetch_one(&self.pool).await?;
         let mut notes = Vec::new();
         if matches!(plan, Plan::List { .. }) {
-            let rows = sqlx::query("SELECT m.note_id, MIN(d.path) AS path FROM note_metadata m JOIN documents d ON d.id = m.document_id
-                WHERE m.status = 'canon' AND m.note_type = ? AND (? IS NULL OR m.role = ?) AND (? IS NULL OR m.life_status = ?)
-                GROUP BY m.note_id ORDER BY m.note_id LIMIT ?")
-                .bind(note_type).bind(role).bind(role).bind(status).bind(status).bind(i64::try_from(LIST_LIMIT)?)
-                .fetch_all(&mut *tx).await?;
+            let mut query = structured_query(
+                "SELECT m.note_id, MIN(d.path) AS path FROM note_metadata m JOIN documents d ON d.id = m.document_id",
+                note_type,
+                filters,
+                role,
+                status,
+            );
+            query
+                .push(" GROUP BY m.note_id ORDER BY m.note_id LIMIT ")
+                .push_bind(i64::try_from(LIST_LIMIT)?);
+            let rows = query.build().fetch_all(&self.pool).await?;
             for row in rows {
                 let path: String = row.get("path");
                 notes.push(StructuredNote {
@@ -320,7 +330,6 @@ impl IndexerDb {
                 });
             }
         }
-        tx.commit().await?;
         Ok(StructuredResult { total, notes })
     }
 
@@ -410,6 +419,60 @@ impl IndexerDb {
     }
 }
 
+fn structured_query<'a>(
+    select: &str,
+    note_type: &'a str,
+    filters: &'a crate::chronicle::query::plan::Filters,
+    role: Option<&'static str>,
+    status: Option<&'static str>,
+) -> QueryBuilder<'a, Sqlite> {
+    use crate::chronicle::query::plan::ConditionOperator;
+
+    let mut query = QueryBuilder::new(select);
+    query
+        .push(" WHERE m.status = 'canon' AND m.note_type = ")
+        .push_bind(note_type);
+    if let Some(role) = role {
+        query.push(" AND m.role = ").push_bind(role);
+    }
+    if let Some(status) = status {
+        query.push(" AND m.life_status = ").push_bind(status);
+    }
+    for condition in &filters.conditions {
+        match condition.operator {
+            ConditionOperator::Equals => {
+                query
+                    .push(" AND EXISTS (SELECT 1 FROM note_scalar_fields s WHERE s.document_id = m.document_id AND s.field_name = ")
+                    .push_bind(&condition.field)
+                    .push(" AND s.value = ")
+                    .push_bind(&condition.value)
+                    .push(")");
+            }
+            ConditionOperator::Contains => {
+                let definition = crate::chronicle::indexer::schema::field_definition(
+                    note_type,
+                    &condition.field,
+                )
+                .expect("validated query condition field");
+                let table = match definition.value_type {
+                    crate::chronicle::indexer::schema::ValueType::WikilinkList => "note_wikilinks",
+                    crate::chronicle::indexer::schema::ValueType::StringList => "note_string_lists",
+                    _ => unreachable!("validated contains condition must be a list"),
+                };
+                query
+                    .push(" AND EXISTS (SELECT 1 FROM ")
+                    .push(table)
+                    .push(" l WHERE l.document_id = m.document_id AND l.field_name = ")
+                    .push_bind(&condition.field)
+                    .push(" AND l.value = ")
+                    .push_bind(&condition.value)
+                    .push(")");
+            }
+        }
+    }
+    query
+}
+
 /// Returns the cache location for the current derived-index format.
 ///
 /// The format is encoded in the filename rather than tracked inside `SQLite`:
@@ -485,6 +548,10 @@ async fn write_metadata(
         .bind(document_id)
         .execute(&mut *connection)
         .await?;
+    sqlx::query("DELETE FROM note_scalar_fields WHERE document_id = ?")
+        .bind(document_id)
+        .execute(&mut *connection)
+        .await?;
 
     for (field_name, value) in &metadata.fields {
         match value {
@@ -499,10 +566,30 @@ async fn write_metadata(
                 for (position, value) in values.iter().enumerate() {
                     sqlx::query("INSERT INTO note_string_lists(document_id, field_name, position, value) VALUES (?, ?, ?, ?)")
                         .bind(document_id).bind(field_name).bind(i64::try_from(position)?).bind(value)
-                        .execute(&mut *connection).await?;
+                    .execute(&mut *connection).await?;
                 }
             }
-            _ => {}
+            crate::chronicle::indexer::frontmatter::MetadataValue::String(value)
+            | crate::chronicle::indexer::frontmatter::MetadataValue::Date(value)
+            | crate::chronicle::indexer::frontmatter::MetadataValue::FantasyDate(value)
+            | crate::chronicle::indexer::frontmatter::MetadataValue::Wikilink(value)
+            | crate::chronicle::indexer::frontmatter::MetadataValue::StringOrWikilink(value)
+            | crate::chronicle::indexer::frontmatter::MetadataValue::Enum(value) => {
+                sqlx::query("INSERT INTO note_scalar_fields(document_id, field_name, value) VALUES (?, ?, ?)")
+                    .bind(document_id)
+                    .bind(field_name)
+                    .bind(value)
+                    .execute(&mut *connection)
+                    .await?;
+            }
+            crate::chronicle::indexer::frontmatter::MetadataValue::Boolean(value) => {
+                sqlx::query("INSERT INTO note_scalar_fields(document_id, field_name, value) VALUES (?, ?, ?)")
+                    .bind(document_id)
+                    .bind(field_name)
+                    .bind(value.to_string())
+                    .execute(&mut *connection)
+                    .await?;
+            }
         }
     }
 
@@ -771,6 +858,24 @@ mod tests {
                 .await?;
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].get::<String, _>("value"), "[[Veyra]]");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn structured_conditions_query_scalar_and_wikilink_list_metadata() -> Result<()> {
+        let (_directory, db) = test_database().await?;
+        let source = "---\nid: tamsin\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nlife_status: dead\nlife_status_cause: '[[Battle of Castle Vetra]]'\nappearances: ['[[Riftweavers]]']\n---\n";
+        let (metadata, _) =
+            crate::chronicle::indexer::frontmatter::parse(source)?.context("note")?;
+        db.replace_note("Tamsin.md", "hash", &[], &[], &metadata)
+            .await?;
+
+        let plan = crate::chronicle::query::planner::parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"[[Battle of Castle Vetra]]"},{"field":"appearances","operator":"contains","value":"[[Riftweavers]]"}]}}"#,
+        )?;
+        let result = db.execute_plan(&plan).await?;
+        assert_eq!(result.total, 1);
+        assert_eq!(result.notes[0].id, "tamsin");
         Ok(())
     }
 

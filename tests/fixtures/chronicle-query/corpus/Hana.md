@@ -9,6 +9,7 @@ aliases: []
 summary: ""
 role: ex-pc
 life_status: alive
+appearances: ["[[Prince of Resau]]"]
 ---
 # Hana
 

@@ -1,3 +1,4 @@
+use crate::chronicle::indexer::schema::{self, ValueType};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +61,23 @@ pub struct Filters {
     pub role: Option<CharacterRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character_status: Option<CharacterStatus>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<Condition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConditionOperator {
+    Equals,
+    Contains,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Condition {
+    pub field: String,
+    pub operator: ConditionOperator,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -92,6 +110,9 @@ impl Plan {
                     || (filters.role.is_none() && filters.character_status.is_none()),
                 "Character filters require character notes"
             );
+            for condition in &filters.conditions {
+                validate_condition(note_type, condition)?;
+            }
         }
         Ok(())
     }
@@ -106,11 +127,58 @@ impl Plan {
     }
 }
 
+fn validate_condition(note_type: &str, condition: &Condition) -> Result<()> {
+    ensure!(
+        !condition.value.trim().is_empty(),
+        "Query values cannot be empty"
+    );
+    let definition = schema::field_definition(note_type, &condition.field).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Field `{}` is not available on {note_type} notes",
+            condition.field
+        )
+    })?;
+    match condition.operator {
+        ConditionOperator::Equals => ensure!(
+            !matches!(
+                definition.value_type,
+                ValueType::StringList | ValueType::WikilinkList
+            ),
+            "`equals` requires a scalar field"
+        ),
+        ConditionOperator::Contains => ensure!(
+            matches!(
+                definition.value_type,
+                ValueType::StringList | ValueType::WikilinkList
+            ),
+            "`contains` requires a list field"
+        ),
+    }
+    if let ValueType::FixedEnum(vocabulary) = definition.value_type {
+        ensure!(
+            schema::vocabulary_contains(vocabulary, &condition.value),
+            "Invalid value `{}` for `{}`",
+            condition.value,
+            condition.field
+        );
+    }
+    if matches!(
+        definition.value_type,
+        ValueType::WikilinkList | ValueType::Wikilink
+    ) {
+        ensure!(
+            condition.value.trim().starts_with("[[") && condition.value.trim().ends_with("]]"),
+            "Invalid wikilink query value"
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn rejects_unknown_fields_operators_and_invalid_combinations() {
+    fn rejects_unknown_fields_operators_and_invalid_combinations() -> anyhow::Result<()> {
         for input in [
             r#"{"operation":"count","note_type":"character","filters":{"location":"Northmere"}}"#,
             r#"{"operation":"count","note_type":"character","filters":{"role":"villain"}}"#,
@@ -124,5 +192,12 @@ mod tests {
         ] {
             assert!(serde_json::from_str::<Plan>(input).is_ok_and(|p| p.validate().is_err()));
         }
+        let plan = serde_json::from_str::<Plan>(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"contains","value":"[[Riftweavers]]"}]}}"#,
+        )?;
+        plan.validate()?;
+        assert!(serde_json::from_str::<Plan>(r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"equals","value":"[[Riftweavers]]"}]}}"#)
+            .is_ok_and(|plan| plan.validate().is_err()));
+        Ok(())
     }
 }

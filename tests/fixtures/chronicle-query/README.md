@@ -1,12 +1,15 @@
 # Structured count/list MVP evaluation
 
-The fixture contains 10 canon characters, two locations, one organisation, and an
-excluded draft character. Character records cover NPC, PC, ex-PC, alive, dead,
-missing, explicitly unknown, and omitted metadata. The retrieval baseline corpus
-is unchanged and remains a separate evaluation.
+The fixture contains 10 canon characters, two locations, one organisation, one
+deity, one monster, and an excluded draft character. Character records cover NPC,
+PC, ex-PC, alive, dead, missing, explicitly unknown, and omitted metadata. It also
+covers generic scalar equality, wikilink-list membership, string-list membership,
+and conjunctions across the declared frontmatter taxonomy. The retrieval baseline
+corpus is unchanged and remains a separate evaluation.
 
-The suite covers 27 questions: supported counts/lists, zero results, missing values,
-ordinary retrieval questions, unsupported restrictions, and ambiguous follow-ups.
+The suite covers 37 questions: legacy and generic supported counts/lists, zero
+results, missing values, ordinary retrieval questions, unsupported restrictions, and
+ambiguous follow-ups.
 
 From the repository root, run the deterministic executor evaluation with defaults:
 

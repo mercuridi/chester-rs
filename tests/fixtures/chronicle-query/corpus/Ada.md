@@ -9,6 +9,8 @@ aliases: []
 summary: ""
 role: npc
 life_status: alive
+appearances: ["[[Riftweavers]]"]
+affiliations: ["[[Ember Guild]]"]
 ---
 # Ada
 

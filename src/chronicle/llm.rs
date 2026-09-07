@@ -162,8 +162,8 @@ impl Llm {
     }
 
     pub async fn generate_plan(&self, question: &str) -> Result<String> {
-        self.generate_with_system(crate::chronicle::query::planner::SYSTEM, question, 256, 0.0)
-            .await
+        let system = crate::chronicle::query::planner::system_prompt();
+        self.generate_with_system(&system, question, 256, 0.0).await
     }
 
     async fn generate_with_system(
