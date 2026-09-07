@@ -1,6 +1,19 @@
 # Changelog
 
-## [2.8.0] — 2026-09-05
+## [2.9.0] — 2026-09-07
+
+### Features
+
+- Hybrid retrieval with FTS5/BM25
+- Chronicle retrieval evaluation suite with dummy corpus
+- Structured querying for chronicle plus routing model
+
+
+### Bug Fixes
+
+- Further extend dummy corpus
+
+## [v2.8.0] — 2026-09-05
 
 ### Features
 
