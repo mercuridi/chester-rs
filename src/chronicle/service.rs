@@ -28,6 +28,39 @@ pub struct Chronicle {
     lifecycle: tokio::sync::Mutex<()>,
 }
 
+#[derive(Clone, Copy)]
+enum RetrievalMode {
+    Ordinary,
+    UnsupportedStructuredQuery,
+    PlanningFailure,
+}
+
+impl RetrievalMode {
+    fn prefix(self) -> &'static str {
+        match self {
+            Self::Ordinary => "",
+            Self::UnsupportedStructuredQuery => {
+                "An exhaustive count or list is unavailable for this question. "
+            }
+            Self::PlanningFailure => {
+                "I couldn't validate a structured plan for this request, so this is a best-effort answer from retrieved notes. "
+            }
+        }
+    }
+
+    fn retrieval_question(self, question: &str) -> String {
+        match self {
+            Self::Ordinary => question.to_owned(),
+            Self::UnsupportedStructuredQuery => format!(
+                "{question}\n\nThis query cannot be executed as a structured count or list. Describe only documented examples from the retrieved passages. Do not infer an exhaustive total or claim this is a complete list."
+            ),
+            Self::PlanningFailure => format!(
+                "{question}\n\nThe structured query planner did not produce a valid plan. Describe only documented examples from the retrieved passages. Do not infer an exhaustive total or claim this is a complete list."
+            ),
+        }
+    }
+}
+
 impl Chronicle {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -101,7 +134,7 @@ impl Chronicle {
         use super::query::{plan::Plan, planner, render};
         let plan = match self.llm.generate_plan(question).await {
             Ok(response) => match planner::parse_for_question(question, &response) {
-                Ok(plan) => plan,
+                Ok(plan) => Some(plan),
                 Err(error) => {
                     debug!(%error, planner_response = %response, "Chronicle query planner response rejected");
                     debug!("Retrying Chronicle query planner with correction request");
@@ -110,26 +143,31 @@ impl Chronicle {
                             match planner::parse_for_question(question, &retry_response) {
                                 Ok(plan) => {
                                     debug!(?plan, "Chronicle query planner retry accepted");
-                                    plan
+                                    Some(plan)
                                 }
                                 Err(retry_error) => {
                                     debug!(%retry_error, planner_response = %retry_response, "Chronicle query planner retry response rejected");
                                     tracing::warn!(%retry_error, "Query planning failed after retry; using non-exhaustive retrieval");
-                                    Plan::Unsupported {}
+                                    None
                                 }
                             }
                         }
                         Err(retry_error) => {
                             tracing::warn!(%retry_error, initial_error = %error, "Query planning retry failed; using non-exhaustive retrieval");
-                            Plan::Unsupported {}
+                            None
                         }
                     }
                 }
             },
             Err(error) => {
                 tracing::warn!(%error, "Query planning failed; using non-exhaustive retrieval");
-                Plan::Unsupported {}
+                None
             }
+        };
+        let Some(plan) = plan else {
+            return self
+                .answer_from_retrieval(question, RetrievalMode::PlanningFailure)
+                .await;
         };
         debug!(?plan, "Validated Chronicle query plan");
         match &plan {
@@ -138,17 +176,15 @@ impl Chronicle {
                 Ok(render::render(&plan, &result, self.max_reply_length))
             }
             Plan::Clarify {} => Ok("Please name what you want counted or listed, and any character role or status filters.".chars().take(self.max_reply_length).collect()),
-            Plan::Search {} => self.answer_from_retrieval(question, false).await,
-            Plan::Unsupported {} => self.answer_from_retrieval(question, true).await,
+            Plan::Search {} => self.answer_from_retrieval(question, RetrievalMode::Ordinary).await,
+            Plan::Unsupported {} => self
+                .answer_from_retrieval(question, RetrievalMode::UnsupportedStructuredQuery)
+                .await,
         }
     }
 
-    async fn answer_from_retrieval(&self, question: &str, unsupported: bool) -> Result<String> {
-        let prefix = if unsupported {
-            "An exhaustive count or list is unavailable for this question. "
-        } else {
-            ""
-        };
+    async fn answer_from_retrieval(&self, question: &str, mode: RetrievalMode) -> Result<String> {
+        let prefix = mode.prefix();
         let answer_limit = self.max_reply_length.saturating_sub(prefix.chars().count());
         if answer_limit == 0 {
             return Ok(prefix.chars().take(self.max_reply_length).collect());
@@ -197,13 +233,7 @@ impl Chronicle {
             }
         };
 
-        let retrieval_question = if unsupported {
-            format!(
-                "{question}\n\nThis query cannot be executed as a structured count or list. Describe only documented examples from the retrieved passages. Do not infer an exhaustive total or claim this is a complete list."
-            )
-        } else {
-            question.to_owned()
-        };
+        let retrieval_question = mode.retrieval_question(question);
         let assembly = prompt::build_prompt_with_budget(
             &retrieval_question,
             &results,
@@ -617,8 +647,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_plan_uses_qualified_retrieval_and_clarification_does_not_search() -> Result<()>
-    {
+    async fn invalid_plan_uses_best_effort_retrieval_and_clarification_does_not_search()
+    -> Result<()> {
         let (chronicle, retriever, llm) =
             service(FakeOutcome::Results, ["Some documented examples."], 500)?;
         *llm.plan_output
@@ -627,12 +657,12 @@ mod tests {
             r#"{"operation":"count","note_type":"character","filters":{"location":"Northmere"}}"#
                 .into();
         let answer = chronicle.ask("How many characters in Northmere?").await?;
-        assert!(answer.starts_with("An exhaustive count or list is unavailable"));
+        assert!(answer.starts_with("I couldn't validate a structured plan"));
         assert!(
             llm.prompts
                 .lock()
                 .map_err(|_| anyhow!("prompts poisoned"))?[0]
-                .contains("Do not infer an exhaustive total")
+                .contains("planner did not produce a valid plan")
         );
         *llm.plan_output
             .lock()
@@ -645,6 +675,26 @@ mod tests {
                 .map_err(|_| anyhow!("calls poisoned"))?
                 .len(),
             1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsupported_plan_uses_non_exhaustive_retrieval() -> Result<()> {
+        let (chronicle, _retriever, llm) =
+            service(FakeOutcome::Results, ["Some documented examples."], 500)?;
+        *llm.plan_output
+            .lock()
+            .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"unsupported"}"#.into();
+
+        let answer = chronicle.ask("How many enemies does Ada have?").await?;
+
+        assert!(answer.starts_with("An exhaustive count or list is unavailable"));
+        assert!(
+            llm.prompts
+                .lock()
+                .map_err(|_| anyhow!("prompts poisoned"))?[0]
+                .contains("cannot be executed as a structured count or list")
         );
         Ok(())
     }

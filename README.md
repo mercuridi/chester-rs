@@ -298,8 +298,9 @@ proof of absence. Explicit `unknown` status is queryable and differs from omissi
 
 The planner uses separate JSON-only instructions, a 256-token output budget, and
 zero-temperature generation. An invalid planner response receives one corrective
-retry; a second invalid response and unsupported counts/lists fall back to hybrid
-retrieval with an explicit non-exhaustive qualification. Ordinary factual
+retry; a second invalid response falls back to a labelled best-effort retrieval
+answer, while a validated unsupported count/list falls back with an explicit
+non-exhaustive qualification. Ordinary factual
 questions retain hybrid retrieval and answer generation. Ambiguous references such
 as “List them” ask for clarification; conversation memory is not implemented.
 Negation, OR, location/relationship restrictions, non-canon selection, historical
