@@ -334,3 +334,16 @@ Malformed character fields fail ingestion with the note path in the diagnostic.
 See the [structured evaluation guide](tests/fixtures/chronicle-query/README.md) for
 deterministic and real-planner checks. Structured plans are logged at debug level;
 planning JSON and database bookkeeping are not passed into answer context.
+
+### Bounded synthesis
+
+Broad open-ended requests such as “Summarise the history of the Ember Kingdom”
+are routed to bounded synthesis. Chronicle retrieves one larger, diverse hybrid
+evidence set using the `synthesis_*` limits, splits it into context-safe batches,
+and turns each batch into hidden evidence notes. If those notes do not fit the
+final context, Chronicle recursively reduces them before producing one concise
+narrative answer. It never performs follow-up retrieval during synthesis; the
+initial retrieved passages are the complete evidence boundary. Source labels are
+kept only in intermediate prompts and logs, never shown to the user. The final
+prompt asks Chronicle to disclose material gaps or conflicting evidence, but not
+to add a boilerplate coverage disclaimer when the evidence is adequate.

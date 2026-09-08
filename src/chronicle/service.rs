@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
 use super::{
+    config::SynthesisSettings,
     indexer::{
         db::repository::{AccessScope, IndexerDb},
         prompt,
@@ -25,6 +26,7 @@ pub struct Chronicle {
     retrieval_distance_threshold: f32,
     retrieval_near_duplicate_threshold: f32,
     retrieval_max_chunks_per_document: usize,
+    synthesis: SynthesisSettings,
     max_reply_length: usize,
     lifecycle: tokio::sync::Mutex<()>,
 }
@@ -73,6 +75,7 @@ impl Chronicle {
         retrieval_distance_threshold: f32,
         retrieval_near_duplicate_threshold: f32,
         retrieval_max_chunks_per_document: usize,
+        synthesis: SynthesisSettings,
         max_reply_length: usize,
     ) -> Self {
         Self {
@@ -86,6 +89,7 @@ impl Chronicle {
             retrieval_distance_threshold,
             retrieval_near_duplicate_threshold,
             retrieval_max_chunks_per_document,
+            synthesis,
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
         }
@@ -118,6 +122,7 @@ impl Chronicle {
             retrieval_distance_threshold,
             retrieval_near_duplicate_threshold,
             retrieval_max_chunks_per_document,
+            synthesis: SynthesisSettings::default(),
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
         }
@@ -185,9 +190,7 @@ impl Chronicle {
             }
             Plan::Clarify {} => Ok("Please name what you want counted or listed, and any character role or status filters.".chars().take(self.max_reply_length).collect()),
             Plan::Search {} => self.answer_from_retrieval(question, RetrievalMode::Ordinary, access).await,
-            // Synthesis has a distinct planner route now. Until its bounded map/reduce
-            // execution is added, retain the established retrieval answer behavior.
-            Plan::Synthesis {} => self.answer_from_retrieval(question, RetrievalMode::Ordinary, access).await,
+            Plan::Synthesis {} => self.answer_from_synthesis(question, access).await,
             Plan::Unsupported {} => self
                 .answer_from_retrieval(question, RetrievalMode::UnsupportedStructuredQuery, access)
                 .await,
@@ -272,6 +275,114 @@ impl Chronicle {
 
         let answer = self.generate_answer(&prompt, answer_limit).await?;
         Ok(format!("{prefix}{answer}"))
+    }
+
+    async fn answer_from_synthesis(&self, question: &str, access: AccessScope) -> Result<String> {
+        use super::{
+            indexer::retriever::SearchSettings,
+            synthesis::{self, EvidenceNote},
+        };
+
+        let outcome = self
+            .retriever
+            .search(
+                question,
+                SearchSettings {
+                    limit: self.synthesis.retrieval_limit,
+                    candidate_limit: self.synthesis.candidate_limit,
+                    distance_threshold: self.retrieval_distance_threshold,
+                    near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
+                    max_chunks_per_document: self.synthesis.max_chunks_per_document,
+                },
+                access,
+            )
+            .await;
+        let results = match outcome {
+            Ok(RetrievalOutcome::Results(results)) => results,
+            Ok(RetrievalOutcome::BadQuestion) => {
+                return Ok("Please provide a non-empty question.".into());
+            }
+            Ok(RetrievalOutcome::CorpusEmpty) => return Ok("Chronicle corpus is empty.".into()),
+            Ok(RetrievalOutcome::NoResultMeetsThreshold) => {
+                return Ok("No relevant Chronicle context was found.".into());
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Chronicle synthesis retrieval failed");
+                return Ok("Chronicle retrieval failed.".into());
+            }
+        };
+
+        let token_budget = self
+            .synthesis
+            .batch_token_budget
+            .min(self.llm.prompt_token_budget());
+        let sources = synthesis::retrieved_evidence(&results);
+        let map_plan = synthesis::pack_batches(
+            question,
+            &sources,
+            token_budget,
+            self.synthesis.max_batches,
+            synthesis::map_prompt,
+            |prompt| self.llm.count_input_tokens(prompt),
+        )?;
+        debug!(
+            retrieved_result_count = results.len(),
+            map_batch_count = map_plan.batches.len(),
+            omitted_result_count = map_plan.omitted_items,
+            "Built bounded Chronicle synthesis map plan"
+        );
+
+        let mut notes = Vec::with_capacity(map_plan.batches.len());
+        for batch in map_plan.batches {
+            let source_labels = synthesis::merged_labels(&batch);
+            let prompt = synthesis::map_prompt(question, &batch);
+            notes.push(EvidenceNote {
+                source_labels,
+                text: self.llm.generate(&prompt).await?,
+            });
+        }
+
+        let mut reduction_depth = 0usize;
+        while self
+            .llm
+            .count_input_tokens(&synthesis::final_prompt(question, &notes))?
+            > self.llm.prompt_token_budget()
+        {
+            let reduction_plan = synthesis::pack_batches(
+                question,
+                &notes,
+                token_budget,
+                notes.len(),
+                synthesis::reduce_prompt,
+                |prompt| self.llm.count_input_tokens(prompt),
+            )?;
+            if reduction_plan.batches.len() >= notes.len() {
+                anyhow::bail!(
+                    "Synthesis evidence could not be reduced to fit the LLM context budget"
+                );
+            }
+            let mut reduced = Vec::with_capacity(reduction_plan.batches.len());
+            for batch in reduction_plan.batches {
+                let source_labels = synthesis::merged_labels(&batch);
+                let prompt = synthesis::reduce_prompt(question, &batch);
+                reduced.push(EvidenceNote {
+                    source_labels,
+                    text: self.llm.generate(&prompt).await?,
+                });
+            }
+            notes = reduced;
+            reduction_depth += 1;
+        }
+        debug!(
+            reduction_depth,
+            evidence_note_count = notes.len(),
+            "Built Chronicle synthesis answer prompt"
+        );
+        self.generate_answer(
+            &synthesis::final_prompt(question, &notes),
+            self.max_reply_length,
+        )
+        .await
     }
 
     async fn generate_answer(&self, prompt: &str, answer_limit: usize) -> Result<String> {
@@ -751,9 +862,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn synthesis_plan_uses_the_dedicated_route_until_bounded_execution_is_added() -> Result<()>
-    {
-        let (chronicle, retriever, llm) = service(FakeOutcome::Results, ["answer"], 100)?;
+    async fn synthesis_plan_uses_bounded_retrieval_and_map_reduce() -> Result<()> {
+        let (chronicle, retriever, llm) =
+            service(FakeOutcome::Results, ["evidence note", "answer"], 100)?;
         *llm.plan_output
             .lock()
             .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"synthesis"}"#.into();
@@ -770,12 +881,19 @@ mod tests {
                 .as_slice(),
             &[(
                 "Summarise the history of Northmere.".into(),
-                5,
-                15,
+                12,
+                40,
                 0.8,
                 0.85,
-                2
+                3
             )]
+        );
+        assert_eq!(
+            llm.prompts
+                .lock()
+                .map_err(|_| anyhow!("prompts poisoned"))?
+                .len(),
+            2
         );
         Ok(())
     }

@@ -168,6 +168,18 @@ pub struct SynthesisSettings {
     pub max_batches: usize,
 }
 
+impl Default for SynthesisSettings {
+    fn default() -> Self {
+        Self {
+            retrieval_limit: default_synthesis_retrieval_limit(),
+            candidate_limit: default_synthesis_candidate_limit(),
+            max_chunks_per_document: default_synthesis_max_chunks_per_document(),
+            batch_token_budget: default_synthesis_batch_token_budget(),
+            max_batches: default_synthesis_max_batches(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct AliasGroup {
     pub name: String,
