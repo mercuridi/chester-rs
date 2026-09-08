@@ -253,7 +253,8 @@ impl Retriever {
         let (vector, lexical) = tokio::try_join!(
             self.db
                 .search_similar_for(&embedding, settings.candidate_limit, access),
-            self.db.search_lexical_for(query, settings.candidate_limit, access),
+            self.db
+                .search_lexical_for(query, settings.candidate_limit, access),
         )?;
         let (results, diagnostics) = select_with_diagnostics(vector, lexical, settings);
         debug!(?diagnostics, "Chronicle retrieval diagnostics");

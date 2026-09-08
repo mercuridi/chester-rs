@@ -1,7 +1,7 @@
+use super::query::{plan::Plan, planner, render};
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tracing::{debug, info, instrument};
-use super::query::{plan::Plan, planner, render};
 
 use super::{
     indexer::{
