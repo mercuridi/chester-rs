@@ -211,11 +211,18 @@ impl Chronicle {
                 None
             }
         };
-        let Some(plan) = plan else {
+        let Some(mut plan) = plan else {
             return self
                 .answer_from_retrieval(question, RetrievalMode::PlanningFailure, access)
                 .await;
         };
+        if plan.selection().is_some() {
+            self.db
+                .as_ref()
+                .context("Structured datastore unavailable")?
+                .resolve_string_or_wikilinks(&mut plan)
+                .await?;
+        }
         debug!(route = ?plan, "Validated Chronicle query plan");
         match &plan {
             Plan::Count { .. } | Plan::List { .. } => {
@@ -1021,7 +1028,7 @@ mod tests {
         *llm.plan_output
             .lock()
             .map_err(|_| anyhow!("plan poisoned"))? =
-            r#"{"operation":"count","note_type":"character","filters":{"location":"Northmere"}}"#
+            r#"{"operation":"count","note_type":"character","filters":{"character_status":"alive"}}"#
                 .into();
         let answer = chronicle.ask("How many characters in Northmere?").await?;
         assert!(answer.starts_with("I couldn't validate a structured plan"));

@@ -193,7 +193,8 @@ async fn evaluate(
             Ok(response) => {
                 report.planner_responses.push(response.clone());
                 match planner::parse_for_question(&report.case.question, &response) {
-                    Ok(plan) => {
+                    Ok(mut plan) => {
+                        db.resolve_string_or_wikilinks(&mut plan).await?;
                         report.planner_correct = Some(plan == report.case.plan);
                         report.actual_plan = Some(plan);
                     }
@@ -212,7 +213,8 @@ async fn evaluate(
                                     &report.case.question,
                                     &retry_response,
                                 ) {
-                                    Ok(plan) => {
+                                    Ok(mut plan) => {
+                                        db.resolve_string_or_wikilinks(&mut plan).await?;
                                         report.planner_correct = Some(plan == report.case.plan);
                                         report.actual_plan = Some(plan);
                                     }

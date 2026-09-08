@@ -343,7 +343,9 @@ impl IndexerDb {
         access: AccessScope,
     ) -> Result<StructuredResult> {
         use crate::chronicle::query::{plan::Plan, render::LIST_LIMIT};
+        let mut plan = plan.clone();
         plan.validate()?;
+        self.resolve_string_or_wikilinks(&mut plan).await?;
         let (note_type, filters) = plan.selection().context("Plan is not a structured query")?;
         let role = filters
             .role
@@ -387,6 +389,49 @@ impl IndexerDb {
             }
         }
         Ok(StructuredResult { total, notes })
+    }
+
+    /// Resolves a plain `StringOrWikilink` condition only when the exact
+    /// bracketed candidate is already present in indexed metadata. Literal
+    /// values remain untouched, so this cannot turn arbitrary prose into a
+    /// link query.
+    pub async fn resolve_string_or_wikilinks(
+        &self,
+        plan: &mut crate::chronicle::query::plan::Plan,
+    ) -> Result<()> {
+        let (note_type, filters) = match plan {
+            crate::chronicle::query::plan::Plan::Count { note_type, filters }
+            | crate::chronicle::query::plan::Plan::List { note_type, filters } => {
+                (note_type.as_str(), filters)
+            }
+            _ => return Ok(()),
+        };
+        for condition in &mut filters.conditions {
+            let Some(definition) =
+                crate::chronicle::indexer::schema::field_definition(note_type, &condition.field)
+            else {
+                continue;
+            };
+            if definition.value_type
+                != crate::chronicle::indexer::schema::ValueType::StringOrWikilink
+                || condition.value.trim().is_empty()
+                || condition.value.contains(['[', ']'])
+            {
+                continue;
+            }
+            let candidate = format!("[[{}]]", condition.value.trim());
+            let exists: i64 = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM note_scalar_fields WHERE value = ? UNION ALL SELECT 1 FROM note_wikilinks WHERE value = ?)",
+            )
+            .bind(&candidate)
+            .bind(&candidate)
+            .fetch_one(&self.pool)
+            .await?;
+            if exists != 0 {
+                condition.value = candidate;
+            }
+        }
+        Ok(())
     }
 
     #[cfg_attr(
@@ -995,6 +1040,26 @@ mod tests {
         let result = db.execute_plan(&plan).await?;
         assert_eq!(result.total, 1);
         assert_eq!(result.notes[0].id, "tamsin");
+
+        let mut plain_target_plan = crate::chronicle::query::planner::parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"Battle of Castle Vetra"}]}}"#,
+        )?;
+        db.resolve_string_or_wikilinks(&mut plain_target_plan)
+            .await?;
+        assert_eq!(
+            plain_target_plan.selection().unwrap().1.conditions[0].value,
+            "[[Battle of Castle Vetra]]"
+        );
+        assert_eq!(db.execute_plan(&plain_target_plan).await?.total, 1);
+
+        let mut literal_plan = crate::chronicle::query::planner::parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"old age"}]}}"#,
+        )?;
+        db.resolve_string_or_wikilinks(&mut literal_plan).await?;
+        assert_eq!(
+            literal_plan.selection().unwrap().1.conditions[0].value,
+            "old age"
+        );
         Ok(())
     }
 
