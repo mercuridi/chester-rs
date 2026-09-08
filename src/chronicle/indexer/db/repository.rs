@@ -30,6 +30,13 @@ pub struct GraphStats {
     pub edge_count: u64,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PageRankStats {
+    pub document_count: u64,
+    pub player_iterations: usize,
+    pub gm_iterations: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct IndexedChunk {
     pub chunk_index: i64,
@@ -165,6 +172,67 @@ impl IndexerDb {
             .await
             .context("Failed to commit resolved document graph")?;
         Ok(GraphStats { edge_count })
+    }
+
+    /// Recompute both access-scoped `PageRank` vectors from the persisted graph.
+    /// Player scores use only player-visible nodes and edges, so secret graph
+    /// topology cannot influence player retrieval ordering.
+    pub async fn rebuild_document_pagerank(&self) -> Result<PageRankStats> {
+        let mut tx = self.pool.begin().await?;
+        let nodes =
+            sqlx::query("SELECT document_id, visibility FROM note_metadata ORDER BY document_id")
+                .fetch_all(&mut *tx)
+                .await
+                .context("Failed to load document graph nodes for PageRank")?;
+        let all_nodes = nodes
+            .iter()
+            .map(|row| row.get::<i64, _>("document_id"))
+            .collect::<Vec<_>>();
+        let player_nodes = nodes
+            .iter()
+            .filter(|row| row.get::<String, _>("visibility") != "secret")
+            .map(|row| row.get::<i64, _>("document_id"))
+            .collect::<Vec<_>>();
+
+        let gm_edges = graph_edges(&mut tx, false).await?;
+        let player_edges = graph_edges(&mut tx, true).await?;
+        let gm = crate::chronicle::indexer::pagerank::compute(&all_nodes, &gm_edges);
+        let player = crate::chronicle::indexer::pagerank::compute(&player_nodes, &player_edges);
+        let player_entries = player
+            .entries
+            .iter()
+            .map(|entry| (entry.document_id, (entry.score, entry.rank)))
+            .collect::<std::collections::HashMap<_, _>>();
+
+        sqlx::query("DELETE FROM document_pagerank")
+            .execute(&mut *tx)
+            .await
+            .context("Failed to clear existing PageRank scores")?;
+        for entry in &gm.entries {
+            let (player_score, player_rank) = player_entries
+                .get(&entry.document_id)
+                .copied()
+                .unwrap_or((0.0, 0));
+            sqlx::query(
+                "INSERT INTO document_pagerank (document_id, player_score, player_rank, gm_score, gm_rank) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(entry.document_id)
+            .bind(player_score)
+            .bind(player_rank)
+            .bind(entry.score)
+            .bind(entry.rank)
+            .execute(&mut *tx)
+            .await
+            .context("Failed to persist PageRank score")?;
+        }
+        tx.commit()
+            .await
+            .context("Failed to commit PageRank scores")?;
+        Ok(PageRankStats {
+            document_count: u64::try_from(all_nodes.len()).context("Document count exceeds u64")?,
+            player_iterations: player.iterations,
+            gm_iterations: gm.iterations,
+        })
     }
 
     pub async fn delete_document(&self, document_id: i64) -> Result<()> {
@@ -693,6 +761,32 @@ impl IndexerDb {
     }
 }
 
+async fn graph_edges(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    player_scope: bool,
+) -> Result<Vec<(i64, i64)>> {
+    let query = if player_scope {
+        "SELECT DISTINCT edge.source_document_id, edge.target_document_id
+         FROM document_graph_edges edge
+         JOIN note_metadata source ON source.document_id = edge.source_document_id
+         JOIN note_metadata target ON target.document_id = edge.target_document_id
+         WHERE edge.visibility = 'player'
+           AND source.visibility != 'secret'
+           AND target.visibility != 'secret'"
+    } else {
+        "SELECT DISTINCT source_document_id, target_document_id
+         FROM document_graph_edges"
+    };
+    let rows = sqlx::query(query)
+        .fetch_all(&mut **tx)
+        .await
+        .context("Failed to load document graph edges for PageRank")?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.get("source_document_id"), row.get("target_document_id")))
+        .collect())
+}
+
 fn structured_query<'a>(
     select: &str,
     note_type: &'a str,
@@ -1058,7 +1152,7 @@ pub(super) fn register_sqlite_vec() {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::chronicle::indexer::link_resolver::{
@@ -1249,6 +1343,77 @@ mod tests {
                 .await?,
             0
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rebuild_document_pagerank_separates_player_and_gm_graphs() -> Result<()> {
+        let (_directory, db) = test_database().await?;
+        for (id, visibility) in [
+            ("player-source", "player"),
+            ("target", "player"),
+            ("secret-source", "secret"),
+        ] {
+            let source = format!(
+                "---\nid: {id}\ntype: character\nstatus: canon\nvisibility: {visibility}\ncreated: 2026-09-07\nupdated: 2026-09-07\n---\n"
+            );
+            let (metadata, _) =
+                crate::chronicle::indexer::frontmatter::parse(&source)?.context("note")?;
+            db.replace_note(&format!("{id}.md"), id, &[], &[], &metadata)
+                .await?;
+        }
+        db.rebuild_document_graph(&LinkResolution {
+            resolved: vec![
+                ResolvedLink {
+                    source_note_id: "player-source".into(),
+                    target_note_id: "target".into(),
+                    origin: LinkOrigin::Body,
+                    visibility: LinkVisibility::Player,
+                    raw: "[[target]]".into(),
+                    fragment: None,
+                },
+                ResolvedLink {
+                    source_note_id: "secret-source".into(),
+                    target_note_id: "target".into(),
+                    origin: LinkOrigin::Body,
+                    visibility: LinkVisibility::Secret,
+                    raw: "[[target]]".into(),
+                    fragment: None,
+                },
+            ],
+            ..LinkResolution::default()
+        })
+        .await?;
+        let stats = db.rebuild_document_pagerank().await?;
+        assert_eq!(stats.document_count, 3);
+        assert!(stats.player_iterations > 0);
+        assert!(stats.gm_iterations > 0);
+
+        let rows = sqlx::query(
+            "SELECT m.note_id, p.player_score, p.player_rank, p.gm_score, p.gm_rank
+             FROM document_pagerank p JOIN note_metadata m ON m.document_id = p.document_id
+             ORDER BY m.note_id",
+        )
+        .fetch_all(&db.pool)
+        .await?;
+        let score = |id: &str, column: &str| -> f64 {
+            rows.iter()
+                .find(|row| row.get::<String, _>("note_id") == id)
+                .map(|row| row.get(column))
+                .expect("score row exists")
+        };
+        let rank = |id: &str, column: &str| -> i64 {
+            rows.iter()
+                .find(|row| row.get::<String, _>("note_id") == id)
+                .map(|row| row.get(column))
+                .expect("rank row exists")
+        };
+        assert!(score("secret-source", "player_score").abs() < f64::EPSILON);
+        assert_eq!(rank("secret-source", "player_rank"), 0);
+        assert_eq!(rank("target", "player_rank"), 1);
+        assert_eq!(rank("target", "gm_rank"), 1);
+        assert!(score("target", "player_score") > score("player-source", "player_score"));
+        assert!(score("target", "gm_score") > score("secret-source", "gm_score"));
         Ok(())
     }
 

@@ -258,6 +258,13 @@ impl Indexer {
             edges = graph_stats.edge_count,
             "Persisted resolved Chronicle document graph"
         );
+        let pagerank_stats = self.db.rebuild_document_pagerank().await?;
+        debug!(
+            documents = pagerank_stats.document_count,
+            player_iterations = pagerank_stats.player_iterations,
+            gm_iterations = pagerank_stats.gm_iterations,
+            "Rebuilt Chronicle document PageRank"
+        );
 
         info!(?stats, "Chronicle indexing finished");
         Ok(stats)

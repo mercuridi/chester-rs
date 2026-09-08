@@ -259,9 +259,9 @@ Chronicle resolves frontmatter and Markdown-body wikilinks into a derived,
 visibility-aware document graph. Links may target a note ID, vault-relative path,
 filename title, or declared alias; display aliases, heading references, and block
 references resolve to their containing document. Dangling and ambiguous links do
-not create graph edges. The graph is rebuilt after every indexing pass; it is
-currently retained for future graph-aware retrieval and does not yet alter
-retrieval ranking.
+not create graph edges. The graph and player/GM-specific PageRank scores rebuild
+after every indexing pass. Scores are retained for the forthcoming retrieval
+reranker and do not yet alter retrieval ranking.
 SQLite FTS5 BM25 and vector retrieval each fetch `retrieval_candidate_limit`
 candidates. Equal-weight reciprocal rank fusion (constant 60) merges the lists,
 then existing duplicate removal, document caps, and context budgeting apply.

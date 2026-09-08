@@ -10,3 +10,4 @@ pub mod service;
 
 pub mod frontmatter;
 pub mod link_resolver;
+pub mod pagerank;

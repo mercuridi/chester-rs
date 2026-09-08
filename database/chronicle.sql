@@ -65,6 +65,13 @@ CREATE TABLE IF NOT EXISTS document_graph_edges (
     visibility TEXT NOT NULL,
     PRIMARY KEY (source_document_id, target_document_id, origin, field_name, visibility)
 );
+CREATE TABLE IF NOT EXISTS document_pagerank (
+    document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
+    player_score REAL NOT NULL,
+    player_rank INTEGER NOT NULL,
+    gm_score REAL NOT NULL,
+    gm_rank INTEGER NOT NULL
+);
 
 CREATE INDEX IF NOT EXISTS note_metadata_selection ON note_metadata(status, note_type, role, life_status);
 CREATE INDEX IF NOT EXISTS note_wikilinks_lookup ON note_wikilinks(field_name, value);

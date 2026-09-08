@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 
 /// Bump whenever any stored Chronicle index output changes, including this
 /// schema, embedding dimensions, chunking, or retrieval-index semantics.
-pub const INDEX_FORMAT_VERSION: u32 = 6;
+pub const INDEX_FORMAT_VERSION: u32 = 7;
 
 const SCHEMA: &str = include_str!("../../../../database/chronicle.sql");
 
@@ -63,6 +63,7 @@ mod tests {
             "note_identifiers",
             "document_graph_edges",
             "document_graph_edges_target",
+            "document_pagerank",
         ] {
             let count: i64 = sqlx::query_scalar(
                 "SELECT COUNT(*) FROM sqlite_master WHERE (type = 'table' OR type = 'index') AND name = ?",
