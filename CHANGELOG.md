@@ -1,6 +1,27 @@
 # Changelog
 
-## [2.10.0] — 2026-09-07
+## [2.11.0] — 2026-09-08
+
+### Features
+
+- Improved chronicle database handling and setup
+- Generic structured query shape to improve hard lookup coverage plus evaluation tests
+- Add single retry for bad query router json and improve observability
+- Player/gm visibility controls with secret tagging
+
+
+### Bug Fixes
+
+- Big frontmatter schema update
+- Add new appearances field to character note taxonomy
+- Event occurrence fields do not conflict when blank any more
+- Templates are now ignored for preflight checks
+- Distinguish failed planning from unsupported query models
+- Tests for gm/player visibility
+- Clippy linting
+- Cargo fmt
+
+## [v2.10.0] — 2026-09-07
 
 ### Features
 
