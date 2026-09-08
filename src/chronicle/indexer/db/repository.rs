@@ -781,10 +781,9 @@ async fn write_metadata(
     if let Some(title) = Path::new(&path)
         .file_stem()
         .and_then(|title| title.to_str())
+        && !title.trim().is_empty()
     {
-        if !title.trim().is_empty() {
-            identifiers.insert(title.trim().to_owned());
-        }
+        identifiers.insert(title.trim().to_owned());
     }
     identifiers.extend(
         metadata
@@ -994,6 +993,7 @@ pub(super) fn register_sqlite_vec() {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
@@ -1134,7 +1134,7 @@ mod tests {
         db.resolve_string_or_wikilinks(&mut plain_target_plan)
             .await?;
         assert_eq!(
-            plain_target_plan.selection().unwrap().1.conditions[0].value,
+            plain_target_plan.selection().ok_or_else(|| anyhow::anyhow!("missing selection"))?.1.conditions[0].value,
             "[[Battle of Castle Vetra]]"
         );
         assert_eq!(db.execute_plan(&plain_target_plan).await?.total, 1);
@@ -1144,7 +1144,7 @@ mod tests {
         )?;
         db.resolve_string_or_wikilinks(&mut literal_plan).await?;
         assert_eq!(
-            literal_plan.selection().unwrap().1.conditions[0].value,
+            literal_plan.selection().ok_or_else(|| anyhow::anyhow!("missing selection"))?.1.conditions[0].value,
             "old age"
         );
         Ok(())

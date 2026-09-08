@@ -224,6 +224,7 @@ pub fn merged_labels(notes: &[EvidenceNote]) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp, clippy::struct_field_names, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use serde::Deserialize;

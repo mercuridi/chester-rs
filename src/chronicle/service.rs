@@ -337,6 +337,7 @@ impl Chronicle {
         Ok(format!("{prefix}{answer}"))
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn answer_from_synthesis(&self, question: &str, access: AccessScope) -> Result<String> {
         use super::{
             indexer::retriever::SearchSettings,
@@ -647,7 +648,7 @@ fn truncate_to_char_limit(answer: &str, max_length: usize) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::type_complexity, clippy::unwrap_used)]
+#[allow(clippy::type_complexity, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{Chronicle, truncate_to_char_limit};
     use crate::chronicle::indexer::db::repository::IndexerDb;
@@ -751,8 +752,7 @@ mod tests {
                 FakeOutcome::FourResults => Ok(RetrievalOutcome::Results(
                     ["one", "two", "three", "four"]
                         .into_iter()
-                        .enumerate()
-                        .map(|(_index, text)| SearchResult {
+                        .map(|text| SearchResult {
                             document_path: format!("{text}.md"),
                             chunk_index: 0,
                             heading: None,
@@ -1333,7 +1333,7 @@ mod tests {
         ]);
         let map_budget = (0..4)
             .map(|index| {
-                crate::chronicle::synthesis::map_prompt(question, &sources[index..index + 1]).len()
+                crate::chronicle::synthesis::map_prompt(question, &sources[index..=index]).len()
             })
             .max()
             .unwrap();

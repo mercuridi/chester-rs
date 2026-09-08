@@ -68,6 +68,7 @@ struct IntentFamilyAccuracy {
     accuracy: Option<f64>,
 }
 
+#[allow(clippy::cast_precision_loss)]
 fn family_accuracy(
     cases: &[CaseReport],
     test_planner: bool,

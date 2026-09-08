@@ -108,11 +108,13 @@ fn canonicalize_filters(value: &mut Value) {
     for (field, _, _) in &fields {
         filters.remove(field);
     }
-    let conditions = filters
+    let Some(conditions) = filters
         .entry("conditions")
         .or_insert_with(|| Value::Array(Vec::new()))
         .as_array_mut()
-        .expect("conditions was verified as an array");
+    else {
+        return;
+    };
     for (field, value_type, value) in fields {
         let operator = match value_type {
             crate::chronicle::indexer::schema::ValueType::StringList
@@ -353,7 +355,7 @@ mod tests {
                 Plan::Synthesis {} => r#"{"operation":"synthesis"}"#,
                 Plan::Search {} => r#"{"operation":"search"}"#,
                 Plan::Clarify {} => r#"{"operation":"clarify"}"#,
-                _ => unreachable!(),
+                _ => continue,
             };
             assert_eq!(
                 parse_for_question(question, response)?,

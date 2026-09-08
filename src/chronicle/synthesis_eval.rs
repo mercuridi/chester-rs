@@ -49,6 +49,7 @@ struct Topology {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(clippy::struct_field_names)]
 struct Safety {
     gm_only_note: String,
     draft_contradiction_note: String,
@@ -337,7 +338,7 @@ fn judge_prompt(
     targets: &[JudgeTarget],
     invalid_response: Option<&str>,
 ) -> String {
-    let targets = serde_json::to_string(targets).expect("judge targets are serializable");
+    let targets = serde_json::to_string(targets).unwrap_or_default();
     let mut prompt = format!(
         "You are a strict evaluator of a synthesis answer. Determine whether each unresolved rubric claim is entailed by the answer, contradicted by the answer, or unknown. Accept faithful paraphrases, but do not infer facts that the answer does not state. Use the entity requirements as hard constraints. Also flag any major causal claim in the answer that is not directly supported by the supplied rubric claims. Return JSON only, with exactly this schema: {{\"claims\":[{{\"id\":\"target id\",\"verdict\":\"entailed|contradicted|unknown\",\"confidence\":0.0}}],\"unsupported_causal_claims\":[{{\"claim\":\"short claim\",\"confidence\":0.0}}]}}. Include exactly one result for every supplied target, preserving each target id. Use an empty unsupported_causal_claims array when none are present. Confidence must be a JSON number from 0.0 to 1.0. Do not include markdown, explanations, or additional fields.\n\nQuestion:\n{question}\n\nAnswer:\n{answer}\n\nUnresolved targets:\n{targets}\n"
     );
@@ -936,12 +937,12 @@ fn validate(suite: &Suite) -> Result<()> {
 }
 
 fn create_report_file(requested: Option<&Path>) -> Result<(std::fs::File, PathBuf)> {
-    let path = requested.map(Path::to_path_buf).unwrap_or_else(|| {
+    let path = requested.map_or_else(|| {
         PathBuf::from(format!(
             "chronicle-synthesis-report-{}.json",
             Utc::now().format("%Y%m%d-%H%M%S")
         ))
-    });
+    }, Path::to_path_buf);
     ensure!(!path.exists(), "Report path must be a new file");
     Ok((
         OpenOptions::new()
@@ -952,6 +953,7 @@ fn create_report_file(requested: Option<&Path>) -> Result<(std::fs::File, PathBu
     ))
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<()> {
     let suite: Suite = toml::from_str(&std::fs::read_to_string(suite_path)?)?;
     validate(&suite)?;
@@ -1051,14 +1053,14 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
                     } = evaluation;
                     let apply_result =
                         apply_judge_results(&mut required_fact_results, "required_fact", &judged)
-                            .and_then(|_| {
+                            .and_then(|()| {
                                 apply_judge_results(
                                     &mut prohibited_claim_results,
                                     "prohibited_claim",
                                     &judged,
                                 )
                             })
-                            .and_then(|_| apply_judge_results(&mut gap_results, "gap", &judged));
+                            .and_then(|()| apply_judge_results(&mut gap_results, "gap", &judged));
                     match apply_result {
                         Ok(()) => (metadata, false, unsupported_causal_claims),
                         Err(error) => (
@@ -1170,6 +1172,7 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
