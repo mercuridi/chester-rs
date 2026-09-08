@@ -443,6 +443,7 @@ mod tests {
                         chunk_index: 0,
                         heading: None,
                         text: note.content,
+                        visibility: crate::chronicle::indexer::document::ChunkVisibility::Player,
                         overlaps_previous: false,
                     }],
                     &[vec![0.0; 384]],

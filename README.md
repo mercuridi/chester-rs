@@ -260,8 +260,22 @@ words are quoted as literals rather than interpreted as FTS operators.
 Startup incrementally updates both indexes, removing deleted or newly ineligible
 notes. FTS5 triggers maintain the lexical index as chunks change; opening the
 database does not rebuild it. Model loading and `/chronicle ask` remain unchanged.
-Visibility is stored but **not enforced** in this MVP: secret and mixed canon notes
-are searchable by every caller. Player/GM access control is deferred.
+`gm_user_ids` in `[chronicle]` grants the listed Discord users access to every
+canon note. Other callers can retrieve `player` notes and the player-visible
+parts of `mixed` notes, but never `secret` notes or protected passages.
+
+Use an Obsidian-style `[!secret]` callout for protected passages in a `mixed`
+note:
+
+```markdown
+> [!secret]- GM notes
+> This passage is retrieved only for configured GMs.
+```
+
+The callout ends at the first non-quoted line. Secret callouts are removed
+before player-visible chunks are embedded, so their text cannot enter a player
+LLM prompt. Corpus indexing rejects nested secret callouts and callouts in notes
+whose frontmatter visibility is not `mixed`.
 
 ### Retrieval evaluation and diagnostics
 

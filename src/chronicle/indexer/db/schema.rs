@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 
 /// Bump whenever any stored Chronicle index output changes, including this
 /// schema, embedding dimensions, chunking, or retrieval-index semantics.
-pub const INDEX_FORMAT_VERSION: u32 = 3;
+pub const INDEX_FORMAT_VERSION: u32 = 4;
 
 const SCHEMA: &str = include_str!("../../../../database/chronicle.sql");
 
@@ -40,7 +40,8 @@ mod tests {
         for name in [
             "documents",
             "chunks",
-            "chunk_embeddings",
+            "chunk_embeddings_player",
+            "chunk_embeddings_secret",
             "chunk_fts",
             "note_metadata",
             "adventure_metadata",

@@ -13,11 +13,13 @@ CREATE TABLE IF NOT EXISTS chunks (
     chunk_index       INTEGER NOT NULL,
     heading           TEXT,
     text              TEXT NOT NULL,
+    visibility        TEXT NOT NULL,
     overlaps_previous INTEGER NOT NULL DEFAULT 0,
     UNIQUE (document_id, chunk_index)
 );
 
-CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings USING vec0(embedding float[384]);
+CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings_player USING vec0(embedding float[384]);
+CREATE VIRTUAL TABLE IF NOT EXISTS chunk_embeddings_secret USING vec0(embedding float[384]);
 CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(heading, text, content = 'chunks', content_rowid = 'id');
 
 CREATE TRIGGER IF NOT EXISTS chunks_fts_insert AFTER INSERT ON chunks BEGIN

@@ -5,6 +5,18 @@ use chrono::Utc;
 use sqlx::{QueryBuilder, Row, Sqlite, sqlite::SqlitePool};
 use std::path::Path;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessScope {
+    Player,
+    Gm,
+}
+
+impl AccessScope {
+    const fn is_gm(self) -> bool {
+        matches!(self, Self::Gm)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct IndexedDocument {
     pub id: i64,
@@ -17,6 +29,7 @@ pub struct IndexedChunk {
     pub chunk_index: i64,
     pub heading: Option<String>,
     pub text: String,
+    pub visibility: crate::chronicle::indexer::document::ChunkVisibility,
     /// Whether this chunk contains content repeated from its immediate predecessor.
     pub overlaps_previous: bool,
 }
@@ -93,7 +106,7 @@ impl IndexerDb {
 
         sqlx::query(
             r"
-            DELETE FROM chunk_embeddings
+            DELETE FROM chunk_embeddings_player
             WHERE rowid IN (
                 SELECT id
                 FROM chunks
@@ -104,7 +117,20 @@ impl IndexerDb {
         .bind(document_id)
         .execute(&mut *tx)
         .await
-        .context("Failed to delete document embeddings")?;
+        .context("Failed to delete player document embeddings")?;
+
+        sqlx::query(
+            r"
+            DELETE FROM chunk_embeddings_secret
+            WHERE rowid IN (
+                SELECT id FROM chunks WHERE document_id = ?
+            )
+            ",
+        )
+        .bind(document_id)
+        .execute(&mut *tx)
+        .await
+        .context("Failed to delete secret document embeddings")?;
 
         sqlx::query("DELETE FROM documents WHERE id = ?")
             .bind(document_id)
@@ -180,7 +206,7 @@ impl IndexerDb {
 
         sqlx::query(
             r"
-            DELETE FROM chunk_embeddings
+            DELETE FROM chunk_embeddings_player
             WHERE rowid IN (
                 SELECT id
                 FROM chunks
@@ -191,7 +217,20 @@ impl IndexerDb {
         .bind(document_id)
         .execute(&mut *tx)
         .await
-        .context("Failed to delete existing chunk embeddings")?;
+        .context("Failed to delete existing player chunk embeddings")?;
+
+        sqlx::query(
+            r"
+            DELETE FROM chunk_embeddings_secret
+            WHERE rowid IN (
+                SELECT id FROM chunks WHERE document_id = ?
+            )
+            ",
+        )
+        .bind(document_id)
+        .execute(&mut *tx)
+        .await
+        .context("Failed to delete existing secret chunk embeddings")?;
 
         sqlx::query("DELETE FROM chunks WHERE document_id = ?")
             .bind(document_id)
@@ -207,9 +246,10 @@ impl IndexerDb {
                     chunk_index,
                     heading,
                     text,
+                    visibility,
                     overlaps_previous
                 )
-                VALUES (?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?)
                 RETURNING id
                 ",
             )
@@ -217,6 +257,7 @@ impl IndexerDb {
             .bind(chunk.chunk_index)
             .bind(&chunk.heading)
             .bind(&chunk.text)
+            .bind(chunk.visibility.as_str())
             .bind(chunk.overlaps_previous)
             .fetch_one(&mut *tx)
             .await
@@ -225,15 +266,17 @@ impl IndexerDb {
             let embedding_json =
                 serde_json::to_string(embedding).context("Failed to serialise embedding")?;
 
-            sqlx::query(
-                r"
-                INSERT INTO chunk_embeddings (
-                    rowid,
-                    embedding
-                )
-                VALUES (?, ?)
-                ",
-            )
+            let embedding_table = match chunk.visibility {
+                crate::chronicle::indexer::document::ChunkVisibility::Player => {
+                    "chunk_embeddings_player"
+                }
+                crate::chronicle::indexer::document::ChunkVisibility::Secret => {
+                    "chunk_embeddings_secret"
+                }
+            };
+            sqlx::query(&format!(
+                "INSERT INTO {embedding_table} (rowid, embedding) VALUES (?, ?)"
+            ))
             .bind(chunk_id)
             .bind(embedding_json)
             .execute(&mut *tx)
@@ -273,13 +316,14 @@ impl IndexerDb {
         document_id: i64,
         chunks: &[crate::chronicle::indexer::document::Chunk],
     ) -> Result<bool> {
-        let rows = sqlx::query("SELECT chunk_index, heading, text, overlaps_previous FROM chunks WHERE document_id = ? ORDER BY chunk_index")
+        let rows = sqlx::query("SELECT chunk_index, heading, text, visibility, overlaps_previous FROM chunks WHERE document_id = ? ORDER BY chunk_index")
             .bind(document_id).fetch_all(&self.pool).await?;
         Ok(rows.len() == chunks.len()
             && rows.iter().zip(chunks).all(|(row, chunk)| {
                 usize::try_from(row.get::<i64, _>("chunk_index")).ok() == Some(chunk.index)
                     && row.get::<Option<String>, _>("heading") == chunk.heading
                     && row.get::<String, _>("text") == chunk.content
+                    && row.get::<String, _>("visibility") == chunk.visibility.as_str()
                     && row.get::<bool, _>("overlaps_previous") == (chunk.overlap_tokens > 0)
             }))
     }
@@ -287,6 +331,14 @@ impl IndexerDb {
     pub async fn execute_plan(
         &self,
         plan: &crate::chronicle::query::plan::Plan,
+    ) -> Result<StructuredResult> {
+        self.execute_plan_for(plan, AccessScope::Gm).await
+    }
+
+    pub async fn execute_plan_for(
+        &self,
+        plan: &crate::chronicle::query::plan::Plan,
+        access: AccessScope,
     ) -> Result<StructuredResult> {
         use crate::chronicle::query::{plan::Plan, render::LIST_LIMIT};
         plan.validate()?;
@@ -303,6 +355,7 @@ impl IndexerDb {
             filters,
             role,
             status,
+            access,
         );
         let total: i64 = count.build_query_scalar().fetch_one(&self.pool).await?;
         let mut notes = Vec::new();
@@ -313,6 +366,7 @@ impl IndexerDb {
                 filters,
                 role,
                 status,
+                access,
             );
             query
                 .push(" GROUP BY m.note_id ORDER BY m.note_id LIMIT ")
@@ -334,6 +388,15 @@ impl IndexerDb {
     }
 
     pub async fn search_lexical(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
+        self.search_lexical_for(query, limit, AccessScope::Gm).await
+    }
+
+    pub async fn search_lexical_for(
+        &self,
+        query: &str,
+        limit: usize,
+        access: AccessScope,
+    ) -> Result<Vec<SearchResult>> {
         let expression = lexical_expression(query);
         if expression.is_empty() || limit == 0 {
             return Ok(Vec::new());
@@ -342,9 +405,10 @@ impl IndexerDb {
             "SELECT d.path, c.chunk_index, c.heading, c.text, c.overlaps_previous
             FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid
             JOIN documents d ON d.id = c.document_id
-            WHERE chunk_fts MATCH ? ORDER BY bm25(chunk_fts, 2.0, 1.0), c.id LIMIT ?",
+            WHERE chunk_fts MATCH ? AND (? OR c.visibility = 'player') ORDER BY bm25(chunk_fts, 2.0, 1.0), c.id LIMIT ?",
         )
         .bind(expression)
+        .bind(access.is_gm())
         .bind(i64::try_from(limit)?)
         .fetch_all(&self.pool)
         .await
@@ -367,6 +431,16 @@ impl IndexerDb {
         embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
+        self.search_similar_for(embedding, limit, AccessScope::Gm)
+            .await
+    }
+
+    pub async fn search_similar_for(
+        &self,
+        embedding: &[f32],
+        limit: usize,
+        access: AccessScope,
+    ) -> Result<Vec<SearchResult>> {
         if embedding.len() != crate::chronicle::indexer::embedder::EMBEDDING_DIMENSIONS {
             anyhow::bail!(
                 "Expected embedding dimension {}, got {}",
@@ -382,7 +456,36 @@ impl IndexerDb {
         let embedding_json =
             serde_json::to_string(embedding).context("Failed to serialise query embedding")?;
 
-        let rows = sqlx::query(
+        let mut results = self
+            .search_similar_in_table("chunk_embeddings_player", &embedding_json, limit)
+            .await?;
+        if access.is_gm() {
+            results.extend(
+                self.search_similar_in_table("chunk_embeddings_secret", &embedding_json, limit)
+                    .await?,
+            );
+        }
+        results.sort_by(|left, right| {
+            left.distance
+                .total_cmp(&right.distance)
+                .then_with(|| left.document_path.cmp(&right.document_path))
+                .then_with(|| left.chunk_index.cmp(&right.chunk_index))
+        });
+        results.truncate(limit);
+        Ok(results)
+    }
+
+    async fn search_similar_in_table(
+        &self,
+        table: &str,
+        embedding_json: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        debug_assert!(matches!(
+            table,
+            "chunk_embeddings_player" | "chunk_embeddings_secret"
+        ));
+        let rows = sqlx::query(&format!(
             r"
             SELECT
                 d.path,
@@ -391,14 +494,14 @@ impl IndexerDb {
                 c.text,
                 c.overlaps_previous,
                 ce.distance
-            FROM chunk_embeddings ce
+            FROM {table} ce
             JOIN chunks c ON c.id = ce.rowid
             JOIN documents d ON d.id = c.document_id
             WHERE ce.embedding MATCH ?
             AND k = ?
             ORDER BY ce.distance
-            ",
-        )
+            "
+        ))
         .bind(embedding_json)
         .bind(i64::try_from(limit).context("Search result limit does not fit in SQLite integer")?)
         .fetch_all(&self.pool)
@@ -425,6 +528,7 @@ fn structured_query<'a>(
     filters: &'a crate::chronicle::query::plan::Filters,
     role: Option<&'static str>,
     status: Option<&'static str>,
+    access: AccessScope,
 ) -> QueryBuilder<'a, Sqlite> {
     use crate::chronicle::query::plan::ConditionOperator;
 
@@ -432,6 +536,9 @@ fn structured_query<'a>(
     query
         .push(" WHERE m.status = 'canon' AND m.note_type = ")
         .push_bind(note_type);
+    if access == AccessScope::Player {
+        query.push(" AND m.visibility != 'secret'");
+    }
     if let Some(role) = role {
         query.push(" AND m.role = ").push_bind(role);
     }
@@ -759,12 +866,14 @@ mod tests {
                 chunk_index: 0,
                 heading: Some("Introduction".into()),
                 text: "First chunk".into(),
+                visibility: crate::chronicle::indexer::document::ChunkVisibility::Player,
                 overlaps_previous: false,
             },
             IndexedChunk {
                 chunk_index: 1,
                 heading: Some("Introduction".into()),
                 text: "Second chunk".into(),
+                visibility: crate::chronicle::indexer::document::ChunkVisibility::Player,
                 overlaps_previous: true,
             },
         ]
@@ -880,6 +989,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn player_structured_queries_exclude_secret_notes() -> Result<()> {
+        let (_directory, db) = test_database().await?;
+        for (id, visibility) in [("public-npc", "player"), ("secret-npc", "secret")] {
+            let source = format!(
+                "---\nid: {id}\ntype: character\nstatus: canon\nvisibility: {visibility}\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\n---\n"
+            );
+            let (metadata, _) =
+                crate::chronicle::indexer::frontmatter::parse(&source)?.context("note")?;
+            db.replace_note(&format!("{id}.md"), id, &[], &[], &metadata)
+                .await?;
+        }
+        let plan = crate::chronicle::query::planner::parse(
+            r#"{"operation":"count","note_type":"character","filters":{"role":"npc"}}"#,
+        )?;
+        assert_eq!(
+            db.execute_plan_for(&plan, AccessScope::Player).await?.total,
+            1
+        );
+        assert_eq!(db.execute_plan_for(&plan, AccessScope::Gm).await?.total, 2);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn replacing_a_note_type_removes_the_old_type_metadata() -> Result<()> {
         let (_directory, db) = test_database().await?;
         let character = "---\nid: shifting-note\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\nlife_status: alive\nlocation: '[[Northmere]]'\n---\n";
@@ -971,6 +1103,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn player_search_excludes_secret_chunks_while_gm_search_includes_them() -> Result<()> {
+        let (_directory, database) = test_database().await?;
+        let chunks = [IndexedChunk {
+            chunk_index: 0,
+            heading: Some("GM notes".into()),
+            text: "moon-key-needle is hidden below the altar".into(),
+            visibility: crate::chronicle::indexer::document::ChunkVisibility::Secret,
+            overlaps_previous: false,
+        }];
+        database
+            .replace_note(
+                "mixed.md",
+                "visibility-hash",
+                &chunks,
+                &[embedding(0.0)],
+                &crate::chronicle::indexer::frontmatter::Metadata::default(),
+            )
+            .await?;
+
+        assert!(
+            database
+                .search_lexical_for("moon-key-needle", 5, AccessScope::Player)
+                .await?
+                .is_empty()
+        );
+        assert_eq!(
+            database
+                .search_lexical_for("moon-key-needle", 5, AccessScope::Gm)
+                .await?
+                .len(),
+            1
+        );
+        assert!(
+            database
+                .search_similar_for(&embedding(0.0), 5, AccessScope::Player)
+                .await?
+                .is_empty()
+        );
+        assert_eq!(
+            database
+                .search_similar_for(&embedding(0.0), 5, AccessScope::Gm)
+                .await?
+                .len(),
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn replace_document_rejects_mismatched_inputs_without_writing() -> anyhow::Result<()> {
         let (_directory, database) = test_database().await?;
 
@@ -1003,6 +1184,7 @@ mod tests {
             chunk_index: 0,
             heading: None,
             text: "Replacement chunk".into(),
+            visibility: crate::chronicle::indexer::document::ChunkVisibility::Player,
             overlaps_previous: false,
         }];
         let replacement_id = database
@@ -1032,7 +1214,7 @@ mod tests {
             "Replacement chunk"
         );
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chunk_embeddings")
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chunk_embeddings_player")
                 .fetch_one(&database.pool)
                 .await?,
             1
@@ -1058,7 +1240,7 @@ mod tests {
         assert!(database.all_documents().await?.is_empty());
         assert!(!database.has_chunks().await?);
         assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chunk_embeddings")
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chunk_embeddings_player")
                 .fetch_one(&database.pool)
                 .await?,
             0

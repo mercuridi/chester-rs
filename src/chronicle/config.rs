@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -77,6 +77,9 @@ struct RawChronicleConfig {
     max_chunk_tokens: usize,
 
     chunk_overlap_tokens: usize,
+
+    #[serde(default)]
+    gm_user_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -99,6 +102,7 @@ struct RawGuildConfig {
 pub struct Config {
     alias_groups: HashMap<AliasGroupId, AliasGroup>,
     guilds: HashMap<GuildId, GuildConfig>,
+    chronicle_gm_user_ids: HashSet<UserId>,
     pub database: DatabaseConfig,
     pub chronicle: ChronicleConfig,
     pub paths: AppPaths,
@@ -278,6 +282,15 @@ impl Config {
             );
         }
 
+        let mut chronicle_gm_user_ids = HashSet::new();
+        for raw_user_id in &raw.chronicle.gm_user_ids {
+            let user_id = parse_user_id(raw_user_id)
+                .with_context(|| format!("Invalid Chronicle GM user ID `{raw_user_id}`"))?;
+            if !chronicle_gm_user_ids.insert(user_id) {
+                bail!("Duplicate Chronicle GM user ID `{raw_user_id}`");
+            }
+        }
+
         let chronicle = ChronicleConfig {
             llm_repo: raw.chronicle.llm_repo,
             llm_revision: raw.chronicle.llm_revision,
@@ -309,6 +322,7 @@ impl Config {
         Ok(Self {
             alias_groups,
             guilds,
+            chronicle_gm_user_ids,
             database: DatabaseConfig {
                 jester: resolve_sqlite_url(project_root, &raw.database.jester),
                 chronicle: resolve_sqlite_url(project_root, &raw.database.chronicle),
@@ -372,6 +386,10 @@ impl Config {
         self.guilds
             .get(&guild_id)
             .is_some_and(|guild| guild.alias_groups.iter().any(|id| id == group_id))
+    }
+
+    pub fn is_chronicle_gm(&self, user_id: UserId) -> bool {
+        self.chronicle_gm_user_ids.contains(&user_id)
     }
 }
 
@@ -814,6 +832,35 @@ alias_groups = ["party"]
             .validate_participants("missing", [&UserId::new(10)])
             .unwrap_err();
         assert!(unknown.to_string().contains("unknown alias group"));
+        Ok(())
+    }
+
+    #[test]
+    fn loads_and_validates_chronicle_gm_ids() -> Result<()> {
+        let directory = tempdir()?;
+        let config_dir = directory.path().join(".chronicle");
+        fs::create_dir(&config_dir)?;
+        let path = config_dir.join("config.toml");
+        fs::write(
+            &path,
+            full_config().replace(
+                "chunk_overlap_tokens = 48",
+                "chunk_overlap_tokens = 48\ngm_user_ids = [\"10\", \"99\"]",
+            ),
+        )?;
+        let config = Config::load(&path)?;
+        assert!(config.is_chronicle_gm(UserId::new(10)));
+        assert!(config.is_chronicle_gm(UserId::new(99)));
+        assert!(!config.is_chronicle_gm(UserId::new(20)));
+
+        fs::write(
+            &path,
+            full_config().replace(
+                "chunk_overlap_tokens = 48",
+                "chunk_overlap_tokens = 48\ngm_user_ids = [\"10\", \"10\"]",
+            ),
+        )?;
+        assert!(Config::load(&path).is_err());
         Ok(())
     }
 

@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use tokenizers::Tokenizer;
 
-use super::super::document::{Chunk, Document};
+use super::super::document::{Chunk, ChunkVisibility, Document};
 use super::markdown::parse_blocks;
 use super::overlap::apply_overlap;
 use super::split::split_block;
@@ -114,6 +114,7 @@ pub fn chunk(
             document_path: document.path.clone(),
             index,
             content: document.content[chunk.range].to_owned(),
+            visibility: ChunkVisibility::Player,
             heading: chunk.heading,
             overlap_eligible: overlap.eligible,
             overlap_tokens: overlap.tokens,
@@ -199,6 +200,7 @@ mod tests {
             metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "tokens.md".into(),
             content: vec!["word"; word_count].join(" "),
+            secret_content: Vec::new(),
             content_hash: String::new(),
         }
     }
@@ -305,6 +307,7 @@ mod tests {
             metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "nested.md".into(),
             content: source.to_owned(),
+            secret_content: Vec::new(),
             content_hash: String::new(),
         };
         let chunks = chunk(&document, &tokenizer, 512, 0)?;
@@ -368,6 +371,7 @@ mod tests {
             metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "sections.md".into(),
             content: format!("# One\n\n{words}\n\n# Two\n\n{words}"),
+            secret_content: Vec::new(),
             content_hash: String::new(),
         };
 
@@ -395,6 +399,7 @@ mod tests {
             metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "code.md".into(),
             content: format!("```text\n{}\n```", vec!["word"; 40].join(" ")),
+            secret_content: Vec::new(),
             content_hash: String::new(),
         };
 
@@ -492,6 +497,7 @@ mod tests {
                 metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
                 path: "empty.md".into(),
                 content: content.into(),
+                secret_content: Vec::new(),
                 content_hash: String::new(),
             };
             assert!(chunk(&document, &tokenizer, 10, 0)?.is_empty());

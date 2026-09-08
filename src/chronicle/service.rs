@@ -4,7 +4,7 @@ use tracing::{debug, info, instrument};
 
 use super::{
     indexer::{
-        db::repository::IndexerDb,
+        db::repository::{AccessScope, IndexerDb},
         prompt,
         retriever::{RetrievalOutcome, Retriever, RetrieverApi},
     },
@@ -123,7 +123,15 @@ impl Chronicle {
     }
 
     #[instrument(skip(self, question), fields(question_len = question.len()))]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "test-friendly player-safe default")
+    )]
     pub async fn ask(&self, question: &str) -> Result<String> {
+        self.ask_for(question, AccessScope::Player).await
+    }
+
+    pub async fn ask_for(&self, question: &str, access: AccessScope) -> Result<String> {
         info!("Starting Chronicle question");
         let _lifecycle = self.lifecycle.lock().await;
         let _gpu_lease = self.runtime.acquire_inference()?;
@@ -166,24 +174,29 @@ impl Chronicle {
         };
         let Some(plan) = plan else {
             return self
-                .answer_from_retrieval(question, RetrievalMode::PlanningFailure)
+                .answer_from_retrieval(question, RetrievalMode::PlanningFailure, access)
                 .await;
         };
         debug!(?plan, "Validated Chronicle query plan");
         match &plan {
             Plan::Count { .. } | Plan::List { .. } => {
-                let result = self.db.as_ref().context("Structured datastore unavailable")?.execute_plan(&plan).await?;
+                let result = self.db.as_ref().context("Structured datastore unavailable")?.execute_plan_for(&plan, access).await?;
                 Ok(render::render(&plan, &result, self.max_reply_length))
             }
             Plan::Clarify {} => Ok("Please name what you want counted or listed, and any character role or status filters.".chars().take(self.max_reply_length).collect()),
-            Plan::Search {} => self.answer_from_retrieval(question, RetrievalMode::Ordinary).await,
+            Plan::Search {} => self.answer_from_retrieval(question, RetrievalMode::Ordinary, access).await,
             Plan::Unsupported {} => self
-                .answer_from_retrieval(question, RetrievalMode::UnsupportedStructuredQuery)
+                .answer_from_retrieval(question, RetrievalMode::UnsupportedStructuredQuery, access)
                 .await,
         }
     }
 
-    async fn answer_from_retrieval(&self, question: &str, mode: RetrievalMode) -> Result<String> {
+    async fn answer_from_retrieval(
+        &self,
+        question: &str,
+        mode: RetrievalMode,
+        access: AccessScope,
+    ) -> Result<String> {
         let prefix = mode.prefix();
         let answer_limit = self.max_reply_length.saturating_sub(prefix.chars().count());
         if answer_limit == 0 {
@@ -198,6 +211,7 @@ impl Chronicle {
                 self.retrieval_distance_threshold,
                 self.retrieval_near_duplicate_threshold,
                 self.retrieval_max_chunks_per_document,
+                access,
             )
             .await
         {
@@ -358,6 +372,7 @@ mod tests {
     struct FakeRetriever {
         outcome: FakeOutcome,
         calls: Mutex<Vec<(String, usize, usize, f32, f32, usize)>>,
+        accesses: Mutex<Vec<crate::chronicle::indexer::db::repository::AccessScope>>,
         loads: Mutex<usize>,
         unloads: Mutex<usize>,
     }
@@ -367,6 +382,7 @@ mod tests {
             Self {
                 outcome,
                 calls: Mutex::new(Vec::new()),
+                accesses: Mutex::new(Vec::new()),
                 loads: Mutex::new(0),
                 unloads: Mutex::new(0),
             }
@@ -383,6 +399,7 @@ mod tests {
             distance_threshold: f32,
             near_duplicate_threshold: f32,
             max_chunks_per_document: usize,
+            _access: crate::chronicle::indexer::db::repository::AccessScope,
         ) -> Result<RetrievalOutcome> {
             self.calls
                 .lock()
@@ -395,6 +412,10 @@ mod tests {
                     near_duplicate_threshold,
                     max_chunks_per_document,
                 ));
+            self.accesses
+                .lock()
+                .map_err(|_| anyhow!("accesses poisoned"))?
+                .push(_access);
             match self.outcome {
                 FakeOutcome::Results => Ok(RetrievalOutcome::Results(vec![SearchResult {
                     document_path: "doc.md".into(),
@@ -725,6 +746,29 @@ mod tests {
         assert_eq!(prompts.len(), 1);
         assert!(prompts[0].contains("Document: doc"));
         assert!(prompts[0].contains("Question:\nquestion"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ask_for_passes_the_callers_visibility_scope_to_retrieval() -> Result<()> {
+        let (chronicle, retriever, _) = service(FakeOutcome::Results, ["answer"], 100)?;
+        assert_eq!(
+            chronicle
+                .ask_for(
+                    "question",
+                    crate::chronicle::indexer::db::repository::AccessScope::Gm,
+                )
+                .await?,
+            "answer"
+        );
+        assert_eq!(
+            retriever
+                .accesses
+                .lock()
+                .map_err(|_| anyhow!("accesses poisoned"))?
+                .as_slice(),
+            &[crate::chronicle::indexer::db::repository::AccessScope::Gm]
+        );
         Ok(())
     }
 

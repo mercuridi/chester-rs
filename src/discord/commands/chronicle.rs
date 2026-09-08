@@ -355,7 +355,12 @@ pub async fn ask(
     info!(user = %ctx.author().id, question = %question, "Chronicle ask command requested");
     ctx.defer().await?;
 
-    let answer = ctx.data().chronicle.ask(&question).await?;
+    let access = if ctx.data().config.is_chronicle_gm(ctx.author().id) {
+        crate::chronicle::indexer::db::repository::AccessScope::Gm
+    } else {
+        crate::chronicle::indexer::db::repository::AccessScope::Player
+    };
+    let answer = ctx.data().chronicle.ask_for(&question, access).await?;
     info!(user = %ctx.author().id, reply = %answer, "Chronicle ask command returned reply");
 
     ctx.say(answer).await?;

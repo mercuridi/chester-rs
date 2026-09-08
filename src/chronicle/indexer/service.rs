@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use tokenizers::Encoding;
 
-use crate::chronicle::indexer::document::{Chunk, Document};
+use crate::chronicle::indexer::document::{Chunk, ChunkVisibility, Document};
 use tracing::{debug, info, instrument, warn};
 
 use super::{
@@ -33,24 +33,50 @@ impl PreparedDocument {
         max_chunk_tokens: usize,
         chunk_overlap_tokens: usize,
     ) -> Result<Self> {
-        let chunks = chunker::chunk::chunk(
+        let mut chunks = chunker::chunk::chunk(
             document,
             embedder.chunking_tokenizer(),
             max_chunk_tokens,
             chunk_overlap_tokens,
-        )?
-        .into_iter()
-        .map(|chunk| {
-            let encoding = embedder
-                .encode(&chunk.content)
-                .with_context(|| format!("Failed to tokenize chunk {}", chunk.index))?;
-            Ok(PreparedChunk {
-                chunk,
-                encoding,
-                embedding: None,
+        )?;
+        let primary_visibility = if document.metadata.visibility == "secret" {
+            ChunkVisibility::Secret
+        } else {
+            ChunkVisibility::Player
+        };
+        for chunk in &mut chunks {
+            chunk.visibility = primary_visibility;
+        }
+        for secret_content in &document.secret_content {
+            let mut secret_document = document.clone();
+            secret_document.content = secret_content.clone();
+            secret_document.secret_content.clear();
+            let offset = chunks.len();
+            let mut secret_chunks = chunker::chunk::chunk(
+                &secret_document,
+                embedder.chunking_tokenizer(),
+                max_chunk_tokens,
+                chunk_overlap_tokens,
+            )?;
+            for (index, chunk) in secret_chunks.iter_mut().enumerate() {
+                chunk.index = offset + index;
+                chunk.visibility = ChunkVisibility::Secret;
+            }
+            chunks.extend(secret_chunks);
+        }
+        let chunks = chunks
+            .into_iter()
+            .map(|chunk| {
+                let encoding = embedder
+                    .encode(&chunk.content)
+                    .with_context(|| format!("Failed to tokenize chunk {}", chunk.index))?;
+                Ok(PreparedChunk {
+                    chunk,
+                    encoding,
+                    embedding: None,
+                })
             })
-        })
-        .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self { chunks })
     }
@@ -66,6 +92,7 @@ impl PreparedDocument {
                     .context("Chunk index does not fit in SQLite integer")?,
                 heading: prepared.chunk.heading,
                 text: prepared.chunk.content,
+                visibility: prepared.chunk.visibility,
                 overlaps_previous: prepared.chunk.overlap_tokens > 0,
             });
             embeddings.push(prepared.embedding.ok_or_else(|| {
@@ -492,6 +519,7 @@ mod tests {
                 document_path: "prepared.md".into(),
                 index,
                 content: text.to_owned(),
+                visibility: ChunkVisibility::Player,
                 heading: Some("Prepared".to_owned()),
                 overlap_eligible: index > 0,
                 overlap_tokens: usize::from(index > 0),
@@ -556,6 +584,7 @@ mod tests {
             metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "doc.md".into(),
             content: "content".into(),
+            secret_content: Vec::new(),
             content_hash: "hash".into(),
         };
         let baseline = index_fingerprint(&document, 100, 10);

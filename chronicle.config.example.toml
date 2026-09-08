@@ -66,6 +66,10 @@ max_chunk_tokens = 480
 # A 10–20% experiment for this budget would be 48–96 tokens.
 chunk_overlap_tokens = 0
 
+# Discord users allowed to retrieve GM-only notes and `[!secret]` callouts.
+# Use Discord user IDs, not usernames. Everyone else receives player-safe context.
+gm_user_ids = []
+
 # Optional: map Discord users to names used in transcripts.
 # Replace the example IDs with real Discord user IDs.
 #

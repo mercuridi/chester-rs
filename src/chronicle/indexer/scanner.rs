@@ -112,7 +112,9 @@ fn is_markdown_file(path: &Path) -> bool {
 fn is_templates_directory(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("99 templates"))
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("templates") || name.eq_ignore_ascii_case("99 templates")
+        })
 }
 
 fn scan_file(path: &Path) -> Result<Option<Document>> {
@@ -130,6 +132,8 @@ fn scan_file(path: &Path) -> Result<Option<Document>> {
         return Ok(None);
     }
     let title = path.file_stem().unwrap_or_default().to_string_lossy();
+    let (body, secret_content) = split_secret_callouts(&body, &metadata.visibility)
+        .with_context(|| format!("Invalid secret callout in {}", path.display()))?;
     let content = format!(
         "# {title}\n\n{}\n\n{}\n\n{}\n\n{body}",
         metadata.aliases.join(", "),
@@ -140,7 +144,99 @@ fn scan_file(path: &Path) -> Result<Option<Document>> {
         metadata,
         path: path.to_path_buf(),
         content,
+        secret_content: secret_content
+            .into_iter()
+            .map(|callout| format!("# {title}\n\n## {}\n\n{}", callout.title, callout.body))
+            .collect(),
         content_hash,
+    }))
+}
+
+#[derive(Debug)]
+struct SecretCallout {
+    title: String,
+    body: String,
+}
+
+/// Separates Obsidian-style `[!secret]` callouts from player-visible Markdown.
+/// A callout ends at the first line outside its block quote, as prescribed by
+/// Markdown block quote syntax.
+fn split_secret_callouts(body: &str, visibility: &str) -> Result<(String, Vec<SecretCallout>)> {
+    let mut public = String::new();
+    let mut secrets = Vec::new();
+    let mut active = None::<(usize, String, String)>;
+
+    for (line_index, line) in body.split_inclusive('\n').enumerate() {
+        let line_number = line_index + 1;
+        if let Some((start_line, _title, secret)) = active.as_mut() {
+            if let Some(quoted) = quoted_callout_line(line) {
+                if secret_callout_header(quoted)?.is_some() {
+                    anyhow::bail!(
+                        "nested [!secret] callout at body line {line_number} (opened at body line {start_line})"
+                    );
+                }
+                secret.push_str(quoted);
+                continue;
+            }
+            let (_, title, secret) = active.take().expect("active secret callout");
+            secrets.push(SecretCallout {
+                title,
+                body: secret.trim().to_owned(),
+            });
+        }
+
+        if let Some(quoted) = quoted_callout_line(line)
+            && let Some(title) = secret_callout_header(quoted)?
+        {
+            if visibility != "mixed" {
+                anyhow::bail!(
+                    "[!secret] callout at body line {line_number} requires visibility: mixed (found visibility: {visibility})"
+                );
+            }
+            active = Some((line_number, title, String::new()));
+            continue;
+        }
+        public.push_str(line);
+    }
+
+    if let Some((_, title, secret)) = active {
+        secrets.push(SecretCallout {
+            title,
+            body: secret.trim().to_owned(),
+        });
+    }
+    Ok((public, secrets))
+}
+
+fn quoted_callout_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim_start();
+    let quoted = trimmed.strip_prefix('>')?;
+    Some(quoted.strip_prefix(' ').unwrap_or(quoted))
+}
+
+/// Returns the callout title when this is a secret header. Non-secret callouts
+/// are ordinary Markdown. A malformed secret header is an ingestion error.
+fn secret_callout_header(quoted: &str) -> Result<Option<String>> {
+    let trimmed = quoted.trim_end_matches(['\r', '\n']);
+    let Some(after_marker) = trimmed.strip_prefix("[!secret]") else {
+        return Ok(None);
+    };
+    if !after_marker.is_empty()
+        && !after_marker.starts_with('-')
+        && !after_marker.starts_with('+')
+        && !after_marker.starts_with(char::is_whitespace)
+    {
+        anyhow::bail!("malformed [!secret] callout header");
+    }
+    let rest = after_marker
+        .strip_prefix('-')
+        .or_else(|| after_marker.strip_prefix('+'))
+        .unwrap_or(after_marker)
+        .trim();
+    Ok(Some(if rest.is_empty() {
+        "Secret".into()
+    } else {
+        rest.into()
     }))
 }
 
@@ -154,6 +250,7 @@ fn hash_content(content: &str) -> String {
 mod tests {
     use super::{
         hash_content, is_markdown_file, is_templates_directory, scan_directory_with_stats,
+        split_secret_callouts,
     };
     use std::{fs, path::Path};
     use tempfile::tempdir;
@@ -206,6 +303,32 @@ mod tests {
         assert_eq!(hash_content("same"), hash_content("same"));
         assert_ne!(hash_content("same"), hash_content("different"));
         assert_eq!(hash_content("").len(), 64);
+    }
+
+    #[test]
+    fn separates_secret_callouts_from_player_content() -> anyhow::Result<()> {
+        let (public, secrets) = split_secret_callouts(
+            "Known history.\n\n> [!secret]- GM notes\n> The hidden name is Ilyra.\n> Keep this private.\n\nPublic aftermath.\n",
+            "mixed",
+        )?;
+        assert!(public.contains("Known history."));
+        assert!(public.contains("Public aftermath."));
+        assert!(!public.contains("hidden name"));
+        assert_eq!(secrets.len(), 1);
+        assert_eq!(secrets[0].title, "GM notes");
+        assert!(secrets[0].body.contains("hidden name"));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_secret_callouts_outside_mixed_notes_and_when_nested() {
+        let callout = "> [!secret] GM\n> hidden\n";
+        let error = split_secret_callouts(callout, "player").unwrap_err();
+        assert!(error.to_string().contains("visibility: mixed"));
+
+        let nested = "> [!secret] Outer\n> visible only to GMs\n> [!secret] Inner\n";
+        let error = split_secret_callouts(nested, "mixed").unwrap_err();
+        assert!(error.to_string().contains("nested"));
     }
 
     #[test]

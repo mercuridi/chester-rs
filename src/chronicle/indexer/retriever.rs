@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
 
 use super::{
-    db::repository::{IndexerDb, SearchResult},
+    db::repository::{AccessScope, IndexerDb, SearchResult},
     embedder::Embedder,
 };
 
@@ -23,6 +23,7 @@ pub trait RetrieverApi: Send + Sync {
         distance_threshold: f32,
         near_duplicate_threshold: f32,
         max_chunks_per_document: usize,
+        access: AccessScope,
     ) -> Result<RetrievalOutcome>;
     async fn load_embedder(&self) -> Result<()>;
     fn unload_embedder(&self) -> Result<()>;
@@ -226,6 +227,7 @@ impl Retriever {
         distance_threshold: f32,
         near_duplicate_threshold: f32,
         max_chunks_per_document: usize,
+        access: AccessScope,
     ) -> Result<RetrievalOutcome> {
         let query = query.trim();
 
@@ -257,8 +259,9 @@ impl Retriever {
         };
 
         let (vector, lexical) = tokio::try_join!(
-            self.db.search_similar(&embedding, candidate_limit),
-            self.db.search_lexical(query, candidate_limit),
+            self.db
+                .search_similar_for(&embedding, candidate_limit, access),
+            self.db.search_lexical_for(query, candidate_limit, access),
         )?;
         let (results, diagnostics) = select_with_diagnostics(
             vector,
@@ -290,6 +293,7 @@ impl RetrieverApi for Retriever {
         distance_threshold: f32,
         near_duplicate_threshold: f32,
         max_chunks_per_document: usize,
+        access: AccessScope,
     ) -> Result<RetrievalOutcome> {
         self.search(
             query,
@@ -298,6 +302,7 @@ impl RetrieverApi for Retriever {
             distance_threshold,
             near_duplicate_threshold,
             max_chunks_per_document,
+            access,
         )
         .await
     }
