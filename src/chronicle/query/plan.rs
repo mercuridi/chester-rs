@@ -94,6 +94,7 @@ pub enum Plan {
         filters: Filters,
     },
     Search {},
+    Synthesis {},
     Unsupported {},
     Clarify {},
 }
@@ -198,6 +199,19 @@ mod tests {
         plan.validate()?;
         assert!(serde_json::from_str::<Plan>(r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"equals","value":"[[Riftweavers]]"}]}}"#)
             .is_ok_and(|plan| plan.validate().is_err()));
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_synthesis_without_structured_query_fields() -> anyhow::Result<()> {
+        let plan = serde_json::from_str::<Plan>(r#"{"operation":"synthesis"}"#)?;
+        assert_eq!(plan, Plan::Synthesis {});
+        plan.validate()?;
+        assert!(plan.selection().is_none());
+        assert!(
+            serde_json::from_str::<Plan>(r#"{"operation":"synthesis","note_type":"event"}"#)
+                .is_err()
+        );
         Ok(())
     }
 }

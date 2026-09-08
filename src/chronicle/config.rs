@@ -74,6 +74,21 @@ struct RawChronicleConfig {
     #[serde(default = "default_retrieval_max_chunks_per_document")]
     retrieval_max_chunks_per_document: usize,
 
+    #[serde(default = "default_synthesis_retrieval_limit")]
+    synthesis_retrieval_limit: usize,
+
+    #[serde(default = "default_synthesis_candidate_limit")]
+    synthesis_candidate_limit: usize,
+
+    #[serde(default = "default_synthesis_max_chunks_per_document")]
+    synthesis_max_chunks_per_document: usize,
+
+    #[serde(default = "default_synthesis_batch_token_budget")]
+    synthesis_batch_token_budget: usize,
+
+    #[serde(default = "default_synthesis_max_batches")]
+    synthesis_max_batches: usize,
+
     max_chunk_tokens: usize,
 
     chunk_overlap_tokens: usize,
@@ -139,8 +154,18 @@ pub struct ChronicleConfig {
     pub retrieval_distance_threshold: f32,
     pub retrieval_near_duplicate_threshold: f32,
     pub retrieval_max_chunks_per_document: usize,
+    pub synthesis: SynthesisSettings,
     pub max_chunk_tokens: usize,
     pub chunk_overlap_tokens: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SynthesisSettings {
+    pub retrieval_limit: usize,
+    pub candidate_limit: usize,
+    pub max_chunks_per_document: usize,
+    pub batch_token_budget: usize,
+    pub max_batches: usize,
 }
 
 #[derive(Debug)]
@@ -175,6 +200,26 @@ fn default_retrieval_near_duplicate_threshold() -> f32 {
 
 fn default_retrieval_max_chunks_per_document() -> usize {
     2
+}
+
+fn default_synthesis_retrieval_limit() -> usize {
+    12
+}
+
+fn default_synthesis_candidate_limit() -> usize {
+    40
+}
+
+fn default_synthesis_max_chunks_per_document() -> usize {
+    3
+}
+
+fn default_synthesis_batch_token_budget() -> usize {
+    1_800
+}
+
+fn default_synthesis_max_batches() -> usize {
+    6
 }
 
 fn resolve_path(project_root: &Path, path: &str) -> String {
@@ -309,6 +354,13 @@ impl Config {
             retrieval_distance_threshold: raw.chronicle.retrieval_distance_threshold,
             retrieval_near_duplicate_threshold: raw.chronicle.retrieval_near_duplicate_threshold,
             retrieval_max_chunks_per_document: raw.chronicle.retrieval_max_chunks_per_document,
+            synthesis: SynthesisSettings {
+                retrieval_limit: raw.chronicle.synthesis_retrieval_limit,
+                candidate_limit: raw.chronicle.synthesis_candidate_limit,
+                max_chunks_per_document: raw.chronicle.synthesis_max_chunks_per_document,
+                batch_token_budget: raw.chronicle.synthesis_batch_token_budget,
+                max_batches: raw.chronicle.synthesis_max_batches,
+            },
             max_chunk_tokens: raw.chronicle.max_chunk_tokens,
             chunk_overlap_tokens: raw.chronicle.chunk_overlap_tokens,
         };
@@ -446,6 +498,30 @@ impl ChronicleConfig {
         }
         if self.retrieval_max_chunks_per_document == 0 {
             bail!("Chronicle retrieval_max_chunks_per_document must be greater than zero");
+        }
+        if self.synthesis.retrieval_limit == 0 || self.synthesis.retrieval_limit > 100 {
+            bail!("Chronicle synthesis_retrieval_limit must be between 1 and 100");
+        }
+        if self.synthesis.candidate_limit < self.synthesis.retrieval_limit
+            || self.synthesis.candidate_limit > 1000
+        {
+            bail!(
+                "Chronicle synthesis_candidate_limit must be between synthesis_retrieval_limit and 1000"
+            );
+        }
+        if self.synthesis.max_chunks_per_document == 0 {
+            bail!("Chronicle synthesis_max_chunks_per_document must be greater than zero");
+        }
+        let prompt_token_budget = self.llm_context_limit - llm_max_tokens;
+        if self.synthesis.batch_token_budget == 0
+            || self.synthesis.batch_token_budget > prompt_token_budget
+        {
+            bail!(
+                "Chronicle synthesis_batch_token_budget must be between 1 and the available LLM prompt token budget ({prompt_token_budget})"
+            );
+        }
+        if self.synthesis.max_batches == 0 || self.synthesis.max_batches > 100 {
+            bail!("Chronicle synthesis_max_batches must be between 1 and 100");
         }
         if !(3..=512).contains(&self.max_chunk_tokens) {
             bail!("Chronicle max_chunk_tokens must be between 3 and 512");
@@ -620,6 +696,13 @@ chunk_overlap_tokens = 48
             retrieval_distance_threshold: 0.8,
             retrieval_near_duplicate_threshold: 0.85,
             retrieval_max_chunks_per_document: 2,
+            synthesis: SynthesisSettings {
+                retrieval_limit: 12,
+                candidate_limit: 40,
+                max_chunks_per_document: 3,
+                batch_token_budget: 400,
+                max_batches: 6,
+            },
             max_chunk_tokens: 480,
             chunk_overlap_tokens: 48,
         }
@@ -735,6 +818,33 @@ alias_groups = ["party"]
         assert!(config.validate().is_err());
         config = valid_chronicle_config();
         config.retrieval_max_chunks_per_document = 0;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.synthesis.retrieval_limit = 0;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.synthesis.retrieval_limit = 101;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.synthesis.candidate_limit = 11;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.synthesis.candidate_limit = 1001;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.synthesis.max_chunks_per_document = 0;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.synthesis.batch_token_budget = 0;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.synthesis.batch_token_budget = 513;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.synthesis.max_batches = 0;
+        assert!(config.validate().is_err());
+        config = valid_chronicle_config();
+        config.synthesis.max_batches = 101;
         assert!(config.validate().is_err());
         config = valid_chronicle_config();
         config.max_chunk_tokens = 2;

@@ -57,6 +57,24 @@ retrieval_near_duplicate_threshold = 0.85
 # Maximum accepted chunks from any one document.
 retrieval_max_chunks_per_document = 2
 
+# Bounded synthesis retrieves a larger, diverse evidence set once, then reduces
+# it in context-safe batches. These settings do not affect ordinary retrieval.
+# Must be between 1 and 100.
+synthesis_retrieval_limit = 12
+
+# Must be at least synthesis_retrieval_limit and no greater than 1000.
+synthesis_candidate_limit = 40
+
+# Maximum accepted chunks from any one document during synthesis.
+synthesis_max_chunks_per_document = 3
+
+# Maximum input tokens for one synthesis map/reduce batch. Must fit within the
+# available LLM prompt budget (llm_context_limit - llm_max_tokens).
+synthesis_batch_token_budget = 1800
+
+# Maximum initial map batches. Must be between 1 and 100.
+synthesis_max_batches = 6
+
 # Maximum number of BGE embedding tokens per chunk, including special tokens.
 # Must be between 3 and 512.
 max_chunk_tokens = 480

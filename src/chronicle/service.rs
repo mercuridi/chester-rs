@@ -185,6 +185,9 @@ impl Chronicle {
             }
             Plan::Clarify {} => Ok("Please name what you want counted or listed, and any character role or status filters.".chars().take(self.max_reply_length).collect()),
             Plan::Search {} => self.answer_from_retrieval(question, RetrievalMode::Ordinary, access).await,
+            // Synthesis has a distinct planner route now. Until its bounded map/reduce
+            // execution is added, retain the established retrieval answer behavior.
+            Plan::Synthesis {} => self.answer_from_retrieval(question, RetrievalMode::Ordinary, access).await,
             Plan::Unsupported {} => self
                 .answer_from_retrieval(question, RetrievalMode::UnsupportedStructuredQuery, access)
                 .await,
@@ -744,6 +747,36 @@ mod tests {
         assert_eq!(prompts.len(), 1);
         assert!(prompts[0].contains("Document: doc"));
         assert!(prompts[0].contains("Question:\nquestion"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn synthesis_plan_uses_the_dedicated_route_until_bounded_execution_is_added() -> Result<()>
+    {
+        let (chronicle, retriever, llm) = service(FakeOutcome::Results, ["answer"], 100)?;
+        *llm.plan_output
+            .lock()
+            .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"synthesis"}"#.into();
+
+        assert_eq!(
+            chronicle.ask("Summarise the history of Northmere.").await?,
+            "answer"
+        );
+        assert_eq!(
+            retriever
+                .calls
+                .lock()
+                .map_err(|_| anyhow!("calls poisoned"))?
+                .as_slice(),
+            &[(
+                "Summarise the history of Northmere.".into(),
+                5,
+                15,
+                0.8,
+                0.85,
+                2
+            )]
+        );
         Ok(())
     }
 

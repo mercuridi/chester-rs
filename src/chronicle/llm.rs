@@ -360,7 +360,10 @@ impl LoadedLlm {
 #[allow(clippy::float_cmp, clippy::unwrap_used)]
 mod tests {
     use super::Llm;
-    use crate::chronicle::{config::ChronicleConfig, runtime::GpuRuntime};
+    use crate::chronicle::{
+        config::{ChronicleConfig, SynthesisSettings},
+        runtime::GpuRuntime,
+    };
 
     fn config() -> ChronicleConfig {
         ChronicleConfig {
@@ -381,6 +384,13 @@ mod tests {
             retrieval_distance_threshold: 0.8,
             retrieval_near_duplicate_threshold: 0.85,
             retrieval_max_chunks_per_document: 2,
+            synthesis: SynthesisSettings {
+                retrieval_limit: 12,
+                candidate_limit: 40,
+                max_chunks_per_document: 3,
+                batch_token_budget: 400,
+                max_batches: 6,
+            },
             max_chunk_tokens: 100,
             chunk_overlap_tokens: 10,
         }
