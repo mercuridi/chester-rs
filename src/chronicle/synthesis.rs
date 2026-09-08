@@ -124,9 +124,11 @@ pub fn reduce_prompt(question: &str, notes: &[EvidenceNote]) -> String {
 pub fn final_prompt(question: &str, notes: &[EvidenceNote]) -> String {
     let mut prompt = String::from(
         "Answer the question as a coherent, concise narrative using only these evidence notes. \
-         Use chronology when supported. Do not cite sources or mention source labels. Do not invent \
-         dates, motives, causal links, or completeness. Mention uncertainty, conflicting accounts, or \
-         incomplete coverage only when the evidence notes show a material gap or conflict.\n\n<evidence_notes>\n",
+         Use chronology when supported. Clearly distinguish documented facts from cautious interpretation. \
+         Do not cite sources, mention source labels, or add a sources-consulted section. Do not invent \
+         dates, motives, causal links, or completeness, and never claim exhaustive coverage unless the \
+         evidence notes establish it. Mention uncertainty, conflicting accounts, or incomplete coverage \
+         only when the evidence notes show a material gap or conflict.\n\n<evidence_notes>\n",
     );
     write_items(&mut prompt, notes, "note");
     prompt.push_str("</evidence_notes>\n\nQuestion:\n");
@@ -200,9 +202,13 @@ mod tests {
     }
 
     #[test]
-    fn final_prompt_hides_source_labels_from_its_instructions() {
+    fn final_prompt_sets_narrative_and_evidence_boundaries() {
         let prompt = final_prompt("What happened?", &[note("S1", "A battle occurred.")]);
-        assert!(prompt.contains("Do not cite sources or mention source labels."));
+        assert!(prompt.contains("coherent, concise narrative"));
+        assert!(prompt.contains("Use chronology when supported."));
+        assert!(prompt.contains("distinguish documented facts from cautious interpretation"));
+        assert!(prompt.contains("Do not cite sources, mention source labels"));
+        assert!(prompt.contains("never claim exhaustive coverage"));
         assert!(prompt.contains("sources=\"S1\""));
     }
 }
