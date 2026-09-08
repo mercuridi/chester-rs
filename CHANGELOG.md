@@ -1,6 +1,47 @@
 # Changelog
 
-## [2.11.0] — 2026-09-08
+## [3.0.0] — 2026-09-08
+
+### Features
+
+- Foundations and config for synthesis queries
+- Set up hybrid retrieval for synthesis and initial mapping
+- Synthesis pipeline final step
+- Synthesis evaluation suite
+- Query routing for synthesis and corpus topology handling are now tested
+- Dedicated synthesis evaluation suite
+- Added relationship-member counting (eg. number of enemies for character)
+- Improve synthesis evaluation with hybrid answer assessment
+- Synthesis judge based on an LLM to assess synthesis outputs
+- Internal intermediate ledger for synthesis to preserve key events
+- Improved synthesis evaluation framework
+
+
+### Bug Fixes
+
+- Debug telemetry on synthesis
+- Map/rteduce is now tested directly
+- Improved retrieval and synthesis pipeline diagnostics
+- Add testing and evaluation for synthesis treating secrets properly
+- Test synthesis being routed to for history related questions
+- Bounded synthesis testing config mismatch fixed
+- Release process now runs all chronicle evaluations and requires them to pass
+- Improve planner consistency (18/48 to 33/48 passes)
+- Planner evaluation 33/48 to 40/48
+- Improve wikilink handling; 40/48 -> 42/48
+- Wikilink-or-string resolution now looks up values against database to improve wikilink behaviour (42/48 -> 44/48)
+- Corrected some evaluations to more accurately represent the taxonomy (44/48 -> 46/48)
+- Replace population counting test with a location containment test (46/48 -> 47/48)
+- Judge llm aggregate scoring bug fixed
+- Split out tough single rubric to individual marking points
+- Improve synthesis prompt
+- Clean up unused code
+- Log full chronicle reply under debug
+- Loosen synthesis evaluation pass requirements for release
+- Clippy warnings fixed
+- Log all llm inference creations
+
+## [v2.11.0] — 2026-09-08
 
 ### Features
 
