@@ -142,4 +142,49 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn covers_synthesis_boundary_paraphrases_and_focused_searches() -> Result<()> {
+        let cases = [
+            (
+                "Tell me the story of the Ember Kingdom.",
+                Plan::Synthesis {},
+            ),
+            (
+                "Walk me through how the Moonspire rebellion developed.",
+                Plan::Synthesis {},
+            ),
+            (
+                "Trace the relationship between Ashford and Lantern Bay.",
+                Plan::Synthesis {},
+            ),
+            (
+                "What changed in the kingdom over the centuries?",
+                Plan::Synthesis {},
+            ),
+            ("Who commanded the Ashen War?", Plan::Search {}),
+            ("Why did the Ember Trade League dissolve?", Plan::Search {}),
+            (
+                "Where is the Ember Kingdom's first royal seat?",
+                Plan::Search {},
+            ),
+            ("List them", Plan::Clarify {}),
+            ("How many are there?", Plan::Clarify {}),
+        ];
+
+        for (question, expected) in cases {
+            let response = match expected {
+                Plan::Synthesis {} => r#"{"operation":"synthesis"}"#,
+                Plan::Search {} => r#"{"operation":"search"}"#,
+                Plan::Clarify {} => r#"{"operation":"clarify"}"#,
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                parse_for_question(question, response)?,
+                expected,
+                "{question}"
+            );
+        }
+        Ok(())
+    }
 }

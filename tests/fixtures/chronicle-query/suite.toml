@@ -286,6 +286,30 @@ question = "Give an overview of how the Moonspire rebellion developed."
 operation = "synthesis"
 
 [[cases]]
+id = "synthesis-story-paraphrase"
+question = "Tell me the story of the Ember Kingdom."
+[cases.plan]
+operation = "synthesis"
+
+[[cases]]
+id = "synthesis-relationship"
+question = "Trace the relationship between Ashford and Lantern Bay."
+[cases.plan]
+operation = "synthesis"
+
+[[cases]]
+id = "focused-search-boundary"
+question = "Why did the Ember Trade League dissolve?"
+[cases.plan]
+operation = "search"
+
+[[cases]]
+id = "clarify-missing-subject"
+question = "How many are there?"
+[cases.plan]
+operation = "clarify"
+
+[[cases]]
 id = "enemies"
 question = "How many enemies does Ada have?"
 [cases.plan]

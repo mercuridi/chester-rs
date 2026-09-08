@@ -271,10 +271,84 @@ mod tests {
         assert!(prompt.contains("sources=\"S1\""));
     }
 
+    #[test]
+    fn topology_selection_measures_duplicates_caps_and_result_limits() {
+        use crate::chronicle::indexer::retriever::SearchSettings;
+        use crate::chronicle::indexer::retriever::select_with_diagnostics;
+
+        let result = |document_path: &str, chunk_index: i64, text: &str| SearchResult {
+            document_path: document_path.into(),
+            chunk_index,
+            heading: None,
+            text: text.into(),
+            overlaps_previous: false,
+            distance: 0.1,
+        };
+        let candidates = vec![
+            result("history.md", 0, "foundation and first crown"),
+            result("history.md", 1, "war and eastern marches"),
+            result("history.md", 2, "relocation to Lantern Bay"),
+            result("duplicate.md", 0, "foundation and first crown"),
+            result(
+                "league.md",
+                0,
+                "trade league dissolved and decline followed",
+            ),
+            result("flood.md", 0, "the river flood damaged Ashford"),
+            result("war-record.md", 0, "the Ashen War ended in victory"),
+        ];
+        let (selected, diagnostics) = select_with_diagnostics(
+            Vec::new(),
+            candidates,
+            SearchSettings {
+                limit: 4,
+                candidate_limit: 5,
+                distance_threshold: 0.8,
+                near_duplicate_threshold: 0.85,
+                max_chunks_per_document: 2,
+            },
+        );
+
+        assert_eq!(selected.len(), 4);
+        assert_eq!(diagnostics.candidates.len(), 7);
+        assert_eq!(
+            diagnostics
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.decision == "document_cap")
+                .count(),
+            1
+        );
+        assert_eq!(
+            diagnostics
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.decision == "exact_duplicate")
+                .count(),
+            1
+        );
+        assert_eq!(
+            diagnostics
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.decision == "result_limit")
+                .count(),
+            1
+        );
+    }
+
     #[derive(Deserialize)]
     struct FixtureSuite {
         name: String,
+        topology: Topology,
         cases: Vec<FixtureCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct Topology {
+        document_count: usize,
+        minimum_multi_document_cases: usize,
+        required_categories: Vec<String>,
     }
 
     #[derive(Deserialize)]
@@ -294,6 +368,29 @@ mod tests {
         ))?;
         assert_eq!(suite.name, "Chronicle bounded synthesis kingdom v1");
         assert!(!suite.cases.is_empty());
+        assert_eq!(suite.topology.document_count, 8);
+        assert!(suite.topology.minimum_multi_document_cases >= 2);
+        assert!(
+            suite
+                .topology
+                .required_categories
+                .iter()
+                .any(|category| category == "distractor")
+        );
+        assert!(
+            suite
+                .topology
+                .required_categories
+                .iter()
+                .any(|category| category == "duplicate")
+        );
+        assert!(
+            suite
+                .topology
+                .required_categories
+                .iter()
+                .any(|category| category == "chronology")
+        );
         for case in suite.cases {
             assert!(!case.id.is_empty());
             assert!(!case.question.trim().is_empty());
@@ -304,7 +401,10 @@ mod tests {
         }
         let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/chronicle-synthesis/corpus");
-        assert_eq!(std::fs::read_dir(corpus)?.count(), 4);
+        assert_eq!(
+            std::fs::read_dir(corpus)?.count(),
+            suite.topology.document_count
+        );
         Ok(())
     }
 }

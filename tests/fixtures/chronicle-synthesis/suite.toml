@@ -1,5 +1,10 @@
 name = "Chronicle bounded synthesis kingdom v1"
 
+[topology]
+document_count = 8
+minimum_multi_document_cases = 2
+required_categories = ["multi-document", "distractor", "duplicate", "chronology"]
+
 [[cases]]
 id = "ember-kingdom-history"
 question = "Summarise the history of the Ember Kingdom."
