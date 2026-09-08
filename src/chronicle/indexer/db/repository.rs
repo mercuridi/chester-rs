@@ -1199,9 +1199,11 @@ pub(super) fn register_sqlite_vec() {
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
+    use std::{collections::HashSet, fs};
+
     use super::*;
     use crate::chronicle::indexer::link_resolver::{
-        LinkOrigin, LinkResolution, LinkVisibility, ResolvedLink,
+        self, LinkOrigin, LinkResolution, LinkVisibility, ResolvedLink,
     };
     use tempfile::tempdir;
 
@@ -1382,6 +1384,119 @@ mod tests {
                 .edge_count,
             0
         );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM document_graph_edges")
+                .fetch_one(&db.pool)
+                .await?,
+            0
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolver_output_persists_body_and_frontmatter_provenance_with_visibility() -> Result<()>
+    {
+        let (directory, db) = test_database().await?;
+        let corpus = directory.path().join("corpus");
+        fs::create_dir(&corpus)?;
+        fs::write(
+            corpus.join("Target.md"),
+            "---\nid: target\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\n---\n",
+        )?;
+        fs::write(
+            corpus.join("Source.md"),
+            "---\nid: source\ntype: character\nstatus: canon\nvisibility: mixed\ncreated: 2026-09-07\nupdated: 2026-09-07\nlocation: '[[Target]]'\n---\nPublic [[Target]].\n\n> [!secret] Private\n> Secret [[Target#Hidden]].\n",
+        )?;
+
+        let (documents, _) =
+            crate::chronicle::indexer::scanner::scan_directory_with_stats(&corpus)?;
+        let resolution = link_resolver::resolve(&corpus, &documents)?;
+        assert_eq!(resolution.resolved.len(), 3);
+        for document in &documents {
+            db.replace_note(
+                &document.path.to_string_lossy(),
+                &document.content_hash,
+                &[],
+                &[],
+                &document.metadata,
+            )
+            .await?;
+        }
+
+        assert_eq!(db.rebuild_document_graph(&resolution).await?.edge_count, 3);
+        let rows = sqlx::query(
+            "SELECT origin, field_name, visibility FROM document_graph_edges ORDER BY origin, field_name, visibility",
+        )
+        .fetch_all(&db.pool)
+        .await?;
+        let actual = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>("origin"),
+                    row.get::<String, _>("field_name"),
+                    row.get::<String, _>("visibility"),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                ("body".into(), String::new(), "player".into()),
+                ("body".into(), String::new(), "secret".into()),
+                ("frontmatter".into(), "location".into(), "player".into()),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn excluded_dangling_and_ambiguous_links_persist_no_graph_edge() -> Result<()> {
+        let (directory, db) = test_database().await?;
+        let corpus = directory.path().join("corpus");
+        fs::create_dir(&corpus)?;
+        for (name, source) in [
+            (
+                "Source.md",
+                "---\nid: source\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\n---\n[[Missing]] [[Shared]] [[excluded]]\n",
+            ),
+            (
+                "Alias A.md",
+                "---\nid: alias-a\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\naliases: [Shared]\n---\n",
+            ),
+            (
+                "Alias B.md",
+                "---\nid: alias-b\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\naliases: [Shared]\n---\n",
+            ),
+            (
+                "Excluded.md",
+                "---\nid: excluded\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\n---\n",
+            ),
+        ] {
+            fs::write(corpus.join(name), source)?;
+        }
+
+        let excluded = HashSet::from(["excluded".to_owned()]);
+        let (documents, _) =
+            crate::chronicle::indexer::scanner::scan_directory_with_stats_excluding(
+                &corpus, &excluded,
+            )?;
+        let resolution = link_resolver::resolve(&corpus, &documents)?;
+        assert!(resolution.resolved.is_empty());
+        assert_eq!(resolution.dangling.len(), 2);
+        assert_eq!(resolution.ambiguous.len(), 1);
+        for document in &documents {
+            db.replace_note(
+                &document.path.to_string_lossy(),
+                &document.content_hash,
+                &[],
+                &[],
+                &document.metadata,
+            )
+            .await?;
+        }
+
+        assert_eq!(db.rebuild_document_graph(&resolution).await?.edge_count, 0);
         assert_eq!(
             sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM document_graph_edges")
                 .fetch_one(&db.pool)

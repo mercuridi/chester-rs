@@ -84,10 +84,13 @@ pub struct CandidateDiagnostic {
     pub vector_passed_threshold: bool,
     pub lexical_rank: Option<usize>,
     pub fused_rank: Option<usize>,
+    /// Lexical and vector reciprocal-rank-fusion score, before graph prior.
     pub rrf_score: f64,
     pub pagerank_score: Option<f64>,
     pub pagerank_rank: Option<i64>,
     pub pagerank_contribution: f64,
+    /// The score used to rank this candidate after all fusion inputs.
+    pub final_fusion_score: f64,
     pub decision: &'static str,
 }
 
@@ -135,6 +138,7 @@ pub fn select_with_diagnostics_and_pagerank(
                         .get(&result.document_path)
                         .map(|signal| signal.rank),
                     pagerank_contribution: 0.0,
+                    final_fusion_score: 0.0,
                     decision: "vector_threshold",
                 });
             if is_vector {
@@ -162,7 +166,9 @@ pub fn select_with_diagnostics_and_pagerank(
             {
                 #[allow(clippy::cast_precision_loss)]
                 {
-                    record.rrf_score += 1.0 / (60.0 + (index + 1) as f64);
+                    let contribution = 1.0 / (60.0 + (index + 1) as f64);
+                    record.rrf_score += contribution;
+                    record.final_fusion_score += contribution;
                 }
             }
         }
@@ -175,7 +181,7 @@ pub fn select_with_diagnostics_and_pagerank(
             #[allow(clippy::cast_precision_loss)]
             let contribution = settings.pagerank_weight / (60.0 + rank as f64);
             record.pagerank_contribution = contribution;
-            record.rrf_score += contribution;
+            record.final_fusion_score += contribution;
         }
     }
     let fused =
@@ -582,7 +588,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn pagerank_is_a_weighted_rrf_prior_for_existing_candidates() {
+    fn pagerank_breaks_close_relevance_ties() {
         let lexical = vec![
             result("lexical-first", 0, "first", false),
             result("central", 0, "central", false),
@@ -612,6 +618,109 @@ mod tests {
             .expect("central diagnostic");
         assert_eq!(central.pagerank_rank, Some(1));
         assert!(central.pagerank_contribution > 0.0);
+        assert!(
+            (central.final_fusion_score - central.rrf_score - central.pagerank_contribution).abs()
+                < 1e-12
+        );
+    }
+
+    #[test]
+    fn zero_pagerank_weight_preserves_retrieval_order() {
+        let vector = vec![
+            result("semantic", 0, "semantic", false),
+            result("central", 0, "central", false),
+        ];
+        let lexical = vec![
+            result("central", 0, "central", false),
+            result("semantic", 0, "semantic", false),
+        ];
+        let settings = SearchSettings {
+            limit: 2,
+            candidate_limit: 2,
+            distance_threshold: 0.8,
+            near_duplicate_threshold: 0.85,
+            max_chunks_per_document: 1,
+            pagerank_weight: 0.0,
+        };
+        let pagerank = HashMap::from([(
+            "central".to_owned(),
+            PageRankSignal {
+                score: 0.9,
+                rank: 1,
+            },
+        )]);
+
+        let (without_pagerank, _) =
+            select_with_diagnostics(vector.clone(), lexical.clone(), settings);
+        let (with_zero_weight, diagnostics) =
+            select_with_diagnostics_and_pagerank(vector, lexical, settings, &pagerank);
+
+        assert_eq!(
+            with_zero_weight
+                .iter()
+                .map(|candidate| &candidate.document_path)
+                .collect::<Vec<_>>(),
+            without_pagerank
+                .iter()
+                .map(|candidate| &candidate.document_path)
+                .collect::<Vec<_>>()
+        );
+        assert!(diagnostics.candidates.iter().all(|candidate| {
+            candidate.pagerank_contribution == 0.0
+                && (candidate.final_fusion_score - candidate.rrf_score).abs() < f64::EPSILON
+        }));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn relevant_peripheral_note_beats_an_irrelevant_hub() {
+        let peripheral = result("peripheral", 0, "specific answer", false);
+        let hub = result("hub", 0, "generic index", false);
+        let pagerank = HashMap::from([
+            (
+                "hub".to_owned(),
+                PageRankSignal {
+                    score: 0.8,
+                    rank: 1,
+                },
+            ),
+            (
+                "peripheral".to_owned(),
+                PageRankSignal {
+                    score: 0.01,
+                    rank: 100,
+                },
+            ),
+        ]);
+        let settings = SearchSettings {
+            limit: 2,
+            candidate_limit: 2,
+            distance_threshold: 0.8,
+            near_duplicate_threshold: 0.85,
+            max_chunks_per_document: 1,
+            pagerank_weight: 0.15,
+        };
+
+        let (selected, diagnostics) = select_with_diagnostics_and_pagerank(
+            vec![peripheral.clone()],
+            vec![peripheral, hub],
+            settings,
+            &pagerank,
+        );
+
+        assert_eq!(selected[0].document_path, "peripheral");
+        let peripheral = diagnostics
+            .candidates
+            .iter()
+            .find(|candidate| candidate.document == "peripheral")
+            .expect("peripheral diagnostic");
+        let hub = diagnostics
+            .candidates
+            .iter()
+            .find(|candidate| candidate.document == "hub")
+            .expect("hub diagnostic");
+        assert!(hub.pagerank_contribution > peripheral.pagerank_contribution);
+        assert!(peripheral.final_fusion_score > hub.final_fusion_score);
     }
 
     #[test]
