@@ -255,7 +255,13 @@ Notes without frontmatter, non-canon notes, and template notes are skipped;
 malformed metadata and duplicate eligible IDs fail ingestion with a diagnostic.
 
 Searchable content contains the filename stem, aliases, tags, summary, and Markdown body.
-Wikilinks remain readable Markdown text; no relationship graph is inferred.
+Chronicle resolves frontmatter and Markdown-body wikilinks into a derived,
+visibility-aware document graph. Links may target a note ID, vault-relative path,
+filename title, or declared alias; display aliases, heading references, and block
+references resolve to their containing document. Dangling and ambiguous links do
+not create graph edges. The graph is rebuilt after every indexing pass; it is
+currently retained for future graph-aware retrieval and does not yet alter
+retrieval ranking.
 SQLite FTS5 BM25 and vector retrieval each fetch `retrieval_candidate_limit`
 candidates. Equal-weight reciprocal rank fusion (constant 60) merges the lists,
 then existing duplicate removal, document caps, and context budgeting apply.

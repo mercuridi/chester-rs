@@ -1,6 +1,6 @@
 // src/chronicle/indexer/db/repository.rs
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use sqlx::{QueryBuilder, Row, Sqlite, sqlite::SqlitePool};
 use std::path::Path;
@@ -23,6 +23,11 @@ pub struct IndexedDocument {
     pub id: i64,
     pub path: String,
     pub content_hash: String,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct GraphStats {
+    pub edge_count: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +105,66 @@ impl IndexerDb {
             .fetch_one(&self.pool)
             .await
             .context("Failed to check whether the Chronicle corpus is empty")
+    }
+
+    /// Replace the complete derived document graph with the resolver's current
+    /// corpus-wide output. Rebuilding avoids stale edges after an identifier,
+    /// alias, visibility, or source-link change.
+    pub async fn rebuild_document_graph(
+        &self,
+        resolution: &crate::chronicle::indexer::link_resolver::LinkResolution,
+    ) -> Result<GraphStats> {
+        let mut tx = self.pool.begin().await?;
+        let rows = sqlx::query("SELECT document_id, note_id FROM note_metadata")
+            .fetch_all(&mut *tx)
+            .await
+            .context("Failed to load note IDs for graph persistence")?;
+        let mut document_ids = std::collections::HashMap::new();
+        for row in rows {
+            let document_id: i64 = row.get("document_id");
+            let note_id: String = row.get("note_id");
+            if document_ids.insert(note_id.clone(), document_id).is_some() {
+                bail!("Cannot build document graph: duplicate note ID `{note_id}`");
+            }
+        }
+
+        sqlx::query("DELETE FROM document_graph_edges")
+            .execute(&mut *tx)
+            .await
+            .context("Failed to clear existing document graph")?;
+
+        let mut edge_count = 0_u64;
+        for link in &resolution.resolved {
+            let source_document_id = document_ids.get(&link.source_note_id).with_context(|| {
+                format!(
+                    "Resolved graph source `{}` is absent from the indexed corpus",
+                    link.source_note_id
+                )
+            })?;
+            let target_document_id = document_ids.get(&link.target_note_id).with_context(|| {
+                format!(
+                    "Resolved graph target `{}` is absent from the indexed corpus",
+                    link.target_note_id
+                )
+            })?;
+            let inserted = sqlx::query(
+                "INSERT OR IGNORE INTO document_graph_edges (source_document_id, target_document_id, origin, field_name, visibility) VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(source_document_id)
+            .bind(target_document_id)
+            .bind(link.origin.kind())
+            .bind(link.origin.field_name())
+            .bind(link.visibility.as_str())
+            .execute(&mut *tx)
+            .await
+            .context("Failed to persist resolved document graph edge")?;
+            edge_count += inserted.rows_affected();
+        }
+
+        tx.commit()
+            .await
+            .context("Failed to commit resolved document graph")?;
+        Ok(GraphStats { edge_count })
     }
 
     pub async fn delete_document(&self, document_id: i64) -> Result<()> {
@@ -996,6 +1061,9 @@ pub(super) fn register_sqlite_vec() {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::chronicle::indexer::link_resolver::{
+        LinkOrigin, LinkResolution, LinkVisibility, ResolvedLink,
+    };
     use tempfile::tempdir;
 
     fn embedding(value: f32) -> Vec<f32> {
@@ -1109,6 +1177,78 @@ mod tests {
                 .await?;
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].get::<String, _>("value"), "[[Veyra]]");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rebuild_document_graph_persists_resolved_provenance_and_replaces_stale_edges()
+    -> Result<()> {
+        let (_directory, db) = test_database().await?;
+        for id in ["source", "target"] {
+            let source = format!(
+                "---\nid: {id}\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\n---\n"
+            );
+            let (metadata, _) =
+                crate::chronicle::indexer::frontmatter::parse(&source)?.context("note")?;
+            db.replace_note(&format!("{id}.md"), id, &[], &[], &metadata)
+                .await?;
+        }
+        let resolution = LinkResolution {
+            resolved: vec![
+                ResolvedLink {
+                    source_note_id: "source".into(),
+                    target_note_id: "target".into(),
+                    origin: LinkOrigin::Frontmatter {
+                        field_name: "affiliations".into(),
+                    },
+                    visibility: LinkVisibility::Player,
+                    raw: "[[target]]".into(),
+                    fragment: None,
+                },
+                ResolvedLink {
+                    source_note_id: "source".into(),
+                    target_note_id: "target".into(),
+                    origin: LinkOrigin::Frontmatter {
+                        field_name: "affiliations".into(),
+                    },
+                    visibility: LinkVisibility::Player,
+                    raw: "[[target|the target]]".into(),
+                    fragment: None,
+                },
+                ResolvedLink {
+                    source_note_id: "source".into(),
+                    target_note_id: "target".into(),
+                    origin: LinkOrigin::Body,
+                    visibility: LinkVisibility::Secret,
+                    raw: "[[target#Hidden]]".into(),
+                    fragment: Some("Hidden".into()),
+                },
+            ],
+            ..LinkResolution::default()
+        };
+        assert_eq!(db.rebuild_document_graph(&resolution).await?.edge_count, 2);
+        let rows = sqlx::query("SELECT origin, field_name, visibility FROM document_graph_edges ORDER BY origin, field_name, visibility")
+            .fetch_all(&db.pool).await?;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get::<String, _>("origin"), "body");
+        assert_eq!(rows[0].get::<String, _>("field_name"), "");
+        assert_eq!(rows[0].get::<String, _>("visibility"), "secret");
+        assert_eq!(rows[1].get::<String, _>("origin"), "frontmatter");
+        assert_eq!(rows[1].get::<String, _>("field_name"), "affiliations");
+        assert_eq!(rows[1].get::<String, _>("visibility"), "player");
+
+        assert_eq!(
+            db.rebuild_document_graph(&LinkResolution::default())
+                .await?
+                .edge_count,
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM document_graph_edges")
+                .fetch_one(&db.pool)
+                .await?,
+            0
+        );
         Ok(())
     }
 

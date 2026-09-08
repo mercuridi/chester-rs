@@ -18,10 +18,35 @@ pub enum LinkVisibility {
     Secret,
 }
 
+impl LinkVisibility {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Player => "player",
+            Self::Secret => "secret",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkOrigin {
     Frontmatter { field_name: String },
     Body,
+}
+
+impl LinkOrigin {
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Frontmatter { .. } => "frontmatter",
+            Self::Body => "body",
+        }
+    }
+
+    pub fn field_name(&self) -> &str {
+        match self {
+            Self::Frontmatter { field_name } => field_name,
+            Self::Body => "",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

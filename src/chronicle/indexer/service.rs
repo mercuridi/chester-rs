@@ -253,6 +253,12 @@ impl Indexer {
             }
         }
 
+        let graph_stats = self.db.rebuild_document_graph(&link_resolution).await?;
+        debug!(
+            edges = graph_stats.edge_count,
+            "Persisted resolved Chronicle document graph"
+        );
+
         info!(?stats, "Chronicle indexing finished");
         Ok(stats)
     }
