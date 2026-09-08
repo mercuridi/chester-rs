@@ -2,12 +2,12 @@
 use super::{
     config::Config,
     indexer::{db::repository::IndexerDb, embedder::Embedder, service::Indexer},
-    llm::Llm,
+    llm::{LanguageModel, Llm},
     query::{plan::Plan, planner},
     runtime::GpuRuntime,
     service::Chronicle,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -207,6 +207,8 @@ struct ClaimResult {
     status: ClaimStatus,
     matched_by: Option<String>,
     missing_entities: Vec<String>,
+    judge_verdict: Option<JudgeVerdict>,
+    judge_confidence: Option<f64>,
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -215,6 +217,185 @@ enum ClaimStatus {
     Resolved,
     Unresolved,
     Contradicted,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum JudgeVerdict {
+    Entailed,
+    Contradicted,
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JudgeClaim {
+    id: String,
+    verdict: JudgeVerdict,
+    confidence: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JudgeOutput {
+    claims: Vec<JudgeClaim>,
+}
+
+#[derive(Debug, Serialize)]
+struct JudgeTarget {
+    id: String,
+    kind: String,
+    claim: String,
+    aliases: Vec<String>,
+    entities: Vec<String>,
+    missing_entities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum JudgeStatus {
+    NotNeeded,
+    Succeeded,
+    Error,
+}
+
+#[derive(Debug, Serialize)]
+struct JudgeMetadata {
+    status: JudgeStatus,
+    target_count: usize,
+    judged_claim_count: usize,
+    attempts: usize,
+    retry_count: usize,
+    error: Option<String>,
+}
+
+struct SynthesisJudge {
+    model: std::sync::Arc<dyn LanguageModel>,
+    max_attempts: usize,
+}
+
+fn judge_prompt(
+    question: &str,
+    answer: &str,
+    targets: &[JudgeTarget],
+    invalid_response: Option<&str>,
+) -> String {
+    let targets = serde_json::to_string(targets).expect("judge targets are serializable");
+    let mut prompt = format!(
+        "You are a strict evaluator of a synthesis answer. Determine whether each unresolved rubric claim is entailed by the answer, contradicted by the answer, or unknown. Accept faithful paraphrases, but do not infer facts that the answer does not state. Use the entity requirements as hard constraints. Return JSON only, with exactly this schema: {{\"claims\":[{{\"id\":\"target id\",\"verdict\":\"entailed|contradicted|unknown\",\"confidence\":0.0}}]}}. Include exactly one result for every supplied target, preserving each target id. Confidence must be a JSON number from 0.0 to 1.0. Do not include markdown, explanations, or additional fields.\n\nQuestion:\n{question}\n\nAnswer:\n{answer}\n\nUnresolved targets:\n{targets}\n"
+    );
+    if let Some(invalid_response) = invalid_response {
+        prompt.push_str(
+            "\nYour previous response was invalid. Correct it and return only the required JSON object. Previous response:\n",
+        );
+        prompt.push_str(invalid_response);
+    }
+    prompt
+}
+
+fn parse_judge_output(response: &str, targets: &[JudgeTarget]) -> Result<JudgeOutput> {
+    let output: JudgeOutput =
+        serde_json::from_str(response).context("judge response was not valid strict JSON")?;
+    ensure!(
+        output.claims.len() == targets.len(),
+        "judge returned {} claims for {} targets",
+        output.claims.len(),
+        targets.len()
+    );
+    let expected = targets
+        .iter()
+        .map(|target| target.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut seen = std::collections::HashSet::new();
+    for claim in &output.claims {
+        ensure!(
+            expected.contains(claim.id.as_str()),
+            "judge returned unknown claim ID: {}",
+            claim.id
+        );
+        ensure!(
+            seen.insert(claim.id.as_str()),
+            "judge returned duplicate claim ID: {}",
+            claim.id
+        );
+        ensure!(
+            claim.confidence.is_finite() && (0.0..=1.0).contains(&claim.confidence),
+            "judge confidence for {} must be between 0.0 and 1.0",
+            claim.id
+        );
+    }
+    ensure!(
+        seen.len() == expected.len(),
+        "judge omitted one or more target claim IDs"
+    );
+    Ok(output)
+}
+
+impl SynthesisJudge {
+    fn new(model: std::sync::Arc<dyn LanguageModel>) -> Self {
+        Self {
+            model,
+            max_attempts: 2,
+        }
+    }
+
+    async fn judge(
+        &self,
+        question: &str,
+        answer: &str,
+        targets: &[JudgeTarget],
+    ) -> Result<(Vec<JudgeClaim>, JudgeMetadata)> {
+        ensure!(
+            !targets.is_empty(),
+            "Synthesis judge requires at least one target"
+        );
+        let prompt = judge_prompt(question, answer, targets, None);
+        let mut attempts = 0;
+        let mut retry_count = 0;
+        let mut last_error = None;
+        let mut previous_response: Option<String> = None;
+        while attempts < self.max_attempts {
+            attempts += 1;
+            let request = match &previous_response {
+                Some(response) => judge_prompt(question, answer, targets, Some(response)),
+                None => prompt.clone(),
+            };
+            let response = match self.model.generate(&request).await {
+                Ok(response) => response,
+                Err(error) => {
+                    last_error = Some(error.to_string());
+                    if attempts < self.max_attempts {
+                        retry_count += 1;
+                    }
+                    continue;
+                }
+            };
+            match parse_judge_output(&response, targets) {
+                Ok(output) => {
+                    let metadata = JudgeMetadata {
+                        status: JudgeStatus::Succeeded,
+                        target_count: targets.len(),
+                        judged_claim_count: output.claims.len(),
+                        attempts,
+                        retry_count,
+                        error: None,
+                    };
+                    return Ok((output.claims, metadata));
+                }
+                Err(error) => {
+                    last_error = Some(error.to_string());
+                    previous_response = Some(response);
+                    if attempts < self.max_attempts {
+                        retry_count += 1;
+                    }
+                }
+            }
+        }
+        Err(anyhow!(
+            "Synthesis judge failed after {attempts} attempts: {}",
+            last_error.unwrap_or_else(|| "no response".into())
+        ))
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -229,6 +410,7 @@ struct CaseReport {
     required_fact_results: Vec<ClaimResult>,
     prohibited_claim_results: Vec<ClaimResult>,
     gap_results: Vec<ClaimResult>,
+    judge: JudgeMetadata,
     passed: bool,
 }
 
@@ -444,6 +626,8 @@ fn claim_results<T: Expectation>(
                 status,
                 matched_by: found.matched_by,
                 missing_entities: found.missing_entities,
+                judge_verdict: None,
+                judge_confidence: None,
             }
         })
         .collect()
@@ -469,6 +653,62 @@ fn prohibited(answer: &str, expectations: &[ProhibitedExpectation]) -> Vec<Strin
         .filter(|result| result.status == ClaimStatus::Contradicted)
         .map(|result| result.claim)
         .collect()
+}
+
+fn unresolved_targets<T: Expectation>(
+    results: &[ClaimResult],
+    expectations: &[T],
+    kind: &str,
+) -> Vec<JudgeTarget> {
+    results
+        .iter()
+        .filter(|result| result.status == ClaimStatus::Unresolved)
+        .filter_map(|result| {
+            expectations
+                .iter()
+                .find(|expectation| expectation.id() == result.id)
+                .map(|expectation| JudgeTarget {
+                    id: format!("{kind}:{}", expectation.id()),
+                    kind: kind.to_owned(),
+                    claim: expectation.claim().to_owned(),
+                    aliases: expectation.aliases().to_owned(),
+                    entities: expectation.entities().to_owned(),
+                    missing_entities: result.missing_entities.clone(),
+                })
+        })
+        .collect()
+}
+
+fn apply_judge_results(
+    results: &mut [ClaimResult],
+    kind: &str,
+    judged: &[JudgeClaim],
+) -> Result<()> {
+    for claim in judged {
+        if !claim.id.starts_with(&format!("{kind}:")) {
+            continue;
+        }
+        let expected_id = claim
+            .id
+            .strip_prefix(&format!("{kind}:"))
+            .with_context(|| format!("judge returned wrong claim namespace: {}", claim.id))?;
+        let result = results
+            .iter_mut()
+            .find(|result| result.id == expected_id)
+            .with_context(|| format!("judge returned unknown {kind} result: {expected_id}"))?;
+        result.judge_verdict = Some(claim.verdict);
+        result.judge_confidence = Some(claim.confidence);
+        if claim.confidence >= 0.75 {
+            result.status = match claim.verdict {
+                JudgeVerdict::Entailed => ClaimStatus::Resolved,
+                JudgeVerdict::Contradicted => ClaimStatus::Contradicted,
+                JudgeVerdict::Unknown => ClaimStatus::Unresolved,
+            };
+            result.matched = claim.verdict == JudgeVerdict::Entailed;
+            result.matched_by = Some("judge".into());
+        }
+    }
+    Ok(())
 }
 
 fn validate_expectation_ids<T: Expectation>(
@@ -616,6 +856,7 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
         config.chronicle.llm_max_reply_length,
     );
     chronicle.start_llm().await?;
+    let judge = SynthesisJudge::new(std::sync::Arc::new(llm.clone()));
     let mut cases = Vec::new();
     for case in suite.cases {
         let route =
@@ -625,19 +866,84 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
             .last_synthesis_diagnostics()?
             .context("Synthesis did not produce diagnostics")?;
         let route_correct = route == Plan::Synthesis {};
-        let required_fact_results =
+        let mut required_fact_results =
             claim_results(&answer, &case.required_facts, ExpectationKind::Required);
-        let prohibited_claim_results = claim_results(
+        let mut prohibited_claim_results = claim_results(
             &answer,
             &case.prohibited_claims,
             ExpectationKind::Prohibited,
         );
-        let gap_results = claim_results(&answer, &case.expected_gaps, ExpectationKind::Gap);
+        let mut gap_results = claim_results(&answer, &case.expected_gaps, ExpectationKind::Gap);
+        let mut judge_targets = unresolved_targets(
+            &required_fact_results,
+            &case.required_facts,
+            "required_fact",
+        );
+        judge_targets.extend(unresolved_targets(
+            &prohibited_claim_results,
+            &case.prohibited_claims,
+            "prohibited_claim",
+        ));
+        judge_targets.extend(unresolved_targets(&gap_results, &case.expected_gaps, "gap"));
+        let (judge_metadata, judge_failed) = if judge_targets.is_empty() {
+            (
+                JudgeMetadata {
+                    status: JudgeStatus::NotNeeded,
+                    target_count: 0,
+                    judged_claim_count: 0,
+                    attempts: 0,
+                    retry_count: 0,
+                    error: None,
+                },
+                false,
+            )
+        } else {
+            match judge.judge(&case.question, &answer, &judge_targets).await {
+                Ok((judged, metadata)) => {
+                    let apply_result =
+                        apply_judge_results(&mut required_fact_results, "required_fact", &judged)
+                            .and_then(|_| {
+                                apply_judge_results(
+                                    &mut prohibited_claim_results,
+                                    "prohibited_claim",
+                                    &judged,
+                                )
+                            })
+                            .and_then(|_| apply_judge_results(&mut gap_results, "gap", &judged));
+                    match apply_result {
+                        Ok(()) => (metadata, false),
+                        Err(error) => (
+                            JudgeMetadata {
+                                status: JudgeStatus::Error,
+                                target_count: judge_targets.len(),
+                                judged_claim_count: judged.len(),
+                                attempts: metadata.attempts,
+                                retry_count: metadata.retry_count,
+                                error: Some(error.to_string()),
+                            },
+                            true,
+                        ),
+                    }
+                }
+                Err(error) => (
+                    JudgeMetadata {
+                        status: JudgeStatus::Error,
+                        target_count: judge_targets.len(),
+                        judged_claim_count: 0,
+                        attempts: judge.max_attempts,
+                        retry_count: judge.max_attempts.saturating_sub(1),
+                        error: Some(error.to_string()),
+                    },
+                    true,
+                ),
+            }
+        };
         let required_fact_recall =
             coverage(&answer, &case.required_facts, ExpectationKind::Required);
         let prohibited_claims_found = prohibited(&answer, &case.prohibited_claims);
         let gap_recall = coverage(&answer, &case.expected_gaps, ExpectationKind::Gap);
         let passed = route_correct
+            && !judge_failed
             && required_fact_recall >= suite.minimum_required_fact_recall
             && prohibited_claims_found.len() <= suite.maximum_prohibited_claims
             && gap_recall >= suite.minimum_gap_recall;
@@ -652,6 +958,7 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
             required_fact_results,
             prohibited_claim_results,
             gap_results,
+            judge: judge_metadata,
             passed,
         });
     }
@@ -939,5 +1246,97 @@ claim = "The interval is unknown."
 
         assert_eq!(absent[0].status, ClaimStatus::Resolved);
         assert_eq!(present[0].status, ClaimStatus::Contradicted);
+    }
+
+    #[test]
+    fn strict_judge_parser_rejects_unknown_fields_and_missing_targets() {
+        let targets = vec![JudgeTarget {
+            id: "required_fact:foundation".into(),
+            kind: "required_fact".into(),
+            claim: "The kingdom was founded.".into(),
+            aliases: Vec::new(),
+            entities: Vec::new(),
+            missing_entities: Vec::new(),
+        }];
+        assert!(parse_judge_output(
+            r#"{"claims":[{"id":"required_fact:foundation","verdict":"entailed","confidence":0.9,"extra":true}]}"#,
+            &targets
+        )
+        .is_err());
+        assert!(parse_judge_output(r#"{"claims":[]}"#, &targets).is_err());
+        assert!(
+            parse_judge_output(
+                r#"{"claims":[{"id":"required_fact:other","verdict":"unknown","confidence":0.5}]}"#,
+                &targets
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn judge_retries_invalid_json_and_records_retry_metadata() -> Result<()> {
+        let model = std::sync::Arc::new(JudgeTestModel {
+            responses: std::sync::Mutex::new(std::collections::VecDeque::from([
+                "not json".into(),
+                r#"{"claims":[{"id":"required_fact:foundation","verdict":"entailed","confidence":0.9}]}"#.into(),
+            ])),
+            prompts: std::sync::Mutex::new(Vec::new()),
+        });
+        let judge = SynthesisJudge::new(model.clone());
+        let targets = vec![JudgeTarget {
+            id: "required_fact:foundation".into(),
+            kind: "required_fact".into(),
+            claim: "The kingdom was founded.".into(),
+            aliases: Vec::new(),
+            entities: Vec::new(),
+            missing_entities: Vec::new(),
+        }];
+
+        let (claims, metadata) = judge
+            .judge("What happened?", "The kingdom was founded.", &targets)
+            .await?;
+        assert_eq!(claims.len(), 1);
+        assert_eq!(metadata.status, JudgeStatus::Succeeded);
+        assert_eq!(metadata.attempts, 2);
+        assert_eq!(metadata.retry_count, 1);
+        assert!(model.prompts.lock().unwrap()[1].contains("not json"));
+        Ok(())
+    }
+
+    struct JudgeTestModel {
+        responses: std::sync::Mutex<std::collections::VecDeque<String>>,
+        prompts: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LanguageModel for JudgeTestModel {
+        fn prompt_token_budget(&self) -> usize {
+            1_000
+        }
+
+        fn count_input_tokens(&self, prompt: &str) -> Result<usize> {
+            Ok(prompt.len())
+        }
+
+        async fn generate(&self, prompt: &str) -> Result<String> {
+            self.prompts.lock().unwrap().push(prompt.to_owned());
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .context("test model ran out of responses")
+        }
+
+        async fn generate_plan(&self, _question: &str) -> Result<String> {
+            Ok(r#"{"operation":"synthesis"}"#.into())
+        }
+
+        async fn load(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn unload(&self) -> Result<()> {
+            Ok(())
+        }
     }
 }
