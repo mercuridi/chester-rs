@@ -150,6 +150,19 @@ pub fn final_prompt_with_partial_status(
     prompt
 }
 
+pub fn final_prompt_fits<F>(
+    question: &str,
+    notes: &[EvidenceNote],
+    partial: bool,
+    token_budget: usize,
+    token_count: F,
+) -> Result<bool>
+where
+    F: Fn(&str) -> Result<usize>,
+{
+    Ok(token_count(&final_prompt_with_partial_status(question, notes, partial))? <= token_budget)
+}
+
 fn write_items(prompt: &mut String, items: &[EvidenceNote], tag: &str) {
     for item in items {
         let labels = item.source_labels.join(",");
@@ -174,6 +187,7 @@ pub fn merged_labels(notes: &[EvidenceNote]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::Deserialize;
 
     fn note(label: &str, text: &str) -> EvidenceNote {
         EvidenceNote {
@@ -215,6 +229,38 @@ mod tests {
     }
 
     #[test]
+    fn preserves_source_labels_when_evidence_notes_are_merged() {
+        let merged = merged_labels(&[
+            EvidenceNote {
+                source_labels: vec!["S2".into(), "S1".into()],
+                text: "first".into(),
+            },
+            EvidenceNote {
+                source_labels: vec!["S1".into(), "S3".into()],
+                text: "second".into(),
+            },
+        ]);
+        assert_eq!(merged, ["S2", "S1", "S3"]);
+    }
+
+    #[test]
+    fn final_prompt_fit_decision_uses_the_real_prompt_shape() -> Result<()> {
+        let notes = [note("S1", "short evidence"), note("S2", "more evidence")];
+        let exact = final_prompt("q", &notes).len();
+        assert!(final_prompt_fits("q", &notes, false, exact, |prompt| Ok(
+            prompt.len()
+        ))?);
+        assert!(!final_prompt_fits(
+            "q",
+            &notes,
+            false,
+            exact - 1,
+            |prompt| Ok(prompt.len())
+        )?);
+        Ok(())
+    }
+
+    #[test]
     fn final_prompt_sets_narrative_and_evidence_boundaries() {
         let prompt = final_prompt("What happened?", &[note("S1", "A battle occurred.")]);
         assert!(prompt.contains("coherent, concise narrative"));
@@ -223,5 +269,42 @@ mod tests {
         assert!(prompt.contains("Do not cite sources, mention source labels"));
         assert!(prompt.contains("never claim exhaustive coverage"));
         assert!(prompt.contains("sources=\"S1\""));
+    }
+
+    #[derive(Deserialize)]
+    struct FixtureSuite {
+        name: String,
+        cases: Vec<FixtureCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct FixtureCase {
+        id: String,
+        question: String,
+        expected_route: String,
+        required_facts: Vec<String>,
+        prohibited_claims: Vec<String>,
+        expected_gaps: Vec<String>,
+    }
+
+    #[test]
+    fn synthesis_fixture_declares_semantic_coverage_expectations() -> Result<()> {
+        let suite: FixtureSuite = toml::from_str(include_str!(
+            "../../tests/fixtures/chronicle-synthesis/suite.toml"
+        ))?;
+        assert_eq!(suite.name, "Chronicle bounded synthesis kingdom v1");
+        assert!(!suite.cases.is_empty());
+        for case in suite.cases {
+            assert!(!case.id.is_empty());
+            assert!(!case.question.trim().is_empty());
+            assert_eq!(case.expected_route, "synthesis");
+            assert!(!case.required_facts.is_empty());
+            assert!(!case.prohibited_claims.is_empty());
+            assert!(case.expected_gaps.iter().all(|gap| !gap.is_empty()));
+        }
+        let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/chronicle-synthesis/corpus");
+        assert_eq!(std::fs::read_dir(corpus)?.count(), 4);
+        Ok(())
     }
 }

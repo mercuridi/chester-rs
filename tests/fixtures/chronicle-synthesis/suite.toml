@@ -1,0 +1,32 @@
+name = "Chronicle bounded synthesis kingdom v1"
+
+[[cases]]
+id = "ember-kingdom-history"
+question = "Summarise the history of the Ember Kingdom."
+expected_route = "synthesis"
+required_facts = [
+  "The Ember Kingdom was founded when the river settlements ratified the Ember Compact.",
+  "The kingdom survived the Ashen War but lost control of the eastern marches.",
+  "The crown later moved from Ashford to Lantern Bay after the river flood.",
+  "The kingdom declined after its trade league dissolved.",
+]
+prohibited_claims = [
+  "The exact cause of the Ashen War is established.",
+  "The Ember Kingdom still exists.",
+  "The available notes provide a complete chronology.",
+]
+expected_gaps = [
+  "The notes do not describe events between the Ashen War and the river flood.",
+]
+
+[[cases]]
+id = "ember-kingdom-overview"
+question = "Give an overview of the Ember Kingdom."
+expected_route = "synthesis"
+required_facts = [
+  "The kingdom's history includes founding, war, relocation of the crown, and decline.",
+]
+prohibited_claims = [
+  "The chronology is exhaustive.",
+]
+expected_gaps = []

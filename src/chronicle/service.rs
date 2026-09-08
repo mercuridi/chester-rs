@@ -371,13 +371,13 @@ impl Chronicle {
         );
 
         let mut reduction_depth = 0usize;
-        while self
-            .llm
-            .count_input_tokens(&synthesis::final_prompt_with_partial_status(
-                question, &notes, partial,
-            ))?
-            > self.llm.prompt_token_budget()
-        {
+        while !synthesis::final_prompt_fits(
+            question,
+            &notes,
+            partial,
+            self.llm.prompt_token_budget(),
+            |prompt| self.llm.count_input_tokens(prompt),
+        )? {
             let reduction_plan = synthesis::pack_batches(
                 question,
                 &notes,
@@ -1010,6 +1010,70 @@ mod tests {
                 .len(),
             2
         );
+        let prompts = llm
+            .prompts
+            .lock()
+            .map_err(|_| anyhow!("prompts poisoned"))?;
+        assert!(prompts[0].contains("<evidence>"));
+        assert!(prompts[1].contains("<evidence_notes>"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn synthesis_preserves_the_callers_access_scope() -> Result<()> {
+        let (chronicle, retriever, llm) =
+            service(FakeOutcome::Results, ["evidence note", "answer"], 100)?;
+        *llm.plan_output
+            .lock()
+            .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"synthesis"}"#.into();
+
+        assert_eq!(
+            chronicle
+                .ask_for(
+                    "Summarise the history of Northmere.",
+                    crate::chronicle::indexer::db::repository::AccessScope::Gm,
+                )
+                .await?,
+            "answer"
+        );
+        assert_eq!(
+            retriever
+                .accesses
+                .lock()
+                .map_err(|_| anyhow!("accesses poisoned"))?
+                .as_slice(),
+            &[crate::chronicle::indexer::db::repository::AccessScope::Gm]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn synthesis_short_circuits_retrieval_outcomes() -> Result<()> {
+        let cases = [
+            (
+                FakeOutcome::BadQuestion,
+                "Please provide a non-empty question.",
+            ),
+            (FakeOutcome::CorpusEmpty, "Chronicle corpus is empty."),
+            (
+                FakeOutcome::NoResult,
+                "No relevant Chronicle context was found.",
+            ),
+            (FakeOutcome::Error, "Chronicle retrieval failed."),
+        ];
+        for (outcome, expected) in cases {
+            let (chronicle, _retriever, llm) = service(outcome, [], 100)?;
+            *llm.plan_output
+                .lock()
+                .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"synthesis"}"#.into();
+            assert_eq!(chronicle.ask("Summarise Northmere.").await?, expected);
+            assert!(
+                llm.prompts
+                    .lock()
+                    .map_err(|_| anyhow!("prompts poisoned"))?
+                    .is_empty()
+            );
+        }
         Ok(())
     }
 

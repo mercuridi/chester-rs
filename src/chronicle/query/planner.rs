@@ -96,4 +96,50 @@ mod tests {
         ));
         Ok(())
     }
+
+    #[test]
+    fn accepts_expected_synthesis_search_and_structured_routes() -> Result<()> {
+        let cases = [
+            (
+                "Summarise the history of the Ember Kingdom.",
+                r#"{"operation":"synthesis"}"#,
+                Plan::Synthesis {},
+            ),
+            (
+                "Give an overview of how the Moonspire rebellion developed.",
+                r#"{"operation":"synthesis"}"#,
+                Plan::Synthesis {},
+            ),
+            (
+                "Who leads the Ember Guild?",
+                r#"{"operation":"search"}"#,
+                Plan::Search {},
+            ),
+            (
+                "Where is Moonspire?",
+                r#"{"operation":"search"}"#,
+                Plan::Search {},
+            ),
+            (
+                "How many living NPCs are recorded?",
+                r#"{"operation":"count","note_type":"character","filters":{"role":"npc","character_status":"alive"}}"#,
+                Plan::Count {
+                    note_type: "character".into(),
+                    filters: super::super::plan::Filters {
+                        role: Some(super::super::plan::CharacterRole::Npc),
+                        character_status: Some(super::super::plan::CharacterStatus::Alive),
+                        conditions: Vec::new(),
+                    },
+                },
+            ),
+        ];
+        for (question, response, expected) in cases {
+            assert_eq!(
+                parse_for_question(question, response)?,
+                expected,
+                "{question}"
+            );
+        }
+        Ok(())
+    }
 }

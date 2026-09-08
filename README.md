@@ -347,3 +347,9 @@ initial retrieved passages are the complete evidence boundary. Source labels are
 kept only in intermediate prompts and logs, never shown to the user. The final
 prompt asks Chronicle to disclose material gaps or conflicting evidence, but not
 to add a boilerplate coverage disclaimer when the evidence is adequate.
+
+The fictional kingdom corpus in
+[`tests/fixtures/chronicle-synthesis`](tests/fixtures/chronicle-synthesis/README.md)
+records expected route, required coverage, prohibited claims, and deliberate gaps
+without prescribing exact answer prose. It is intended for future model-backed
+synthesis evaluation alongside the deterministic unit and service tests.

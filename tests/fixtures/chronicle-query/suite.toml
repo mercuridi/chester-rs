@@ -277,7 +277,13 @@ operation = "search"
 id = "summary"
 question = "Summarise the history of Northmere."
 [cases.plan]
-operation = "search"
+operation = "synthesis"
+
+[[cases]]
+id = "broad-overview"
+question = "Give an overview of how the Moonspire rebellion developed."
+[cases.plan]
+operation = "synthesis"
 
 [[cases]]
 id = "enemies"
