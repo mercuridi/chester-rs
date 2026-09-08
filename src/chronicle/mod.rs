@@ -7,4 +7,5 @@ pub mod recording;
 pub mod runtime;
 pub mod service;
 pub mod synthesis;
+pub mod synthesis_eval;
 pub mod transcription;

@@ -1,4 +1,7 @@
 name = "Chronicle bounded synthesis kingdom v1"
+minimum_required_fact_recall = 0.75
+maximum_prohibited_claims = 0
+minimum_gap_recall = 0.0
 
 [topology]
 document_count = 8

@@ -35,6 +35,8 @@ use tracing_subscriber::EnvFilter;
 
 const DEFAULT_CHRONICLE_EVAL_SUITE: &str = "tests/fixtures/chronicle/suite.toml";
 const DEFAULT_CHRONICLE_QUERY_EVAL_SUITE: &str = "tests/fixtures/chronicle-query/suite.toml";
+const DEFAULT_CHRONICLE_SYNTHESIS_EVAL_SUITE: &str =
+    "tests/fixtures/chronicle-synthesis/suite.toml";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
@@ -269,6 +271,24 @@ async fn main() {
 
 async fn run_evaluation_command() -> Result<bool> {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    if arguments
+        .first()
+        .is_some_and(|arg| arg == "--chronicle-synthesis-eval")
+    {
+        anyhow::ensure!(
+            arguments.len() <= 3,
+            "Usage: chester-rs --chronicle-synthesis-eval [SUITE.toml] [REPORT.json]"
+        );
+        let suite_path = arguments
+            .get(1)
+            .map_or(DEFAULT_CHRONICLE_SYNTHESIS_EVAL_SUITE, String::as_str);
+        chronicle::synthesis_eval::run(
+            std::path::Path::new(suite_path),
+            arguments.get(2).map(std::path::Path::new),
+        )
+        .await?;
+        return Ok(true);
+    }
     if arguments
         .first()
         .is_some_and(|arg| arg == "--chronicle-query-eval")
