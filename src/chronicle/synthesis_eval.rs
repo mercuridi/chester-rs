@@ -647,6 +647,20 @@ fn coverage<T: Expectation>(answer: &str, expectations: &[T], kind: ExpectationK
     }
 }
 
+fn resolved_coverage(results: &[ClaimResult]) -> f64 {
+    if results.is_empty() {
+        return 1.0;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    {
+        results
+            .iter()
+            .filter(|result| result.status == ClaimStatus::Resolved)
+            .count() as f64
+            / results.len() as f64
+    }
+}
+
 fn prohibited(answer: &str, expectations: &[ProhibitedExpectation]) -> Vec<String> {
     claim_results(answer, expectations, ExpectationKind::Prohibited)
         .into_iter()
@@ -938,10 +952,13 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
                 ),
             }
         };
-        let required_fact_recall =
-            coverage(&answer, &case.required_facts, ExpectationKind::Required);
-        let prohibited_claims_found = prohibited(&answer, &case.prohibited_claims);
-        let gap_recall = coverage(&answer, &case.expected_gaps, ExpectationKind::Gap);
+        let required_fact_recall = resolved_coverage(&required_fact_results);
+        let prohibited_claims_found = prohibited_claim_results
+            .iter()
+            .filter(|result| result.status == ClaimStatus::Contradicted)
+            .map(|result| result.claim.clone())
+            .collect::<Vec<_>>();
+        let gap_recall = resolved_coverage(&gap_results);
         let passed = route_correct
             && !judge_failed
             && required_fact_recall >= suite.minimum_required_fact_recall
