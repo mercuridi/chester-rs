@@ -398,10 +398,15 @@ question = "How many NPCs have no character status field?"
 operation = "unsupported"
 
 [[cases]]
-id = "population"
-question = "What is the total population of all locations?"
+id = "location-containment"
+question = "List locations contained in Northmere."
+expected_total = 1
+expected_ids = ["moonspire"]
 [cases.plan]
-operation = "unsupported"
+operation = "list"
+note_type = "location"
+[cases.plan.filters]
+conditions = [{ field = "contained_in", operator = "equals", value = "[[Northmere]]" }]
 
 [[cases]]
 id = "followup"
