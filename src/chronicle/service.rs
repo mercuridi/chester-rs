@@ -182,7 +182,7 @@ impl Chronicle {
                 .answer_from_retrieval(question, RetrievalMode::PlanningFailure, access)
                 .await;
         };
-        debug!(?plan, "Validated Chronicle query plan");
+        debug!(route = ?plan, "Validated Chronicle query plan");
         match &plan {
             Plan::Count { .. } | Plan::List { .. } => {
                 let result = self.db.as_ref().context("Structured datastore unavailable")?.execute_plan_for(&plan, access).await?;
@@ -327,25 +327,55 @@ impl Chronicle {
         )?;
         debug!(
             retrieved_result_count = results.len(),
+            selected_result_count = results.len().saturating_sub(map_plan.omitted_items),
             map_batch_count = map_plan.batches.len(),
             omitted_result_count = map_plan.omitted_items,
+            coverage_constrained_by_max_batches = map_plan.omitted_items > 0,
+            batch_token_budget = token_budget,
             "Built bounded Chronicle synthesis map plan"
         );
 
         let mut notes = Vec::with_capacity(map_plan.batches.len());
+        let mut partial = false;
         for batch in map_plan.batches {
             let source_labels = synthesis::merged_labels(&batch);
             let prompt = synthesis::map_prompt(question, &batch);
-            notes.push(EvidenceNote {
-                source_labels,
-                text: self.llm.generate(&prompt).await?,
-            });
+            let prompt_tokens = self.llm.count_input_tokens(&prompt)?;
+            debug!(
+                source_labels = ?source_labels,
+                source_count = batch.len(),
+                prompt_tokens,
+                "Generating Chronicle synthesis evidence note"
+            );
+            match self.llm.generate(&prompt).await {
+                Ok(text) => notes.push(EvidenceNote {
+                    source_labels,
+                    text,
+                }),
+                Err(error) => {
+                    tracing::warn!(%error, completed_note_count = notes.len(), "Chronicle synthesis map generation failed");
+                    partial = true;
+                    break;
+                }
+            }
         }
+        if notes.is_empty() {
+            return Ok(truncate_to_char_limit(
+                "Chronicle synthesis could not be completed from the retrieved notes.",
+                self.max_reply_length,
+            ));
+        }
+        debug!(
+            intermediate_note_count = notes.len(),
+            partial, "Completed Chronicle synthesis map stage"
+        );
 
         let mut reduction_depth = 0usize;
         while self
             .llm
-            .count_input_tokens(&synthesis::final_prompt(question, &notes))?
+            .count_input_tokens(&synthesis::final_prompt_with_partial_status(
+                question, &notes, partial,
+            ))?
             > self.llm.prompt_token_budget()
         {
             let reduction_plan = synthesis::pack_batches(
@@ -357,32 +387,78 @@ impl Chronicle {
                 |prompt| self.llm.count_input_tokens(prompt),
             )?;
             if reduction_plan.batches.len() >= notes.len() {
-                anyhow::bail!(
-                    "Synthesis evidence could not be reduced to fit the LLM context budget"
+                tracing::warn!(
+                    evidence_note_count = notes.len(),
+                    "Chronicle synthesis reduction could not make progress"
                 );
+                return Ok(truncate_to_char_limit(
+                    "Chronicle synthesis could not be completed from the retrieved notes.",
+                    self.max_reply_length,
+                ));
             }
             let mut reduced = Vec::with_capacity(reduction_plan.batches.len());
             for batch in reduction_plan.batches {
                 let source_labels = synthesis::merged_labels(&batch);
                 let prompt = synthesis::reduce_prompt(question, &batch);
-                reduced.push(EvidenceNote {
-                    source_labels,
-                    text: self.llm.generate(&prompt).await?,
-                });
+                let prompt_tokens = self.llm.count_input_tokens(&prompt)?;
+                debug!(
+                    reduction_depth,
+                    source_labels = ?source_labels,
+                    source_note_count = batch.len(),
+                    prompt_tokens,
+                    "Generating Chronicle synthesis reduction note"
+                );
+                match self.llm.generate(&prompt).await {
+                    Ok(text) => reduced.push(EvidenceNote {
+                        source_labels,
+                        text,
+                    }),
+                    Err(error) => {
+                        tracing::warn!(%error, reduction_depth, completed_note_count = reduced.len(), "Chronicle synthesis reduction generation failed");
+                        partial = true;
+                        break;
+                    }
+                }
+            }
+            if reduced.is_empty() {
+                return Ok(truncate_to_char_limit(
+                    "Chronicle synthesis could not be completed from the retrieved notes.",
+                    self.max_reply_length,
+                ));
             }
             notes = reduced;
             reduction_depth += 1;
+            debug!(
+                reduction_depth,
+                intermediate_note_count = notes.len(),
+                partial,
+                "Completed Chronicle synthesis reduction pass"
+            );
         }
+        let final_prompt = synthesis::final_prompt_with_partial_status(question, &notes, partial);
+        let final_prompt_tokens = self.llm.count_input_tokens(&final_prompt)?;
         debug!(
             reduction_depth,
             evidence_note_count = notes.len(),
+            final_prompt_tokens,
+            prompt_token_budget = self.llm.prompt_token_budget(),
+            partial,
             "Built Chronicle synthesis answer prompt"
         );
-        self.generate_answer(
-            &synthesis::final_prompt(question, &notes),
-            self.max_reply_length,
-        )
-        .await
+        let partial_prefix =
+            "This is a partial synthesis based on the retrieved notes completed so far.\n\n";
+        let answer_limit = if partial {
+            self.max_reply_length
+                .saturating_sub(partial_prefix.chars().count())
+        } else {
+            self.max_reply_length
+        };
+        let answer = self.generate_answer(&final_prompt, answer_limit).await?;
+        Ok(if partial {
+            format!("{partial_prefix}{answer}")
+        } else {
+            answer
+        })
     }
 
     async fn generate_answer(&self, prompt: &str, answer_limit: usize) -> Result<String> {
@@ -479,6 +555,7 @@ mod tests {
     #[derive(Clone, Copy)]
     enum FakeOutcome {
         Results,
+        TwoResults,
         BadQuestion,
         CorpusEmpty,
         NoResult,
@@ -537,6 +614,24 @@ mod tests {
                     overlaps_previous: false,
                     distance: 0.1,
                 }])),
+                FakeOutcome::TwoResults => Ok(RetrievalOutcome::Results(vec![
+                    SearchResult {
+                        document_path: "one.md".into(),
+                        chunk_index: 0,
+                        heading: None,
+                        text: "first context".into(),
+                        overlaps_previous: false,
+                        distance: 0.1,
+                    },
+                    SearchResult {
+                        document_path: "two.md".into(),
+                        chunk_index: 0,
+                        heading: None,
+                        text: "second context".into(),
+                        overlaps_previous: false,
+                        distance: 0.1,
+                    },
+                ])),
                 FakeOutcome::BadQuestion => Ok(RetrievalOutcome::BadQuestion),
                 FakeOutcome::CorpusEmpty => Ok(RetrievalOutcome::CorpusEmpty),
                 FakeOutcome::NoResult => Ok(RetrievalOutcome::NoResultMeetsThreshold),
@@ -567,6 +662,8 @@ mod tests {
         repair_plan_output: Mutex<Option<String>>,
         repair_requests: Mutex<Vec<(String, String)>>,
         fail_count: bool,
+        fail_generate_on_call: Mutex<Option<usize>>,
+        generate_calls: Mutex<usize>,
         fail_load: bool,
         loads: Mutex<usize>,
         unloads: Mutex<usize>,
@@ -583,6 +680,8 @@ mod tests {
                 repair_plan_output: Mutex::new(None),
                 repair_requests: Mutex::new(Vec::new()),
                 fail_count: false,
+                fail_generate_on_call: Mutex::new(None),
+                generate_calls: Mutex::new(0),
                 fail_load: false,
                 loads: Mutex::new(0),
                 unloads: Mutex::new(0),
@@ -628,6 +727,22 @@ mod tests {
                 .lock()
                 .map_err(|_| anyhow!("prompts poisoned"))?
                 .push(prompt.into());
+            let call = {
+                let mut calls = self
+                    .generate_calls
+                    .lock()
+                    .map_err(|_| anyhow!("generate counter poisoned"))?;
+                *calls += 1;
+                *calls
+            };
+            if self
+                .fail_generate_on_call
+                .lock()
+                .map_err(|_| anyhow!("generate failure setting poisoned"))?
+                .is_some_and(|failed_call| failed_call == call)
+            {
+                return Err(anyhow!("generation failed"));
+            }
             self.outputs
                 .lock()
                 .map_err(|_| anyhow!("outputs poisoned"))?
@@ -895,6 +1010,66 @@ mod tests {
                 .len(),
             2
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn synthesis_reports_an_honest_failure_when_no_evidence_note_can_be_generated()
+    -> Result<()> {
+        let (chronicle, _retriever, llm) = service(FakeOutcome::Results, [], 100)?;
+        *llm.plan_output
+            .lock()
+            .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"synthesis"}"#.into();
+        *llm.fail_generate_on_call
+            .lock()
+            .map_err(|_| anyhow!("generate failure setting poisoned"))? = Some(1);
+
+        assert_eq!(
+            chronicle.ask("Summarise the history of Northmere.").await?,
+            "Chronicle synthesis could not be completed from the retrieved notes."
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn synthesis_qualifies_a_partial_answer_after_a_map_failure() -> Result<()> {
+        let (mut chronicle, _retriever, llm) =
+            service(FakeOutcome::TwoResults, ["first evidence", "answer"], 200)?;
+        *llm.plan_output
+            .lock()
+            .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"synthesis"}"#.into();
+        let question = "Summarise the history of Northmere.";
+        let sources = crate::chronicle::synthesis::retrieved_evidence(&[
+            SearchResult {
+                document_path: "one.md".into(),
+                chunk_index: 0,
+                heading: None,
+                text: "first context".into(),
+                overlaps_previous: false,
+                distance: 0.1,
+            },
+            SearchResult {
+                document_path: "two.md".into(),
+                chunk_index: 0,
+                heading: None,
+                text: "second context".into(),
+                overlaps_previous: false,
+                distance: 0.1,
+            },
+        ]);
+        chronicle.synthesis.batch_token_budget =
+            crate::chronicle::synthesis::map_prompt(question, &sources[..1])
+                .len()
+                .max(crate::chronicle::synthesis::map_prompt(question, &sources[1..]).len());
+        *llm.fail_generate_on_call
+            .lock()
+            .map_err(|_| anyhow!("generate failure setting poisoned"))? = Some(2);
+
+        let answer = chronicle.ask(question).await?;
+        assert!(answer.starts_with(
+            "This is a partial synthesis based on the retrieved notes completed so far."
+        ));
+        assert!(answer.ends_with("answer"));
         Ok(())
     }
 

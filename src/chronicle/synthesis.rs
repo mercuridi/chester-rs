@@ -122,6 +122,14 @@ pub fn reduce_prompt(question: &str, notes: &[EvidenceNote]) -> String {
 }
 
 pub fn final_prompt(question: &str, notes: &[EvidenceNote]) -> String {
+    final_prompt_with_partial_status(question, notes, false)
+}
+
+pub fn final_prompt_with_partial_status(
+    question: &str,
+    notes: &[EvidenceNote],
+    partial: bool,
+) -> String {
     let mut prompt = String::from(
         "Answer the question as a coherent, concise narrative using only these evidence notes. \
          Use chronology when supported. Clearly distinguish documented facts from cautious interpretation. \
@@ -130,6 +138,11 @@ pub fn final_prompt(question: &str, notes: &[EvidenceNote]) -> String {
          evidence notes establish it. Mention uncertainty, conflicting accounts, or incomplete coverage \
          only when the evidence notes show a material gap or conflict.\n\n<evidence_notes>\n",
     );
+    if partial {
+        prompt.push_str(
+            "Only a subset of the planned evidence notes was completed. The answer must open by saying it is a partial synthesis based on the retrieved notes completed so far.\n\n",
+        );
+    }
     write_items(&mut prompt, notes, "note");
     prompt.push_str("</evidence_notes>\n\nQuestion:\n");
     prompt.push_str(question);
