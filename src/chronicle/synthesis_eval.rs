@@ -351,14 +351,8 @@ fn judge_prompt(
 }
 
 fn parse_judge_output(response: &str, targets: &[JudgeTarget]) -> Result<JudgeOutput> {
-    let output: JudgeOutput =
+    let mut output: JudgeOutput =
         serde_json::from_str(response).context("judge response was not valid strict JSON")?;
-    ensure!(
-        output.claims.len() == targets.len(),
-        "judge returned {} claims for {} targets",
-        output.claims.len(),
-        targets.len()
-    );
     let expected = targets
         .iter()
         .map(|target| target.id.as_str())
@@ -391,10 +385,24 @@ fn parse_judge_output(response: &str, targets: &[JudgeTarget]) -> Result<JudgeOu
             "unsupported causal claim cannot be empty"
         );
     }
-    ensure!(
-        seen.len() == expected.len(),
-        "judge omitted one or more target claim IDs"
-    );
+    // A local model can occasionally omit a target while still returning a
+    // useful, otherwise-valid evaluation. Treat omitted targets
+    // conservatively as unknown instead of discarding the whole judge result.
+    // Unknown claims have zero confidence, so apply_judge_results will leave
+    // the deterministic rubric result unchanged.
+    let present_ids = seen
+        .iter()
+        .map(|id| (*id).to_owned())
+        .collect::<std::collections::HashSet<_>>();
+    for target in targets {
+        if !present_ids.contains(&target.id) {
+            output.claims.push(JudgeClaim {
+                id: target.id.clone(),
+                verdict: JudgeVerdict::Unknown,
+                confidence: 0.0,
+            });
+        }
+    }
     Ok(output)
 }
 
@@ -1454,7 +1462,7 @@ claim = "The interval is unknown."
     }
 
     #[test]
-    fn strict_judge_parser_rejects_unknown_fields_and_missing_targets() {
+    fn judge_parser_rejects_unknown_fields_and_repairs_missing_targets() -> Result<()> {
         let targets = vec![JudgeTarget {
             id: "required_fact:foundation".into(),
             kind: "required_fact".into(),
@@ -1468,7 +1476,12 @@ claim = "The interval is unknown."
             &targets
         )
         .is_err());
-        assert!(parse_judge_output(r#"{"claims":[]}"#, &targets).is_err());
+        let repaired =
+            parse_judge_output(r#"{"claims":[],"unsupported_causal_claims":[]}"#, &targets)?;
+        assert_eq!(repaired.claims.len(), 1);
+        assert_eq!(repaired.claims[0].id, "required_fact:foundation");
+        assert_eq!(repaired.claims[0].verdict, JudgeVerdict::Unknown);
+        assert_eq!(repaired.claims[0].confidence, 0.0);
         assert!(
             parse_judge_output(
                 r#"{"claims":[{"id":"required_fact:other","verdict":"unknown","confidence":0.5}]}"#,
@@ -1476,6 +1489,7 @@ claim = "The interval is unknown."
             )
             .is_err()
         );
+        Ok(())
     }
 
     #[test]
