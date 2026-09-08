@@ -266,7 +266,8 @@ impl Llm {
             let (response, generated_tokens) = result?;
 
             let response = response.trim().to_owned();
-            tracing::debug!(
+            tracing::debug!(response = %response, "LLM inference result");
+            tracing::info!(
                 response_len = response.len(),
                 generated_tokens,
                 "LLM inference complete"
