@@ -13,6 +13,7 @@ use anyhow::{Context, Result, ensure};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
     fs::{File, OpenOptions},
     path::{Path, PathBuf},
 };
@@ -29,9 +30,14 @@ struct Suite {
 struct Case {
     id: String,
     question: String,
+    #[serde(default = "default_intent_family")]
+    intent_family: String,
     plan: Plan,
     expected_total: Option<i64>,
     expected_ids: Option<Vec<String>>,
+}
+fn default_intent_family() -> String {
+    "unclassified".into()
 }
 #[derive(Serialize)]
 struct CaseReport {
@@ -50,8 +56,43 @@ struct Report {
     planner_model: Option<String>,
     minimum_planner_accuracy: f64,
     planner_accuracy: Option<f64>,
+    intent_family_accuracy: BTreeMap<String, IntentFamilyAccuracy>,
     passed: bool,
     cases: Vec<CaseReport>,
+}
+
+#[derive(Serialize)]
+struct IntentFamilyAccuracy {
+    cases: usize,
+    correct: usize,
+    accuracy: Option<f64>,
+}
+
+fn family_accuracy(
+    cases: &[CaseReport],
+    test_planner: bool,
+) -> BTreeMap<String, IntentFamilyAccuracy> {
+    let mut counts = BTreeMap::<String, (usize, usize)>::new();
+    for case in cases {
+        let entry = counts.entry(case.case.intent_family.clone()).or_default();
+        entry.0 += 1;
+        if case.planner_correct == Some(true) {
+            entry.1 += 1;
+        }
+    }
+    counts
+        .into_iter()
+        .map(|(family, (cases, correct))| {
+            (
+                family,
+                IntentFamilyAccuracy {
+                    cases,
+                    correct,
+                    accuracy: test_planner.then(|| correct as f64 / cases as f64),
+                },
+            )
+        })
+        .collect()
 }
 
 async fn fixture_database(suite_path: &Path) -> Result<(tempfile::TempDir, IndexerDb, String)> {
@@ -288,6 +329,7 @@ pub async fn run(
         planner_model,
         minimum_planner_accuracy: suite.minimum_planner_accuracy,
         planner_accuracy,
+        intent_family_accuracy: family_accuracy(&cases, test_planner),
         passed,
         cases,
     };

@@ -66,3 +66,7 @@ cargo test --bin chester-rs chronicle::
 These also cover metadata-only updates without embedding work, schema upgrades,
 strict plan validation, dispatch/fallback, distinct counts, list caps, and response
 lengths. They do not measure natural-language planner accuracy.
+
+Planner reports include accuracy grouped by the `intent_family` field, so
+regressions in synthesis paraphrases are visible even when aggregate accuracy
+remains above the suite threshold.

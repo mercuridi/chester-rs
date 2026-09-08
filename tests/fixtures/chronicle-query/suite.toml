@@ -275,13 +275,43 @@ operation = "search"
 
 [[cases]]
 id = "summary"
+intent_family = "synthesis-history"
 question = "Summarise the history of Northmere."
 [cases.plan]
 operation = "synthesis"
 
 [[cases]]
 id = "broad-overview"
+intent_family = "synthesis-history"
 question = "Give an overview of how the Moonspire rebellion developed."
+[cases.plan]
+operation = "synthesis"
+
+[[cases]]
+id = "synthesis-evolve"
+intent_family = "synthesis-history"
+question = "How did the Ember Kingdom evolve?"
+[cases.plan]
+operation = "synthesis"
+
+[[cases]]
+id = "synthesis-walkthrough"
+intent_family = "synthesis-history"
+question = "Walk me through the history of the Ember Kingdom."
+[cases.plan]
+operation = "synthesis"
+
+[[cases]]
+id = "synthesis-changes"
+intent_family = "synthesis-history"
+question = "What changed over the course of the Ember Kingdom's history?"
+[cases.plan]
+operation = "synthesis"
+
+[[cases]]
+id = "synthesis-developments"
+intent_family = "synthesis-history"
+question = "Summarize the major developments in the Ember Kingdom."
 [cases.plan]
 operation = "synthesis"
 
