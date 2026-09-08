@@ -80,6 +80,7 @@ fn canonicalize_filters(value: &mut Value) {
     let Some(filters) = plan.get_mut("filters").and_then(Value::as_object_mut) else {
         return;
     };
+    canonicalize_condition_wikilinks(&note_type, filters);
     let fields = filters
         .iter()
         .filter_map(|(field, value)| {
@@ -88,7 +89,8 @@ fn canonicalize_filters(value: &mut Value) {
             }
             let definition =
                 crate::chronicle::indexer::schema::field_definition(&note_type, field)?;
-            let value = value.as_str()?.to_owned();
+            let mut value = value.as_str()?.to_owned();
+            wrap_wikilink_if_required(&mut value, definition.value_type);
             Some((field.clone(), definition.value_type, value))
         })
         .collect::<Vec<_>>();
@@ -120,6 +122,53 @@ fn canonicalize_filters(value: &mut Value) {
             "operator": operator,
             "value": value,
         }));
+    }
+}
+
+fn canonicalize_condition_wikilinks(note_type: &str, filters: &mut serde_json::Map<String, Value>) {
+    let Some(conditions) = filters.get_mut("conditions").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for condition in conditions {
+        let Some(condition) = condition.as_object_mut() else {
+            continue;
+        };
+        let Some(field) = condition
+            .get("field")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let Some(definition) =
+            crate::chronicle::indexer::schema::field_definition(note_type, &field)
+        else {
+            continue;
+        };
+        let Some(mut value) = condition
+            .get("value")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        wrap_wikilink_if_required(&mut value, definition.value_type);
+        condition.insert("value".into(), Value::String(value));
+    }
+}
+
+fn wrap_wikilink_if_required(
+    value: &mut String,
+    value_type: crate::chronicle::indexer::schema::ValueType,
+) {
+    if matches!(
+        value_type,
+        crate::chronicle::indexer::schema::ValueType::Wikilink
+            | crate::chronicle::indexer::schema::ValueType::WikilinkList
+    ) && !value.trim().is_empty()
+        && !value.contains(['[', ']'])
+    {
+        *value = format!("[[{}]]", value.trim());
     }
 }
 
@@ -207,6 +256,18 @@ mod tests {
             parse(r#"{"operation":"list","note_type":"character","filters":{"invented":"value"}}"#)
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn canonicalizes_only_required_wikilink_fields() -> Result<()> {
+        let actual = parse(
+            r#"{"operation":"list","note_type":"character","filters":{"appearances":"Riftweavers","conditions":[{"field":"location","operator":"equals","value":"Northmere"},{"field":"life_status_cause","operator":"equals","value":"old age"}]}}"#,
+        )?;
+        let expected = parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"location","operator":"equals","value":"[[Northmere]]"},{"field":"life_status_cause","operator":"equals","value":"old age"},{"field":"appearances","operator":"contains","value":"[[Riftweavers]]"}]}}"#,
+        )?;
+        assert_eq!(actual, expected);
         Ok(())
     }
 

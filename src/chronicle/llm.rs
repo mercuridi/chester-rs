@@ -181,8 +181,9 @@ impl Llm {
         rejection_error: &str,
     ) -> Result<String> {
         let system = crate::chronicle::query::planner::system_prompt();
+        let guidance = plan_repair_guidance(rejection_error);
         let prompt = format!(
-            "Original question:\n{question}\n\nYour previous response was rejected:\n<rejected-plan>\n{rejected_response}\n</rejected-plan>\n\nValidation error:\n<validation-error>\n{rejection_error}\n</validation-error>\n\nCorrect the specific validation error. Return a corrected query plan for the original question. Output exactly one JSON object and nothing else."
+            "Original question:\n{question}\n\nYour previous response was rejected:\n<rejected-plan>\n{rejected_response}\n</rejected-plan>\n\nValidation error:\n<validation-error>\n{rejection_error}\n</validation-error>\n\n{guidance}\n\nCorrect the specific validation error. Return a corrected query plan for the original question. Output exactly one JSON object and nothing else."
         );
         self.generate_with_system(&system, &prompt, 256, 0.0).await
     }
@@ -372,6 +373,14 @@ impl LoadedLlm {
     }
 }
 
+fn plan_repair_guidance(rejection_error: &str) -> &'static str {
+    if rejection_error.contains("Invalid wikilink query value") {
+        "This is a wikilink-format failure. Preserve the target, but write every affected wikilink value exactly as [[Target]]; do not add a prefix such as `contains:`."
+    } else {
+        "Correct only the validation error shown above."
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp, clippy::unwrap_used)]
 mod tests {
@@ -431,6 +440,15 @@ mod tests {
         assert_eq!(
             llm.format_input_prompt("Question"),
             "<|im_start|>system\nSystem prompt\n\nKeep every answer at or below 100 characters.<|im_end|>\n<|im_start|>user\nQuestion<|im_end|>\n<|im_start|>assistant\n"
+        );
+    }
+
+    #[test]
+    fn repair_guidance_is_specific_for_wikilink_failures() {
+        assert!(super::plan_repair_guidance("Invalid wikilink query value").contains("[[Target]]"));
+        assert_eq!(
+            super::plan_repair_guidance("unknown field `x`"),
+            "Correct only the validation error shown above."
         );
     }
 
