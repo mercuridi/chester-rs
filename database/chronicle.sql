@@ -56,8 +56,10 @@ CREATE TABLE IF NOT EXISTS race_metadata (document_id INTEGER PRIMARY KEY REFERE
 CREATE TABLE IF NOT EXISTS note_wikilinks (document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, field_name TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (document_id, field_name, position));
 CREATE TABLE IF NOT EXISTS note_string_lists (document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, field_name TEXT NOT NULL, position INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (document_id, field_name, position));
 CREATE TABLE IF NOT EXISTS note_scalar_fields (document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, field_name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (document_id, field_name));
+CREATE TABLE IF NOT EXISTS note_identifiers (document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, value TEXT NOT NULL, PRIMARY KEY (document_id, value));
 
 CREATE INDEX IF NOT EXISTS note_metadata_selection ON note_metadata(status, note_type, role, life_status);
 CREATE INDEX IF NOT EXISTS note_wikilinks_lookup ON note_wikilinks(field_name, value);
 CREATE INDEX IF NOT EXISTS note_string_lists_lookup ON note_string_lists(field_name, value);
 CREATE INDEX IF NOT EXISTS note_scalar_fields_lookup ON note_scalar_fields(field_name, value);
+CREATE INDEX IF NOT EXISTS note_identifiers_lookup ON note_identifiers(value);

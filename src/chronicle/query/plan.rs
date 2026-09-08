@@ -93,6 +93,11 @@ pub enum Plan {
         #[serde(default)]
         filters: Filters,
     },
+    CountMembers {
+        note_type: String,
+        subject: String,
+        field: String,
+    },
     Search {},
     Synthesis {},
     Unsupported {},
@@ -115,7 +120,43 @@ impl Plan {
                 validate_condition(note_type, condition)?;
             }
         }
+        if let Self::CountMembers {
+            note_type,
+            subject,
+            field,
+        } = self
+        {
+            ensure!(
+                NOTE_TYPES.contains(&note_type.as_str()) && note_type != "template",
+                "Unsupported note type"
+            );
+            ensure!(
+                subject.trim().starts_with("[[") && subject.trim().ends_with("]]"),
+                "Member-count subject must be an exact wikilink"
+            );
+            ensure!(
+                subject.trim().len() > 4,
+                "Member-count subject cannot be empty"
+            );
+            let definition = schema::field_definition(note_type, field).ok_or_else(|| {
+                anyhow::anyhow!("Field `{field}` is not available on {note_type} notes")
+            })?;
+            ensure!(
+                matches!(
+                    definition.value_type,
+                    ValueType::StringList | ValueType::WikilinkList
+                ),
+                "Member counts require a list field"
+            );
+        }
         Ok(())
+    }
+
+    pub fn is_structured(&self) -> bool {
+        matches!(
+            self,
+            Self::Count { .. } | Self::List { .. } | Self::CountMembers { .. }
+        )
     }
 
     pub fn selection(&self) -> Option<(&str, &Filters)> {
@@ -199,6 +240,18 @@ mod tests {
         plan.validate()?;
         assert!(serde_json::from_str::<Plan>(r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"equals","value":"[[Riftweavers]]"}]}}"#)
             .is_ok_and(|plan| plan.validate().is_err()));
+        let members = serde_json::from_str::<Plan>(
+            r#"{"operation":"count_members","note_type":"character","subject":"[[Ada]]","field":"enemies"}"#,
+        )?;
+        members.validate()?;
+        assert!(serde_json::from_str::<Plan>(
+            r#"{"operation":"count_members","note_type":"character","subject":"Ada","field":"enemies"}"#,
+        )
+        .is_ok_and(|plan| plan.validate().is_err()));
+        assert!(serde_json::from_str::<Plan>(
+            r#"{"operation":"count_members","note_type":"character","subject":"[[Ada]]","field":"played_by"}"#,
+        )
+        .is_ok_and(|plan| plan.validate().is_err()));
         Ok(())
     }
 

@@ -225,7 +225,7 @@ impl Chronicle {
         }
         debug!(route = ?plan, "Validated Chronicle query plan");
         match &plan {
-            Plan::Count { .. } | Plan::List { .. } => {
+            Plan::Count { .. } | Plan::List { .. } | Plan::CountMembers { .. } => {
                 let result = self.db.as_ref().context("Structured datastore unavailable")?.execute_plan_for(&plan, access).await?;
                 Ok(render::render(&plan, &result, self.max_reply_length))
             }

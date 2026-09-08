@@ -4,6 +4,17 @@ use crate::chronicle::indexer::db::repository::StructuredResult;
 pub const LIST_LIMIT: usize = 20;
 
 pub fn render(plan: &Plan, result: &StructuredResult, max_chars: usize) -> String {
+    if let Plan::CountMembers { subject, field, .. } = plan {
+        return format!(
+            "{} distinct {} recorded for {}.",
+            result.total,
+            field.replace('_', " "),
+            subject
+        )
+        .chars()
+        .take(max_chars)
+        .collect();
+    }
     let Some((note_type, filters)) = plan.selection() else {
         return String::new();
     };

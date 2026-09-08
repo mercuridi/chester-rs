@@ -345,6 +345,14 @@ impl IndexerDb {
         use crate::chronicle::query::{plan::Plan, render::LIST_LIMIT};
         let mut plan = plan.clone();
         plan.validate()?;
+        if let Plan::CountMembers {
+            note_type,
+            subject,
+            field,
+        } = &plan
+        {
+            return self.count_members(note_type, subject, field, access).await;
+        }
         self.resolve_string_or_wikilinks(&mut plan).await?;
         let (note_type, filters) = plan.selection().context("Plan is not a structured query")?;
         let role = filters
@@ -389,6 +397,49 @@ impl IndexerDb {
             }
         }
         Ok(StructuredResult { total, notes })
+    }
+
+    async fn count_members(
+        &self,
+        note_type: &str,
+        subject: &str,
+        field: &str,
+        access: AccessScope,
+    ) -> Result<StructuredResult> {
+        let target = &subject.trim()[2..subject.trim().len() - 2];
+        let mut subject_query = String::from(
+            "SELECT DISTINCT m.document_id FROM note_identifiers i JOIN note_metadata m ON m.document_id = i.document_id WHERE i.value = ? COLLATE NOCASE AND m.status = 'canon' AND m.note_type = ?",
+        );
+        if access == AccessScope::Player {
+            subject_query.push_str(" AND m.visibility != 'secret'");
+        }
+        let subject_ids = sqlx::query_scalar::<_, i64>(&subject_query)
+            .bind(target)
+            .bind(note_type)
+            .fetch_all(&self.pool)
+            .await?;
+        anyhow::ensure!(
+            subject_ids.len() == 1,
+            "Member-count subject must resolve to exactly one accessible canon note"
+        );
+        let definition = crate::chronicle::indexer::schema::field_definition(note_type, field)
+            .context("validated member-count field is missing")?;
+        let table = match definition.value_type {
+            crate::chronicle::indexer::schema::ValueType::WikilinkList => "note_wikilinks",
+            crate::chronicle::indexer::schema::ValueType::StringList => "note_string_lists",
+            _ => anyhow::bail!("validated member-count field is not a list"),
+        };
+        let total: i64 = sqlx::query_scalar(&format!(
+            "SELECT COUNT(DISTINCT value) FROM {table} WHERE document_id = ? AND field_name = ?"
+        ))
+        .bind(subject_ids[0])
+        .bind(field)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(StructuredResult {
+            total,
+            notes: Vec::new(),
+        })
     }
 
     /// Resolves a plain `StringOrWikilink` condition only when the exact
@@ -714,6 +765,42 @@ async fn write_metadata(
         .bind(document_id)
         .execute(&mut *connection)
         .await?;
+    sqlx::query("DELETE FROM note_identifiers WHERE document_id = ?")
+        .bind(document_id)
+        .execute(&mut *connection)
+        .await?;
+
+    let path: String = sqlx::query_scalar("SELECT path FROM documents WHERE id = ?")
+        .bind(document_id)
+        .fetch_one(&mut *connection)
+        .await?;
+    let mut identifiers = std::collections::BTreeSet::new();
+    if !metadata.id.trim().is_empty() {
+        identifiers.insert(metadata.id.trim().to_owned());
+    }
+    if let Some(title) = Path::new(&path)
+        .file_stem()
+        .and_then(|title| title.to_str())
+    {
+        if !title.trim().is_empty() {
+            identifiers.insert(title.trim().to_owned());
+        }
+    }
+    identifiers.extend(
+        metadata
+            .aliases
+            .iter()
+            .map(|alias| alias.trim())
+            .filter(|alias| !alias.is_empty())
+            .map(ToOwned::to_owned),
+    );
+    for identifier in identifiers {
+        sqlx::query("INSERT INTO note_identifiers(document_id, value) VALUES (?, ?)")
+            .bind(document_id)
+            .bind(identifier)
+            .execute(&mut *connection)
+            .await?;
+    }
 
     for (field_name, value) in &metadata.fields {
         match value {
@@ -1060,6 +1147,24 @@ mod tests {
             literal_plan.selection().unwrap().1.conditions[0].value,
             "old age"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn count_members_resolves_note_identifiers_and_deduplicates_values() -> Result<()> {
+        let (_directory, db) = test_database().await?;
+        let source = "---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\naliases: [The Gardener]\nenemies: ['[[Bela]]', '[[Bela]]', '[[Corin]]']\n---\n";
+        let (metadata, _) =
+            crate::chronicle::indexer::frontmatter::parse(source)?.context("note")?;
+        db.replace_note("Ada.md", "hash", &[], &[], &metadata)
+            .await?;
+
+        for subject in ["[[Ada]]", "[[ada]]", "[[The Gardener]]"] {
+            let plan = crate::chronicle::query::planner::parse(&format!(
+                r#"{{"operation":"count_members","note_type":"character","subject":"{subject}","field":"enemies"}}"#,
+            ))?;
+            assert_eq!(db.execute_plan(&plan).await?.total, 2, "{subject}");
+        }
         Ok(())
     }
 

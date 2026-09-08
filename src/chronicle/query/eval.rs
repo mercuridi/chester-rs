@@ -144,7 +144,7 @@ fn validate(suite: &Suite) -> Result<()> {
             "Empty evaluation question"
         );
         case.plan.validate()?;
-        let structured = case.plan.selection().is_some();
+        let structured = case.plan.is_structured();
         ensure!(
             structured == case.expected_total.is_some(),
             "Structured cases require an expected total"
@@ -167,7 +167,7 @@ async fn evaluate(
     llm: Option<&Llm>,
     runtime: &GpuRuntime,
 ) -> Result<CaseReport> {
-    let result = if case.plan.selection().is_some() {
+    let result = if case.plan.is_structured() {
         Some(db.execute_plan(&case.plan).await?)
     } else {
         None
@@ -324,10 +324,7 @@ pub async fn run(
     // Reject any unsupported/ambiguous question incorrectly accepted for SQL,
     // even if aggregate planner accuracy meets the threshold.
     let unsafe_acceptance = cases.iter().any(|c| {
-        c.case.plan.selection().is_none()
-            && c.actual_plan
-                .as_ref()
-                .is_some_and(|p| p.selection().is_some())
+        !c.case.plan.is_structured() && c.actual_plan.as_ref().is_some_and(Plan::is_structured)
     });
     let passed = cases.iter().all(|c| c.executor_correct)
         && !unsafe_acceptance

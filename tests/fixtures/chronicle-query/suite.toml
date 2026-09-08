@@ -342,8 +342,12 @@ operation = "clarify"
 [[cases]]
 id = "enemies"
 question = "How many enemies does Ada have?"
+expected_total = 2
 [cases.plan]
-operation = "unsupported"
+operation = "count_members"
+note_type = "character"
+subject = "[[Ada]]"
+field = "enemies"
 
 [[cases]]
 id = "region"
