@@ -18,11 +18,7 @@ pub trait RetrieverApi: Send + Sync {
     async fn search(
         &self,
         query: &str,
-        limit: usize,
-        candidate_limit: usize,
-        distance_threshold: f32,
-        near_duplicate_threshold: f32,
-        max_chunks_per_document: usize,
+        settings: SearchSettings,
         access: AccessScope,
     ) -> Result<RetrievalOutcome>;
     async fn load_embedder(&self) -> Result<()>;
@@ -222,11 +218,7 @@ impl Retriever {
     pub async fn search(
         &self,
         query: &str,
-        limit: usize,
-        candidate_limit: usize,
-        distance_threshold: f32,
-        near_duplicate_threshold: f32,
-        max_chunks_per_document: usize,
+        settings: SearchSettings,
         access: AccessScope,
     ) -> Result<RetrievalOutcome> {
         let query = query.trim();
@@ -260,20 +252,10 @@ impl Retriever {
 
         let (vector, lexical) = tokio::try_join!(
             self.db
-                .search_similar_for(&embedding, candidate_limit, access),
-            self.db.search_lexical_for(query, candidate_limit, access),
+                .search_similar_for(&embedding, settings.candidate_limit, access),
+            self.db.search_lexical_for(query, settings.candidate_limit, access),
         )?;
-        let (results, diagnostics) = select_with_diagnostics(
-            vector,
-            lexical,
-            SearchSettings {
-                limit,
-                candidate_limit,
-                distance_threshold,
-                near_duplicate_threshold,
-                max_chunks_per_document,
-            },
-        );
+        let (results, diagnostics) = select_with_diagnostics(vector, lexical, settings);
         debug!(?diagnostics, "Chronicle retrieval diagnostics");
         if results.is_empty() {
             Ok(RetrievalOutcome::NoResultMeetsThreshold)
@@ -288,23 +270,10 @@ impl RetrieverApi for Retriever {
     async fn search(
         &self,
         query: &str,
-        limit: usize,
-        candidate_limit: usize,
-        distance_threshold: f32,
-        near_duplicate_threshold: f32,
-        max_chunks_per_document: usize,
+        settings: SearchSettings,
         access: AccessScope,
     ) -> Result<RetrievalOutcome> {
-        self.search(
-            query,
-            limit,
-            candidate_limit,
-            distance_threshold,
-            near_duplicate_threshold,
-            max_chunks_per_document,
-            access,
-        )
-        .await
+        self.search(query, settings, access).await
     }
     async fn load_embedder(&self) -> Result<()> {
         self.load_embedder().await

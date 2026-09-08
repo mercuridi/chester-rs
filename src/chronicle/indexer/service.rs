@@ -49,7 +49,7 @@ impl PreparedDocument {
         }
         for secret_content in &document.secret_content {
             let mut secret_document = document.clone();
-            secret_document.content = secret_content.clone();
+            secret_document.content.clone_from(secret_content);
             secret_document.secret_content.clear();
             let offset = chunks.len();
             let mut secret_chunks = chunker::chunk::chunk(

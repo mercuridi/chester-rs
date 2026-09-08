@@ -178,11 +178,12 @@ fn split_secret_callouts(body: &str, visibility: &str) -> Result<(String, Vec<Se
                 secret.push_str(quoted);
                 continue;
             }
-            let (_, title, secret) = active.take().expect("active secret callout");
-            secrets.push(SecretCallout {
-                title,
-                body: secret.trim().to_owned(),
-            });
+            if let Some((_, title, secret)) = active.take() {
+                secrets.push(SecretCallout {
+                    title,
+                    body: secret.trim().to_owned(),
+                });
+            }
         }
 
         if let Some(quoted) = quoted_callout_line(line)

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tracing::{debug, info, instrument};
+use super::query::{plan::Plan, planner, render};
 
 use super::{
     indexer::{
@@ -139,7 +140,6 @@ impl Chronicle {
         if question.trim().is_empty() {
             return Ok("Please provide a non-empty question.".into());
         }
-        use super::query::{plan::Plan, planner, render};
         let plan = match self.llm.generate_plan(question).await {
             Ok(response) => match planner::parse_for_question(question, &response) {
                 Ok(plan) => Some(plan),
@@ -206,11 +206,13 @@ impl Chronicle {
             .retriever
             .search(
                 question,
-                self.retrieval_limit,
-                self.retrieval_candidate_limit,
-                self.retrieval_distance_threshold,
-                self.retrieval_near_duplicate_threshold,
-                self.retrieval_max_chunks_per_document,
+                super::indexer::retriever::SearchSettings {
+                    limit: self.retrieval_limit,
+                    candidate_limit: self.retrieval_candidate_limit,
+                    distance_threshold: self.retrieval_distance_threshold,
+                    near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
+                    max_chunks_per_document: self.retrieval_max_chunks_per_document,
+                },
                 access,
             )
             .await
@@ -348,7 +350,7 @@ mod tests {
     use crate::chronicle::{
         indexer::{
             db::repository::SearchResult,
-            retriever::{RetrievalOutcome, RetrieverApi},
+            retriever::{RetrievalOutcome, RetrieverApi, SearchSettings},
         },
         llm::LanguageModel,
         runtime::GpuRuntime,
@@ -394,11 +396,7 @@ mod tests {
         async fn search(
             &self,
             query: &str,
-            limit: usize,
-            candidate_limit: usize,
-            distance_threshold: f32,
-            near_duplicate_threshold: f32,
-            max_chunks_per_document: usize,
+            settings: SearchSettings,
             _access: crate::chronicle::indexer::db::repository::AccessScope,
         ) -> Result<RetrievalOutcome> {
             self.calls
@@ -406,11 +404,11 @@ mod tests {
                 .map_err(|_| anyhow!("calls poisoned"))?
                 .push((
                     query.into(),
-                    limit,
-                    candidate_limit,
-                    distance_threshold,
-                    near_duplicate_threshold,
-                    max_chunks_per_document,
+                    settings.limit,
+                    settings.candidate_limit,
+                    settings.distance_threshold,
+                    settings.near_duplicate_threshold,
+                    settings.max_chunks_per_document,
                 ));
             self.accesses
                 .lock()

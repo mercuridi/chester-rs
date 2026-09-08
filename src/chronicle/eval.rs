@@ -335,6 +335,7 @@ fn create_report_file(requested_path: Option<&Path>) -> Result<(File, std::path:
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub async fn run(suite_path: &Path, requested_report_path: Option<&Path>) -> Result<()> {
     if let Some(path) = requested_report_path {
         ensure!(!path.exists(), "Report path must be a new file");
@@ -490,7 +491,8 @@ mod tests {
                     .into_iter()
                     .enumerate()
                     .map(|(index, text)| IndexedChunk {
-                        chunk_index: i64::try_from(index + 1).expect("fixture chunk index"),
+                        #[allow(clippy::cast_possible_wrap)]
+                        chunk_index: (index + 1) as i64,
                         heading: Some("Secret".into()),
                         text,
                         visibility: crate::chronicle::indexer::document::ChunkVisibility::Secret,

@@ -164,6 +164,7 @@ impl IndexerDb {
         .await
     }
 
+    #[allow(clippy::too_many_lines)]
     pub async fn replace_note(
         &self,
         path: &str,
@@ -357,7 +358,7 @@ impl IndexerDb {
             role,
             status,
             access,
-        );
+        )?;
         let total: i64 = count.build_query_scalar().fetch_one(&self.pool).await?;
         let mut notes = Vec::new();
         if matches!(plan, Plan::List { .. }) {
@@ -368,7 +369,7 @@ impl IndexerDb {
                 role,
                 status,
                 access,
-            );
+            )?;
             query
                 .push(" GROUP BY m.note_id ORDER BY m.note_id LIMIT ")
                 .push_bind(i64::try_from(LIST_LIMIT)?);
@@ -538,7 +539,7 @@ fn structured_query<'a>(
     role: Option<&'static str>,
     status: Option<&'static str>,
     access: AccessScope,
-) -> QueryBuilder<'a, Sqlite> {
+) -> Result<QueryBuilder<'a, Sqlite>> {
     use crate::chronicle::query::plan::ConditionOperator;
 
     let mut query = QueryBuilder::new(select);
@@ -569,11 +570,11 @@ fn structured_query<'a>(
                     note_type,
                     &condition.field,
                 )
-                .expect("validated query condition field");
+                .context("validated query condition field is missing")?;
                 let table = match definition.value_type {
                     crate::chronicle::indexer::schema::ValueType::WikilinkList => "note_wikilinks",
                     crate::chronicle::indexer::schema::ValueType::StringList => "note_string_lists",
-                    _ => unreachable!("validated contains condition must be a list"),
+                    _ => anyhow::bail!("contains condition must target a list field"),
                 };
                 query
                     .push(" AND EXISTS (SELECT 1 FROM ")
@@ -586,7 +587,7 @@ fn structured_query<'a>(
             }
         }
     }
-    query
+    Ok(query)
 }
 
 /// Returns the cache location for the current derived-index format.
