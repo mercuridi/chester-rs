@@ -22,9 +22,21 @@ struct Suite {
     minimum_required_fact_recall: f64,
     maximum_prohibited_claims: usize,
     minimum_gap_recall: f64,
+    #[serde(default = "default_minimum_core_recall")]
+    minimum_core_recall: f64,
+    #[serde(default)]
+    minimum_supporting_recall: f64,
+    #[serde(default)]
+    minimum_caveat_recall: f64,
+    #[serde(default)]
+    maximum_unsupported_major_causal_claims: usize,
     topology: Topology,
     safety: Safety,
     cases: Vec<Case>,
+}
+
+fn default_minimum_core_recall() -> f64 {
+    0.8
 }
 
 #[derive(Deserialize)]
@@ -54,6 +66,8 @@ struct FactExpectation {
     aliases: Vec<String>,
     #[serde(default)]
     entities: Vec<String>,
+    #[serde(default = "default_core_category")]
+    category: ClaimCategory,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -76,6 +90,24 @@ struct GapExpectation {
     aliases: Vec<String>,
     #[serde(default)]
     entities: Vec<String>,
+    #[serde(default = "default_caveat_category")]
+    category: ClaimCategory,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ClaimCategory {
+    Core,
+    Supporting,
+    Caveat,
+}
+
+fn default_core_category() -> ClaimCategory {
+    ClaimCategory::Core
+}
+
+fn default_caveat_category() -> ClaimCategory {
+    ClaimCategory::Caveat
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +121,8 @@ enum RawExpectation {
         aliases: Vec<String>,
         #[serde(default)]
         entities: Vec<String>,
+        #[serde(default)]
+        category: Option<ClaimCategory>,
     },
 }
 
@@ -109,17 +143,20 @@ where
                 claim,
                 aliases: Vec::new(),
                 entities: Vec::new(),
+                category: ClaimCategory::Core,
             }),
             RawExpectation::Structured {
                 id,
                 claim,
                 aliases,
                 entities,
+                category,
             } => Ok(FactExpectation {
                 id,
                 claim,
                 aliases,
                 entities,
+                category: category.unwrap_or(ClaimCategory::Core),
             }),
         })
         .collect()
@@ -146,6 +183,7 @@ where
                 claim,
                 aliases,
                 entities,
+                category: _,
             } => Ok(ProhibitedExpectation {
                 id,
                 claim,
@@ -169,17 +207,20 @@ where
                 claim,
                 aliases: Vec::new(),
                 entities: Vec::new(),
+                category: ClaimCategory::Caveat,
             }),
             RawExpectation::Structured {
                 id,
                 claim,
                 aliases,
                 entities,
+                category,
             } => Ok(GapExpectation {
                 id,
                 claim,
                 aliases,
                 entities,
+                category: category.unwrap_or(ClaimCategory::Caveat),
             }),
         })
         .collect()
@@ -203,6 +244,7 @@ struct Case {
 struct ClaimResult {
     id: String,
     claim: String,
+    category: Option<ClaimCategory>,
     matched: bool,
     status: ClaimStatus,
     matched_by: Option<String>,
@@ -239,6 +281,14 @@ struct JudgeClaim {
 #[serde(deny_unknown_fields)]
 struct JudgeOutput {
     claims: Vec<JudgeClaim>,
+    unsupported_causal_claims: Vec<UnsupportedCausalClaim>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnsupportedCausalClaim {
+    claim: String,
+    confidence: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -266,7 +316,14 @@ struct JudgeMetadata {
     judged_claim_count: usize,
     attempts: usize,
     retry_count: usize,
+    unsupported_causal_claim_count: usize,
     error: Option<String>,
+}
+
+struct JudgeEvaluation {
+    claims: Vec<JudgeClaim>,
+    unsupported_causal_claims: Vec<String>,
+    metadata: JudgeMetadata,
 }
 
 struct SynthesisJudge {
@@ -282,7 +339,7 @@ fn judge_prompt(
 ) -> String {
     let targets = serde_json::to_string(targets).expect("judge targets are serializable");
     let mut prompt = format!(
-        "You are a strict evaluator of a synthesis answer. Determine whether each unresolved rubric claim is entailed by the answer, contradicted by the answer, or unknown. Accept faithful paraphrases, but do not infer facts that the answer does not state. Use the entity requirements as hard constraints. Return JSON only, with exactly this schema: {{\"claims\":[{{\"id\":\"target id\",\"verdict\":\"entailed|contradicted|unknown\",\"confidence\":0.0}}]}}. Include exactly one result for every supplied target, preserving each target id. Confidence must be a JSON number from 0.0 to 1.0. Do not include markdown, explanations, or additional fields.\n\nQuestion:\n{question}\n\nAnswer:\n{answer}\n\nUnresolved targets:\n{targets}\n"
+        "You are a strict evaluator of a synthesis answer. Determine whether each unresolved rubric claim is entailed by the answer, contradicted by the answer, or unknown. Accept faithful paraphrases, but do not infer facts that the answer does not state. Use the entity requirements as hard constraints. Also flag any major causal claim in the answer that is not directly supported by the supplied rubric claims. Return JSON only, with exactly this schema: {{\"claims\":[{{\"id\":\"target id\",\"verdict\":\"entailed|contradicted|unknown\",\"confidence\":0.0}}],\"unsupported_causal_claims\":[{{\"claim\":\"short claim\",\"confidence\":0.0}}]}}. Include exactly one result for every supplied target, preserving each target id. Use an empty unsupported_causal_claims array when none are present. Confidence must be a JSON number from 0.0 to 1.0. Do not include markdown, explanations, or additional fields.\n\nQuestion:\n{question}\n\nAnswer:\n{answer}\n\nUnresolved targets:\n{targets}\n"
     );
     if let Some(invalid_response) = invalid_response {
         prompt.push_str(
@@ -324,6 +381,16 @@ fn parse_judge_output(response: &str, targets: &[JudgeTarget]) -> Result<JudgeOu
             claim.id
         );
     }
+    for causal_claim in &output.unsupported_causal_claims {
+        ensure!(
+            causal_claim.confidence.is_finite() && (0.0..=1.0).contains(&causal_claim.confidence),
+            "unsupported causal claim confidence must be between 0.0 and 1.0"
+        );
+        ensure!(
+            !causal_claim.claim.trim().is_empty(),
+            "unsupported causal claim cannot be empty"
+        );
+    }
     ensure!(
         seen.len() == expected.len(),
         "judge omitted one or more target claim IDs"
@@ -344,7 +411,7 @@ impl SynthesisJudge {
         question: &str,
         answer: &str,
         targets: &[JudgeTarget],
-    ) -> Result<(Vec<JudgeClaim>, JudgeMetadata)> {
+    ) -> Result<JudgeEvaluation> {
         ensure!(
             !targets.is_empty(),
             "Synthesis judge requires at least one target"
@@ -372,15 +439,26 @@ impl SynthesisJudge {
             };
             match parse_judge_output(&response, targets) {
                 Ok(output) => {
+                    let unsupported_causal_claims = output
+                        .unsupported_causal_claims
+                        .iter()
+                        .filter(|claim| claim.confidence >= 0.75)
+                        .map(|claim| claim.claim.clone())
+                        .collect::<Vec<_>>();
                     let metadata = JudgeMetadata {
                         status: JudgeStatus::Succeeded,
                         target_count: targets.len(),
                         judged_claim_count: output.claims.len(),
                         attempts,
                         retry_count,
+                        unsupported_causal_claim_count: unsupported_causal_claims.len(),
                         error: None,
                     };
-                    return Ok((output.claims, metadata));
+                    return Ok(JudgeEvaluation {
+                        claims: output.claims,
+                        unsupported_causal_claims,
+                        metadata,
+                    });
                 }
                 Err(error) => {
                     last_error = Some(error.to_string());
@@ -405,7 +483,12 @@ struct CaseReport {
     synthesis_diagnostics: super::service::SynthesisDiagnostics,
     route_correct: bool,
     required_fact_recall: f64,
+    core_recall: f64,
+    supporting_recall: f64,
+    caveat_recall: f64,
     prohibited_claims_found: Vec<String>,
+    contradictions: usize,
+    unsupported_major_causal_claims: Vec<String>,
     gap_recall: f64,
     required_fact_results: Vec<ClaimResult>,
     prohibited_claim_results: Vec<ClaimResult>,
@@ -421,6 +504,10 @@ struct Report {
     minimum_required_fact_recall: f64,
     maximum_prohibited_claims: usize,
     minimum_gap_recall: f64,
+    minimum_core_recall: f64,
+    minimum_supporting_recall: f64,
+    minimum_caveat_recall: f64,
+    maximum_unsupported_major_causal_claims: usize,
     passed: bool,
     cases: Vec<CaseReport>,
 }
@@ -445,6 +532,7 @@ trait Expectation {
     fn claim(&self) -> &str;
     fn aliases(&self) -> &[String];
     fn entities(&self) -> &[String];
+    fn category(&self) -> Option<ClaimCategory>;
 }
 
 impl Expectation for FactExpectation {
@@ -462,6 +550,10 @@ impl Expectation for FactExpectation {
 
     fn entities(&self) -> &[String] {
         &self.entities
+    }
+
+    fn category(&self) -> Option<ClaimCategory> {
+        Some(self.category)
     }
 }
 
@@ -481,6 +573,10 @@ impl Expectation for ProhibitedExpectation {
     fn entities(&self) -> &[String] {
         &self.entities
     }
+
+    fn category(&self) -> Option<ClaimCategory> {
+        None
+    }
 }
 
 impl Expectation for GapExpectation {
@@ -498,6 +594,10 @@ impl Expectation for GapExpectation {
 
     fn entities(&self) -> &[String] {
         &self.entities
+    }
+
+    fn category(&self) -> Option<ClaimCategory> {
+        Some(self.category)
     }
 }
 
@@ -622,6 +722,7 @@ fn claim_results<T: Expectation>(
             ClaimResult {
                 id: expectation.id().to_owned(),
                 claim: expectation.claim().to_owned(),
+                category: expectation.category(),
                 matched,
                 status,
                 matched_by: found.matched_by,
@@ -659,6 +760,42 @@ fn resolved_coverage(results: &[ClaimResult]) -> f64 {
             .count() as f64
             / results.len() as f64
     }
+}
+
+fn category_coverage(
+    required_facts: &[ClaimResult],
+    gaps: &[ClaimResult],
+    category: ClaimCategory,
+) -> f64 {
+    let claims = required_facts
+        .iter()
+        .chain(gaps.iter())
+        .filter(|result| result.category == Some(category))
+        .collect::<Vec<_>>();
+    if claims.is_empty() {
+        return 1.0;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    {
+        claims
+            .iter()
+            .filter(|result| result.status == ClaimStatus::Resolved)
+            .count() as f64
+            / claims.len() as f64
+    }
+}
+
+fn contradiction_count(
+    required_facts: &[ClaimResult],
+    prohibited_claims: &[ClaimResult],
+    gaps: &[ClaimResult],
+) -> usize {
+    required_facts
+        .iter()
+        .chain(prohibited_claims.iter())
+        .chain(gaps.iter())
+        .filter(|result| result.status == ClaimStatus::Contradicted)
+        .count()
 }
 
 fn prohibited(answer: &str, expectations: &[ProhibitedExpectation]) -> Vec<String> {
@@ -780,6 +917,9 @@ fn validate(suite: &Suite) -> Result<()> {
     ensure!(!suite.cases.is_empty(), "Synthesis suite has no cases");
     ensure!((0.0..=1.0).contains(&suite.minimum_required_fact_recall));
     ensure!((0.0..=1.0).contains(&suite.minimum_gap_recall));
+    ensure!((0.0..=1.0).contains(&suite.minimum_core_recall));
+    ensure!((0.0..=1.0).contains(&suite.minimum_supporting_recall));
+    ensure!((0.0..=1.0).contains(&suite.minimum_caveat_recall));
     validate_fixture_metadata(&suite.topology, &suite.safety)?;
     let mut ids = std::collections::HashSet::new();
     for case in &suite.cases {
@@ -899,7 +1039,9 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
             "prohibited_claim",
         ));
         judge_targets.extend(unresolved_targets(&gap_results, &case.expected_gaps, "gap"));
-        let (judge_metadata, judge_failed) = if judge_targets.is_empty() {
+        let (judge_metadata, judge_failed, unsupported_major_causal_claims) = if judge_targets
+            .is_empty()
+        {
             (
                 JudgeMetadata {
                     status: JudgeStatus::NotNeeded,
@@ -907,13 +1049,20 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
                     judged_claim_count: 0,
                     attempts: 0,
                     retry_count: 0,
+                    unsupported_causal_claim_count: 0,
                     error: None,
                 },
                 false,
+                Vec::new(),
             )
         } else {
             match judge.judge(&case.question, &answer, &judge_targets).await {
-                Ok((judged, metadata)) => {
+                Ok(evaluation) => {
+                    let JudgeEvaluation {
+                        claims: judged,
+                        unsupported_causal_claims,
+                        metadata,
+                    } = evaluation;
                     let apply_result =
                         apply_judge_results(&mut required_fact_results, "required_fact", &judged)
                             .and_then(|_| {
@@ -925,7 +1074,7 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
                             })
                             .and_then(|_| apply_judge_results(&mut gap_results, "gap", &judged));
                     match apply_result {
-                        Ok(()) => (metadata, false),
+                        Ok(()) => (metadata, false, unsupported_causal_claims),
                         Err(error) => (
                             JudgeMetadata {
                                 status: JudgeStatus::Error,
@@ -933,9 +1082,12 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
                                 judged_claim_count: judged.len(),
                                 attempts: metadata.attempts,
                                 retry_count: metadata.retry_count,
+                                unsupported_causal_claim_count: metadata
+                                    .unsupported_causal_claim_count,
                                 error: Some(error.to_string()),
                             },
                             true,
+                            Vec::new(),
                         ),
                     }
                 }
@@ -946,9 +1098,11 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
                         judged_claim_count: 0,
                         attempts: judge.max_attempts,
                         retry_count: judge.max_attempts.saturating_sub(1),
+                        unsupported_causal_claim_count: 0,
                         error: Some(error.to_string()),
                     },
                     true,
+                    Vec::new(),
                 ),
             }
         };
@@ -959,18 +1113,43 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
             .map(|result| result.claim.clone())
             .collect::<Vec<_>>();
         let gap_recall = resolved_coverage(&gap_results);
+        let core_recall =
+            category_coverage(&required_fact_results, &gap_results, ClaimCategory::Core);
+        let supporting_recall = category_coverage(
+            &required_fact_results,
+            &gap_results,
+            ClaimCategory::Supporting,
+        );
+        let caveat_recall =
+            category_coverage(&required_fact_results, &gap_results, ClaimCategory::Caveat);
+        let contradictions = contradiction_count(
+            &required_fact_results,
+            &prohibited_claim_results,
+            &gap_results,
+        );
         let passed = route_correct
             && !judge_failed
             && required_fact_recall >= suite.minimum_required_fact_recall
             && prohibited_claims_found.len() <= suite.maximum_prohibited_claims
-            && gap_recall >= suite.minimum_gap_recall;
+            && gap_recall >= suite.minimum_gap_recall
+            && core_recall >= suite.minimum_core_recall
+            && supporting_recall >= suite.minimum_supporting_recall
+            && caveat_recall >= suite.minimum_caveat_recall
+            && contradictions == 0
+            && unsupported_major_causal_claims.len()
+                <= suite.maximum_unsupported_major_causal_claims;
         cases.push(CaseReport {
             case,
             answer,
             synthesis_diagnostics,
             route_correct,
             required_fact_recall,
+            core_recall,
+            supporting_recall,
+            caveat_recall,
             prohibited_claims_found,
+            contradictions,
+            unsupported_major_causal_claims,
             gap_recall,
             required_fact_results,
             prohibited_claim_results,
@@ -987,6 +1166,10 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
         minimum_required_fact_recall: suite.minimum_required_fact_recall,
         maximum_prohibited_claims: suite.maximum_prohibited_claims,
         minimum_gap_recall: suite.minimum_gap_recall,
+        minimum_core_recall: suite.minimum_core_recall,
+        minimum_supporting_recall: suite.minimum_supporting_recall,
+        minimum_caveat_recall: suite.minimum_caveat_recall,
+        maximum_unsupported_major_causal_claims: suite.maximum_unsupported_major_causal_claims,
         passed,
         cases,
     };
@@ -1017,6 +1200,7 @@ mod tests {
                         .into(),
                     aliases: Vec::new(),
                     entities: Vec::new(),
+                    category: ClaimCategory::Core,
                 }],
                 ExpectationKind::Required,
             ),
@@ -1030,6 +1214,7 @@ mod tests {
                     claim: "The kingdom was founded.".into(),
                     aliases: vec!["The realm was established.".into()],
                     entities: vec!["kingdom".into()],
+                    category: ClaimCategory::Core,
                 }],
                 ExpectationKind::Required,
             ),
@@ -1161,6 +1346,7 @@ claim = "The interval is unknown."
             claim: "The crown moved from Ashford to Lantern Bay.".into(),
             aliases: vec!["The court relocated to Lantern Bay.".into()],
             entities: vec!["Lantern Bay".into()],
+            category: ClaimCategory::Core,
         };
         let results = claim_results(
             "After the flood, the court relocated to Lantern Bay.",
@@ -1183,6 +1369,7 @@ claim = "The interval is unknown."
             claim: "The crown moved to Lantern Bay.".into(),
             aliases: vec!["The court relocated.".into()],
             entities: vec!["Lantern Bay".into()],
+            category: ClaimCategory::Core,
         };
         let results = claim_results(
             "The court relocated after the flood.",
@@ -1202,6 +1389,7 @@ claim = "The interval is unknown."
             claim: "The kingdom survived the Ashen War.".into(),
             aliases: vec!["The kingdom survive the Ashen War.".into()],
             entities: Vec::new(),
+            category: ClaimCategory::Core,
         };
         let results = claim_results(
             "The kingdom did not survive the Ashen War.",
@@ -1290,12 +1478,55 @@ claim = "The interval is unknown."
         );
     }
 
+    #[test]
+    fn category_coverage_and_contradictions_are_reported_independently() {
+        let result = |id: &str, category: Option<ClaimCategory>, status: ClaimStatus| ClaimResult {
+            id: id.into(),
+            claim: id.into(),
+            category,
+            matched: status == ClaimStatus::Resolved,
+            status,
+            matched_by: None,
+            missing_entities: Vec::new(),
+            judge_verdict: None,
+            judge_confidence: None,
+        };
+        let required = vec![
+            result("core", Some(ClaimCategory::Core), ClaimStatus::Resolved),
+            result(
+                "supporting",
+                Some(ClaimCategory::Supporting),
+                ClaimStatus::Unresolved,
+            ),
+        ];
+        let gaps = vec![result(
+            "caveat",
+            Some(ClaimCategory::Caveat),
+            ClaimStatus::Resolved,
+        )];
+        let prohibited = vec![result("prohibited", None, ClaimStatus::Contradicted)];
+
+        assert_eq!(
+            category_coverage(&required, &gaps, ClaimCategory::Core),
+            1.0
+        );
+        assert_eq!(
+            category_coverage(&required, &gaps, ClaimCategory::Supporting),
+            0.0
+        );
+        assert_eq!(
+            category_coverage(&required, &gaps, ClaimCategory::Caveat),
+            1.0
+        );
+        assert_eq!(contradiction_count(&required, &prohibited, &gaps), 1);
+    }
+
     #[tokio::test]
     async fn judge_retries_invalid_json_and_records_retry_metadata() -> Result<()> {
         let model = std::sync::Arc::new(JudgeTestModel {
             responses: std::sync::Mutex::new(std::collections::VecDeque::from([
                 "not json".into(),
-                r#"{"claims":[{"id":"required_fact:foundation","verdict":"entailed","confidence":0.9}]}"#.into(),
+                r#"{"claims":[{"id":"required_fact:foundation","verdict":"entailed","confidence":0.9}],"unsupported_causal_claims":[]}"#.into(),
             ])),
             prompts: std::sync::Mutex::new(Vec::new()),
         });
@@ -1309,13 +1540,13 @@ claim = "The interval is unknown."
             missing_entities: Vec::new(),
         }];
 
-        let (claims, metadata) = judge
+        let evaluation = judge
             .judge("What happened?", "The kingdom was founded.", &targets)
             .await?;
-        assert_eq!(claims.len(), 1);
-        assert_eq!(metadata.status, JudgeStatus::Succeeded);
-        assert_eq!(metadata.attempts, 2);
-        assert_eq!(metadata.retry_count, 1);
+        assert_eq!(evaluation.claims.len(), 1);
+        assert_eq!(evaluation.metadata.status, JudgeStatus::Succeeded);
+        assert_eq!(evaluation.metadata.attempts, 2);
+        assert_eq!(evaluation.metadata.retry_count, 1);
         assert!(model.prompts.lock().unwrap()[1].contains("not json"));
         Ok(())
     }
