@@ -4,9 +4,16 @@ maximum_prohibited_claims = 0
 minimum_gap_recall = 0.0
 
 [topology]
-document_count = 8
+document_count = 13
 minimum_multi_document_cases = 2
 required_categories = ["multi-document", "distractor", "duplicate", "chronology"]
+
+[safety]
+gm_only_note = "gm-only"
+draft_contradiction_note = "draft-crown"
+instruction_like_note = "prompt-injection"
+inaccessible_note = "hidden-ash-plans"
+mixed_event_note = "mixed-flood"
 
 [[cases]]
 id = "ember-kingdom-history"
