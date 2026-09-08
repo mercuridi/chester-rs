@@ -1,6 +1,6 @@
 //! Retrieval evaluation only: no Discord connection, live database, or answer LLM.
 use super::indexer::{
-    db::repository::{IndexerDb, SearchResult},
+    db::repository::{AccessScope, IndexerDb, SearchResult},
     embedder::Embedder,
     retriever::{RetrievalDiagnostics, SearchSettings, select_with_diagnostics},
     scanner,
@@ -34,10 +34,18 @@ struct Case {
     id: String,
     category: String,
     question: String,
+    #[serde(default = "default_access_scope")]
+    access: AccessScope,
     /// Stable frontmatter IDs. Empty means no answer in the fixture corpus.
     relevant_notes: Vec<String>,
     #[serde(default)]
     evidence: Vec<String>,
+    #[serde(default)]
+    forbidden_evidence: Vec<String>,
+}
+
+const fn default_access_scope() -> AccessScope {
+    AccessScope::Player
 }
 
 #[derive(Debug, Serialize)]
@@ -47,6 +55,7 @@ struct Metrics {
     reciprocal_rank: Option<f64>,
     evidence_coverage: Option<f64>,
     returned_for_unanswerable: Option<bool>,
+    forbidden_evidence_returned: bool,
 }
 
 #[derive(Serialize)]
@@ -83,6 +92,7 @@ struct Report {
     max_chunk_tokens: usize,
     chunk_overlap_tokens: usize,
     minimum_hybrid_recall: f64,
+    visibility_passed: bool,
     passed: bool,
     aggregate: BTreeMap<String, Aggregate>,
     cases: Vec<CaseResult>,
@@ -117,6 +127,10 @@ fn metrics(case: &Case, notes: &[String], passages: &[String]) -> Metrics {
             )
         }),
         returned_for_unanswerable: (!answerable).then_some(!notes.is_empty()),
+        forbidden_evidence_returned: case
+            .forbidden_evidence
+            .iter()
+            .any(|snippet| passages.iter().any(|passage| passage.contains(snippet))),
     }
 }
 
@@ -178,6 +192,13 @@ fn validate(
                         .iter()
                         .any(|id| contents.get(id).is_some_and(|c| c.contains(snippet))),
                 "Missing evidence in {}: {snippet}",
+                case.id
+            );
+        }
+        for snippet in &case.forbidden_evidence {
+            ensure!(
+                !snippet.is_empty() && contents.values().any(|content| content.contains(snippet)),
+                "Missing forbidden evidence in {}: {snippet}",
                 case.id
             );
         }
@@ -257,8 +278,8 @@ async fn evaluate_case(
         .pop()
         .context("Missing query embedding")?;
     let (vector, lexical) = tokio::try_join!(
-        database.search_similar(&embedding, settings.candidate_limit),
-        database.search_lexical(&case.question, settings.candidate_limit)
+        database.search_similar_for(&embedding, settings.candidate_limit, case.access),
+        database.search_lexical_for(&case.question, settings.candidate_limit, case.access)
     )?;
     let retrieval_ms = start.elapsed().as_millis();
     let mut modes = BTreeMap::new();
@@ -334,7 +355,12 @@ pub async fn run(suite_path: &Path, requested_report_path: Option<&Path>) -> Res
         &identities,
         &documents
             .iter()
-            .map(|d| (d.metadata.id.clone(), d.content.clone()))
+            .map(|d| {
+                (
+                    d.metadata.id.clone(),
+                    format!("{}\n{}", d.content, d.secret_content.join("\n")),
+                )
+            })
             .collect::<BTreeMap<_, _>>(),
     )?;
     let mut hash = Sha256::new();
@@ -381,7 +407,13 @@ pub async fn run(suite_path: &Path, requested_report_path: Option<&Path>) -> Res
         );
     }
     let aggregate = aggregate_results(&cases);
-    let passed = aggregate["hybrid"].mean_recall >= suite.minimum_hybrid_recall;
+    let visibility_passed = cases.iter().all(|case| {
+        case.modes
+            .values()
+            .all(|mode| !mode.metrics.forbidden_evidence_returned)
+    });
+    let passed =
+        aggregate["hybrid"].mean_recall >= suite.minimum_hybrid_recall && visibility_passed;
     let report = Report {
         suite: suite.name,
         fixture_sha256: fingerprint,
@@ -391,6 +423,7 @@ pub async fn run(suite_path: &Path, requested_report_path: Option<&Path>) -> Res
         max_chunk_tokens: suite.max_chunk_tokens,
         chunk_overlap_tokens: suite.chunk_overlap_tokens,
         minimum_hybrid_recall: suite.minimum_hybrid_recall,
+        visibility_passed,
         passed,
         aggregate,
         cases,
@@ -401,7 +434,7 @@ pub async fn run(suite_path: &Path, requested_report_path: Option<&Path>) -> Res
     tracing::info!(report = %report_path.display(), recall = report.aggregate["hybrid"].mean_recall, passed, "Evaluation complete");
     ensure!(
         passed,
-        "Hybrid recall below suite threshold; see {}",
+        "Retrieval evaluation failed; see {}",
         report_path.display()
     );
     Ok(())
@@ -422,7 +455,12 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         let contents = documents
             .iter()
-            .map(|d| (d.metadata.id.clone(), d.content.clone()))
+            .map(|d| {
+                (
+                    d.metadata.id.clone(),
+                    format!("{}\n{}", d.content, d.secret_content.join("\n")),
+                )
+            })
             .collect::<BTreeMap<_, _>>();
         validate(&suite, &identities, &contents)?;
         assert!(!identities.values().any(|id| id == "draft-crown"));
@@ -435,18 +473,37 @@ mod tests {
         // Deliberately whole-note chunks and dummy vectors: this checks fixture
         // ingestion and lexical mechanics, not semantic retrieval quality.
         for note in documents {
+            let primary_visibility = if note.metadata.visibility == "secret" {
+                crate::chronicle::indexer::document::ChunkVisibility::Secret
+            } else {
+                crate::chronicle::indexer::document::ChunkVisibility::Player
+            };
+            let mut chunks = vec![IndexedChunk {
+                chunk_index: 0,
+                heading: None,
+                text: note.content,
+                visibility: primary_visibility,
+                overlaps_previous: false,
+            }];
+            chunks.extend(
+                note.secret_content
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, text)| IndexedChunk {
+                        chunk_index: i64::try_from(index + 1).expect("fixture chunk index"),
+                        heading: Some("Secret".into()),
+                        text,
+                        visibility: crate::chronicle::indexer::document::ChunkVisibility::Secret,
+                        overlaps_previous: false,
+                    }),
+            );
+            let embeddings = vec![vec![0.0; 384]; chunks.len()];
             database
                 .replace_note(
                     &note.path.to_string_lossy(),
                     &note.content_hash,
-                    &[IndexedChunk {
-                        chunk_index: 0,
-                        heading: None,
-                        text: note.content,
-                        visibility: crate::chronicle::indexer::document::ChunkVisibility::Player,
-                        overlaps_previous: false,
-                    }],
-                    &[vec![0.0; 384]],
+                    &chunks,
+                    &embeddings,
                     &note.metadata,
                 )
                 .await?;
@@ -454,6 +511,28 @@ mod tests {
         let result = database.search_lexical("Silver Beacon", 3).await?;
         assert_eq!(identities[&result[0].document_path], "moonspire");
         assert!(database.search_lexical("VIOLETXYZZY", 3).await?.is_empty());
+        let player_results = database
+            .search_lexical_for("glass-comet password", 3, AccessScope::Player)
+            .await?;
+        assert!(
+            player_results
+                .iter()
+                .all(|result| !result.text.contains("glass-comet password"))
+        );
+        assert_eq!(
+            identities[&database
+                .search_lexical_for("glass-comet password", 3, AccessScope::Gm)
+                .await?[0]
+                .document_path],
+            "vault"
+        );
+        assert!(
+            database
+                .search_lexical_for("night-ink ledger", 3, AccessScope::Player)
+                .await?
+                .iter()
+                .all(|result| !result.text.contains("night-ink ledger"))
+        );
         suite.cases[0].relevant_notes.push("nonexistent".into());
         assert!(validate(&suite, &identities, &contents).is_err());
         Ok(())
@@ -465,8 +544,10 @@ mod tests {
             id: "test".into(),
             category: "test".into(),
             question: "q".into(),
+            access: AccessScope::Player,
             relevant_notes: vec!["a".into(), "b".into()],
             evidence: vec!["fact".into()],
+            forbidden_evidence: Vec::new(),
         };
         let score = metrics(
             &case,

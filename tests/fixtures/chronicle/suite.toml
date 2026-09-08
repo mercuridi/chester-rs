@@ -93,3 +93,45 @@ category = "excluded-draft"
 question = "Where is the Quasar Crown?"
 relevant_notes = []
 evidence = []
+
+[[cases]]
+id = "mixed-public-player"
+category = "visibility-player"
+access = "player"
+question = "Where may visitors enter the old mill vault?"
+relevant_notes = ["vault"]
+evidence = ["outer hall"]
+
+[[cases]]
+id = "mixed-secret-player"
+category = "visibility-player"
+access = "player"
+question = "What password opens the inner door?"
+relevant_notes = []
+evidence = []
+forbidden_evidence = ["glass-comet password"]
+
+[[cases]]
+id = "mixed-secret-gm"
+category = "visibility-gm"
+access = "gm"
+question = "What password opens the inner door?"
+relevant_notes = ["vault"]
+evidence = ["glass-comet password"]
+
+[[cases]]
+id = "secret-note-player"
+category = "visibility-player"
+access = "player"
+question = "What does the night-ink ledger record?"
+relevant_notes = []
+evidence = []
+forbidden_evidence = ["night-ink ledger"]
+
+[[cases]]
+id = "secret-note-gm"
+category = "visibility-gm"
+access = "gm"
+question = "What does the night-ink ledger record?"
+relevant_notes = ["shadow-ledger"]
+evidence = ["hidden payments"]

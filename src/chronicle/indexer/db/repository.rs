@@ -5,7 +5,8 @@ use chrono::Utc;
 use sqlx::{QueryBuilder, Row, Sqlite, sqlite::SqlitePool};
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AccessScope {
     Player,
     Gm,
@@ -387,6 +388,10 @@ impl IndexerDb {
         Ok(StructuredResult { total, notes })
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "unscoped compatibility helper for tests")
+    )]
     pub async fn search_lexical(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
         self.search_lexical_for(query, limit, AccessScope::Gm).await
     }
@@ -426,6 +431,10 @@ impl IndexerDb {
             .collect())
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "unscoped compatibility helper for tests")
+    )]
     pub async fn search_similar(
         &self,
         embedding: &[f32],

@@ -39,6 +39,8 @@ For parameter experiments, retain both reports and compare their recorded settin
   passages. This is a lightweight passage check, not a semantic answer score.
 - `returned_for_unanswerable`: whether any candidates were returned for a question
   with no annotated answer. It does not claim an LLM hallucinated or abstained.
+- `forbidden_evidence_returned`: whether a player/GM scope returned a passage
+  containing text explicitly annotated as unavailable to that scope.
 - `retrieval_ms`: query embedding plus both database searches, excluding indexing,
   model loading, selection, and generation.
 
@@ -49,8 +51,9 @@ Vector-only and hybrid apply the configured distance threshold to vector candida
 Lexical-only and hybrid do not apply it to lexical candidates.
 
 The process writes the report then exits unsuccessfully if hybrid mean recall is
-below `minimum_hybrid_recall`. The shipped gate is 0.8. This gate does not check
-answer correctness, evidence coverage, or unanswerable-question abstention.
+below `minimum_hybrid_recall` or a `forbidden_evidence` annotation appears in any
+mode. The shipped recall gate is 0.8. This does not check answer correctness or
+unanswerable-question abstention.
 
 ## Diagnostics
 
@@ -74,10 +77,12 @@ RUST_LOG=info,chester_rs::chronicle::indexer::retriever=debug cargo run
 ## Extending the suite
 
 Add Markdown notes under `corpus/` and cases in `suite.toml`. Cases reference stable
-frontmatter IDs, not filenames. `relevant_notes` lists all notes judged relevant;
-`evidence` contains exact substrings from those notes. Use empty lists for unknown
-answers. Duplicate case IDs, missing relevant IDs, or invalid evidence annotations
-are errors. Keep category names descriptive for per-case comparisons.
+frontmatter IDs, not filenames. `access` is `player` (the default) or `gm`.
+`relevant_notes` lists all notes judged relevant; `evidence` contains exact
+substrings from those notes. Use empty lists for unknown answers. Use
+`forbidden_evidence` for text that must never appear in retrieved passages for the
+case’s access scope. Duplicate case IDs, missing relevant IDs, or invalid evidence
+annotations are errors. Keep category names descriptive for per-case comparisons.
 
 Do not weaken annotations or thresholds merely to make a regression pass. Add new
 cases for failures observed in real usage, using fictional equivalents of live data.
