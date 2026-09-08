@@ -7,7 +7,7 @@ covers generic scalar equality, wikilink-list membership, string-list membership
 and conjunctions across the declared frontmatter taxonomy. The retrieval baseline
 corpus is unchanged and remains a separate evaluation.
 
-The suite covers 39 questions: legacy and generic supported counts/lists, zero
+The suite covers 48 questions: legacy and generic supported counts/lists, zero
 results, missing values, ordinary retrieval questions, unsupported restrictions, and
 ambiguous follow-ups.
 
@@ -27,7 +27,7 @@ cargo run -- --chronicle-query-eval SUITE.toml REPORT.json
 This uses a temporary database and requires no model, embeddings, application
 configuration, Discord connection, or live notes. It validates expected plans and
 checks exact totals and list IDs. Empty/missing properties do not satisfy a positive
-filter. An explicit `character_status: unknown` is distinct from an omitted field.
+filter. An explicit `life_status: unknown` is distinct from an omitted field.
 
 To also measure the configured local LLM's interpretation:
 

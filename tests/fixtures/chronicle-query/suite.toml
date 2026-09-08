@@ -348,14 +348,24 @@ operation = "unsupported"
 [[cases]]
 id = "region"
 question = "List NPCs in Northmere."
+expected_total = 1
+expected_ids = ["ada"]
 [cases.plan]
-operation = "unsupported"
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+role = "npc"
+conditions = [{ field = "location", operator = "equals", value = "[[Northmere]]" }]
 
 [[cases]]
 id = "cities"
 question = "How many cities are recorded?"
+expected_total = 1
 [cases.plan]
-operation = "unsupported"
+operation = "count"
+note_type = "location"
+[cases.plan.filters]
+conditions = [{ field = "location_type", operator = "equals", value = "city" }]
 
 [[cases]]
 id = "negation"
