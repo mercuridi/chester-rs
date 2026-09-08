@@ -1,6 +1,6 @@
 use super::query::{plan::Plan, planner, render};
 use anyhow::{Context, Result};
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use tracing::{debug, info, instrument};
 
 use super::{
@@ -29,6 +29,27 @@ pub struct Chronicle {
     synthesis: SynthesisSettings,
     max_reply_length: usize,
     lifecycle: tokio::sync::Mutex<()>,
+    last_synthesis_diagnostics: std::sync::Mutex<Option<SynthesisDiagnostics>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RetrievedDocumentDiagnostic {
+    pub id: String,
+    pub rank: usize,
+    pub distance: f32,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SynthesisDiagnostics {
+    pub retrieved_documents: Vec<RetrievedDocumentDiagnostic>,
+    pub accepted_result_count: usize,
+    pub omitted_result_count: usize,
+    pub chunks_per_document: BTreeMap<String, usize>,
+    pub map_batch_count: usize,
+    pub reduction_pass_count: usize,
+    pub prompt_token_counts: Vec<usize>,
+    pub final_answer_length_retried: bool,
+    pub final_answer_truncated: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -92,6 +113,7 @@ impl Chronicle {
             synthesis,
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
+            last_synthesis_diagnostics: std::sync::Mutex::new(None),
         }
     }
 
@@ -125,7 +147,15 @@ impl Chronicle {
             synthesis: SynthesisSettings::default(),
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
+            last_synthesis_diagnostics: std::sync::Mutex::new(None),
         }
+    }
+
+    pub fn last_synthesis_diagnostics(&self) -> Result<Option<SynthesisDiagnostics>> {
+        self.last_synthesis_diagnostics
+            .lock()
+            .map(|diagnostics| diagnostics.clone())
+            .map_err(|_| anyhow::anyhow!("synthesis diagnostics state is poisoned"))
     }
 
     #[instrument(skip(self, question), fields(question_len = question.len()))]
@@ -273,7 +303,7 @@ impl Chronicle {
             "Built Chronicle prompt"
         );
 
-        let answer = self.generate_answer(&prompt, answer_limit).await?;
+        let (answer, _, _) = self.generate_answer(&prompt, answer_limit).await?;
         Ok(format!("{prefix}{answer}"))
     }
 
@@ -316,6 +346,35 @@ impl Chronicle {
             .synthesis
             .batch_token_budget
             .min(self.llm.prompt_token_budget());
+        let mut diagnostics = SynthesisDiagnostics {
+            retrieved_documents: results
+                .iter()
+                .enumerate()
+                .map(|(rank, result)| RetrievedDocumentDiagnostic {
+                    id: std::path::Path::new(&result.document_path)
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    rank: rank + 1,
+                    distance: result.distance,
+                })
+                .collect(),
+            accepted_result_count: results.len(),
+            omitted_result_count: 0,
+            chunks_per_document: BTreeMap::new(),
+            map_batch_count: 0,
+            reduction_pass_count: 0,
+            prompt_token_counts: Vec::new(),
+            final_answer_length_retried: false,
+            final_answer_truncated: false,
+        };
+        for result in &results {
+            *diagnostics
+                .chunks_per_document
+                .entry(result.document_path.clone())
+                .or_insert(0) += 1;
+        }
         let sources = synthesis::retrieved_evidence(&results);
         let map_plan = synthesis::pack_batches(
             question,
@@ -334,6 +393,8 @@ impl Chronicle {
             batch_token_budget = token_budget,
             "Built bounded Chronicle synthesis map plan"
         );
+        diagnostics.omitted_result_count = map_plan.omitted_items;
+        diagnostics.map_batch_count = map_plan.batches.len();
 
         let mut notes = Vec::with_capacity(map_plan.batches.len());
         let mut partial = false;
@@ -341,6 +402,7 @@ impl Chronicle {
             let source_labels = synthesis::merged_labels(&batch);
             let prompt = synthesis::map_prompt(question, &batch);
             let prompt_tokens = self.llm.count_input_tokens(&prompt)?;
+            diagnostics.prompt_token_counts.push(prompt_tokens);
             debug!(
                 source_labels = ?source_labels,
                 source_count = batch.len(),
@@ -386,6 +448,7 @@ impl Chronicle {
                 synthesis::reduce_prompt,
                 |prompt| self.llm.count_input_tokens(prompt),
             )?;
+            diagnostics.reduction_pass_count += 1;
             if reduction_plan.batches.len() >= notes.len() {
                 tracing::warn!(
                     evidence_note_count = notes.len(),
@@ -401,6 +464,7 @@ impl Chronicle {
                 let source_labels = synthesis::merged_labels(&batch);
                 let prompt = synthesis::reduce_prompt(question, &batch);
                 let prompt_tokens = self.llm.count_input_tokens(&prompt)?;
+                diagnostics.prompt_token_counts.push(prompt_tokens);
                 debug!(
                     reduction_depth,
                     source_labels = ?source_labels,
@@ -437,6 +501,7 @@ impl Chronicle {
         }
         let final_prompt = synthesis::final_prompt_with_partial_status(question, &notes, partial);
         let final_prompt_tokens = self.llm.count_input_tokens(&final_prompt)?;
+        diagnostics.prompt_token_counts.push(final_prompt_tokens);
         debug!(
             reduction_depth,
             evidence_note_count = notes.len(),
@@ -453,7 +518,14 @@ impl Chronicle {
         } else {
             self.max_reply_length
         };
-        let answer = self.generate_answer(&final_prompt, answer_limit).await?;
+        let (answer, retried, truncated) =
+            self.generate_answer(&final_prompt, answer_limit).await?;
+        diagnostics.final_answer_length_retried = retried;
+        diagnostics.final_answer_truncated = truncated;
+        self.last_synthesis_diagnostics
+            .lock()
+            .map_err(|_| anyhow::anyhow!("synthesis diagnostics state is poisoned"))?
+            .replace(diagnostics);
         Ok(if partial {
             format!("{partial_prefix}{answer}")
         } else {
@@ -461,8 +533,14 @@ impl Chronicle {
         })
     }
 
-    async fn generate_answer(&self, prompt: &str, answer_limit: usize) -> Result<String> {
+    async fn generate_answer(
+        &self,
+        prompt: &str,
+        answer_limit: usize,
+    ) -> Result<(String, bool, bool)> {
         let mut answer = self.llm.generate(prompt).await?;
+        let mut retried = false;
+        let mut truncated = false;
 
         if answer.chars().count() > answer_limit {
             debug!(
@@ -474,6 +552,7 @@ impl Chronicle {
                 "{prompt}\n\nThe draft answer below is too long. Rewrite it to fit within {answer_limit} characters. Preserve the most important information, and output only the shorter answer.\n\nDraft answer:\n{answer}"
             );
             answer = self.llm.generate(&retry_prompt).await?;
+            retried = true;
         }
 
         if answer.chars().count() > answer_limit {
@@ -483,12 +562,13 @@ impl Chronicle {
                 "LLM answer remained over length after retry; truncating"
             );
             answer = truncate_to_char_limit(&answer, answer_limit);
+            truncated = true;
         }
         info!(
             answer_len = answer.chars().count(),
             "Completed Chronicle question"
         );
-        Ok(answer)
+        Ok((answer, retried, truncated))
     }
 
     #[instrument(skip(self))]

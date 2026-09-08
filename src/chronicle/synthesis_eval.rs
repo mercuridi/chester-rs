@@ -40,6 +40,7 @@ struct Case {
 struct CaseReport {
     case: Case,
     answer: String,
+    synthesis_diagnostics: super::service::SynthesisDiagnostics,
     route_correct: bool,
     required_fact_recall: f64,
     prohibited_claims_found: Vec<String>,
@@ -194,6 +195,9 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
         let route =
             planner::parse_for_question(&case.question, &llm.generate_plan(&case.question).await?)?;
         let answer = chronicle.ask(&case.question).await?;
+        let synthesis_diagnostics = chronicle
+            .last_synthesis_diagnostics()?
+            .context("Synthesis did not produce diagnostics")?;
         let route_correct = route == Plan::Synthesis {};
         let required_fact_recall = coverage(&answer, &case.required_facts);
         let prohibited_claims_found = prohibited(&answer, &case.prohibited_claims);
@@ -205,6 +209,7 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
         cases.push(CaseReport {
             case,
             answer,
+            synthesis_diagnostics,
             route_correct,
             required_fact_recall,
             prohibited_claims_found,
