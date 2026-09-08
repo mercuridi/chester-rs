@@ -510,12 +510,20 @@ impl Chronicle {
                 "Completed Chronicle synthesis reduction pass"
             );
         }
-        let final_prompt = synthesis::final_prompt_with_partial_status(question, &notes, partial);
+        let coverage_ledger = synthesis::CoverageLedger::new(notes, partial);
+        debug!(
+            reduction_depth,
+            partial,
+            coverage_ledger = %coverage_ledger.debug_artifact(),
+            "Completed Chronicle synthesis coverage ledger"
+        );
+        let final_prompt =
+            synthesis::final_prompt_with_partial_status(question, coverage_ledger.notes(), partial);
         let final_prompt_tokens = self.llm.count_input_tokens(&final_prompt)?;
         diagnostics.prompt_token_counts.push(final_prompt_tokens);
         debug!(
             reduction_depth,
-            evidence_note_count = notes.len(),
+            evidence_note_count = coverage_ledger.notes().len(),
             final_prompt_tokens,
             prompt_token_budget = self.llm.prompt_token_budget(),
             partial,
@@ -1141,7 +1149,7 @@ mod tests {
             .lock()
             .map_err(|_| anyhow!("prompts poisoned"))?;
         assert!(prompts[0].contains("<evidence>"));
-        assert!(prompts[1].contains("<evidence_notes>"));
+        assert!(prompts[1].contains("<coverage_ledger>"));
         Ok(())
     }
 
@@ -1264,10 +1272,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn synthesis_reduces_evidence_over_multiple_passes() -> Result<()> {
+    async fn synthesis_reduces_evidence_before_final_answer() -> Result<()> {
         let (mut chronicle, _retriever, llm) = service(
             FakeOutcome::FourResults,
-            ["m1", "m2", "m3", "m4", "r1", "r2", "answer"],
+            ["m1", "m2", "m3", "m4", "r1", "answer"],
             500,
         )?;
         *llm.plan_output
@@ -1346,7 +1354,7 @@ mod tests {
                 .iter()
                 .filter(|prompt| prompt.contains("<evidence_notes>"))
                 .count(),
-            3
+            1
         );
         Ok(())
     }

@@ -21,7 +21,8 @@ question = "Summarise the history of the Ember Kingdom."
 expected_route = "synthesis"
 required_facts = [
   "The Ember Kingdom was founded when the river settlements ratified the Ember Compact.",
-  "The kingdom survived the Ashen War but lost control of the eastern marches.",
+  "The Ashen War ended in an Ember victory.",
+  "The kingdom ceded the eastern marches in the peace settlement.",
   "The crown later moved from Ashford to Lantern Bay after the river flood.",
   "The kingdom declined after its trade league dissolved.",
 ]
