@@ -37,6 +37,12 @@ pub struct PageRankStats {
     pub gm_iterations: usize,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PageRankSignal {
+    pub score: f64,
+    pub rank: i64,
+}
+
 #[derive(Debug, Clone)]
 pub struct IndexedChunk {
     pub chunk_index: i64,
@@ -112,6 +118,45 @@ impl IndexerDb {
             .fetch_one(&self.pool)
             .await
             .context("Failed to check whether the Chronicle corpus is empty")
+    }
+
+    pub async fn pagerank_for_paths(
+        &self,
+        paths: impl IntoIterator<Item = String>,
+        access: AccessScope,
+    ) -> Result<std::collections::HashMap<String, PageRankSignal>> {
+        let paths = paths.into_iter().collect::<std::collections::HashSet<_>>();
+        if paths.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let mut query = QueryBuilder::<Sqlite>::new("SELECT d.path, CASE WHEN ");
+        query
+            .push_bind(access.is_gm())
+            .push(" THEN p.gm_score ELSE p.player_score END AS score, CASE WHEN ")
+            .push_bind(access.is_gm())
+            .push(" THEN p.gm_rank ELSE p.player_rank END AS rank FROM documents d JOIN document_pagerank p ON p.document_id = d.id WHERE d.path IN (");
+        let mut separated = query.separated(", ");
+        for path in paths {
+            separated.push_bind(path);
+        }
+        separated.push_unseparated(")");
+        let rows = query
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .context("Failed to load PageRank signals for retrieval candidates")?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get("path"),
+                    PageRankSignal {
+                        score: row.get("score"),
+                        rank: row.get("rank"),
+                    },
+                )
+            })
+            .collect())
     }
 
     /// Replace the complete derived document graph with the resolver's current

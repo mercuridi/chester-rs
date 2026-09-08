@@ -410,6 +410,7 @@ mod tests {
             retrieval_distance_threshold: 0.8,
             retrieval_near_duplicate_threshold: 0.85,
             retrieval_max_chunks_per_document: 2,
+            pagerank_weight: 0.15,
             synthesis: SynthesisSettings {
                 retrieval_limit: 12,
                 candidate_limit: 40,

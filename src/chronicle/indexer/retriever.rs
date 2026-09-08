@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
 
 use super::{
-    db::repository::{AccessScope, IndexerDb, SearchResult},
+    db::repository::{AccessScope, IndexerDb, PageRankSignal, SearchResult},
     embedder::Embedder,
 };
 
@@ -41,6 +41,12 @@ pub struct SearchSettings {
     pub distance_threshold: f32,
     pub near_duplicate_threshold: f32,
     pub max_chunks_per_document: usize,
+    #[serde(default = "default_pagerank_weight")]
+    pub pagerank_weight: f64,
+}
+
+const fn default_pagerank_weight() -> f64 {
+    0.15
 }
 
 impl SearchSettings {
@@ -61,6 +67,10 @@ impl SearchSettings {
             self.max_chunks_per_document > 0,
             "Document cap must be positive"
         );
+        anyhow::ensure!(
+            self.pagerank_weight.is_finite() && (0.0..=1.0).contains(&self.pagerank_weight),
+            "Invalid PageRank weight"
+        );
         Ok(())
     }
 }
@@ -75,6 +85,9 @@ pub struct CandidateDiagnostic {
     pub lexical_rank: Option<usize>,
     pub fused_rank: Option<usize>,
     pub rrf_score: f64,
+    pub pagerank_score: Option<f64>,
+    pub pagerank_rank: Option<i64>,
+    pub pagerank_contribution: f64,
     pub decision: &'static str,
 }
 
@@ -91,6 +104,16 @@ pub fn select_with_diagnostics(
     lexical: Vec<SearchResult>,
     settings: SearchSettings,
 ) -> (Vec<SearchResult>, RetrievalDiagnostics) {
+    select_with_diagnostics_and_pagerank(vector, lexical, settings, &HashMap::new())
+}
+
+#[allow(clippy::too_many_lines)]
+pub fn select_with_diagnostics_and_pagerank(
+    vector: Vec<SearchResult>,
+    lexical: Vec<SearchResult>,
+    settings: SearchSettings,
+    pagerank: &HashMap<String, PageRankSignal>,
+) -> (Vec<SearchResult>, RetrievalDiagnostics) {
     let mut diagnostics = std::collections::BTreeMap::new();
     for (is_vector, ranking) in [(true, &vector), (false, &lexical)] {
         for (index, result) in ranking.iter().enumerate() {
@@ -105,6 +128,13 @@ pub fn select_with_diagnostics(
                     lexical_rank: None,
                     fused_rank: None,
                     rrf_score: 0.0,
+                    pagerank_score: pagerank
+                        .get(&result.document_path)
+                        .map(|signal| signal.score),
+                    pagerank_rank: pagerank
+                        .get(&result.document_path)
+                        .map(|signal| signal.rank),
+                    pagerank_contribution: 0.0,
                     decision: "vector_threshold",
                 });
             if is_vector {
@@ -120,6 +150,11 @@ pub fn select_with_diagnostics(
         .into_iter()
         .filter(|r| r.distance <= settings.distance_threshold)
         .collect::<Vec<_>>();
+    let eligible = vector
+        .iter()
+        .chain(&lexical)
+        .map(|result| (result.document_path.clone(), result.chunk_index))
+        .collect::<HashSet<_>>();
     for ranking in [&vector, &lexical] {
         for (index, result) in ranking.iter().enumerate() {
             if let Some(record) =
@@ -132,7 +167,19 @@ pub fn select_with_diagnostics(
             }
         }
     }
-    let fused = reciprocal_rank_fusion(vector, lexical);
+    for ((document, chunk_index), record) in &mut diagnostics {
+        if !eligible.contains(&(document.clone(), *chunk_index)) {
+            continue;
+        }
+        if let Some(rank) = record.pagerank_rank.filter(|rank| *rank > 0) {
+            #[allow(clippy::cast_precision_loss)]
+            let contribution = settings.pagerank_weight / (60.0 + rank as f64);
+            record.pagerank_contribution = contribution;
+            record.rrf_score += contribution;
+        }
+    }
+    let fused =
+        reciprocal_rank_fusion_with_pagerank(vector, lexical, settings.pagerank_weight, pagerank);
     let mut accepted = Vec::new();
     let mut exact_keys = HashSet::new();
     let mut counts = HashMap::new();
@@ -256,7 +303,14 @@ impl Retriever {
             self.db
                 .search_lexical_for(query, settings.candidate_limit, access),
         )?;
-        let (results, diagnostics) = select_with_diagnostics(vector, lexical, settings);
+        let paths = vector
+            .iter()
+            .chain(&lexical)
+            .map(|result| result.document_path.clone())
+            .collect::<Vec<_>>();
+        let pagerank = self.db.pagerank_for_paths(paths, access).await?;
+        let (results, diagnostics) =
+            select_with_diagnostics_and_pagerank(vector, lexical, settings, &pagerank);
         debug!(?diagnostics, "Chronicle retrieval diagnostics");
         if results.is_empty() {
             Ok(RetrievalOutcome::NoResultMeetsThreshold)
@@ -285,9 +339,19 @@ impl RetrieverApi for Retriever {
 }
 
 /// Equal-weight RRF; identities are chunks, never raw similarity scores.
+#[cfg(test)]
 fn reciprocal_rank_fusion(
     vector: Vec<SearchResult>,
     lexical: Vec<SearchResult>,
+) -> Vec<SearchResult> {
+    reciprocal_rank_fusion_with_pagerank(vector, lexical, 0.0, &HashMap::new())
+}
+
+fn reciprocal_rank_fusion_with_pagerank(
+    vector: Vec<SearchResult>,
+    lexical: Vec<SearchResult>,
+    pagerank_weight: f64,
+    pagerank: &HashMap<String, PageRankSignal>,
 ) -> Vec<SearchResult> {
     let mut candidates: HashMap<(String, i64), (f64, SearchResult)> = HashMap::new();
     for ranking in [vector, lexical] {
@@ -298,6 +362,17 @@ fn reciprocal_rank_fusion(
                 .entry((result.document_path.clone(), result.chunk_index))
                 .or_insert((0.0, result));
             entry.0 += score;
+        }
+    }
+    for (score, result) in candidates.values_mut() {
+        if let Some(signal) = pagerank
+            .get(&result.document_path)
+            .filter(|signal| signal.rank > 0)
+        {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                *score += pagerank_weight / (60.0 + signal.rank as f64);
+            }
         }
     }
     let mut candidates = candidates.into_iter().collect::<Vec<_>>();
@@ -324,6 +399,7 @@ fn deduplicate_and_diversify(
             distance_threshold: 0.8,
             near_duplicate_threshold,
             max_chunks_per_document,
+            pagerank_weight: 0.0,
         },
     );
     let count = |reason| {
@@ -440,6 +516,7 @@ mod tests {
                 distance_threshold: 0.8,
                 near_duplicate_threshold: 0.75,
                 max_chunks_per_document: 1,
+                pagerank_weight: 0.0,
             },
         );
         assert_eq!(selected.len(), 2);
@@ -475,6 +552,7 @@ mod tests {
                 distance_threshold: 0.8,
                 near_duplicate_threshold: 0.85,
                 max_chunks_per_document: 1,
+                pagerank_weight: 0.0,
             },
         );
         assert_eq!(selected.len(), 1);
@@ -500,6 +578,40 @@ mod tests {
         assert_eq!(fused[0].document_path, "both");
         assert!(fused.iter().any(|r| r.document_path == "lexical"));
         assert!(reciprocal_rank_fusion(Vec::new(), Vec::new()).is_empty());
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn pagerank_is_a_weighted_rrf_prior_for_existing_candidates() {
+        let lexical = vec![
+            result("lexical-first", 0, "first", false),
+            result("central", 0, "central", false),
+        ];
+        let pagerank = HashMap::from([(
+            "central".to_owned(),
+            PageRankSignal {
+                score: 0.5,
+                rank: 1,
+            },
+        )]);
+        let settings = SearchSettings {
+            limit: 2,
+            candidate_limit: 2,
+            distance_threshold: 0.8,
+            near_duplicate_threshold: 0.85,
+            max_chunks_per_document: 1,
+            pagerank_weight: 0.15,
+        };
+        let (selected, diagnostics) =
+            select_with_diagnostics_and_pagerank(Vec::new(), lexical, settings, &pagerank);
+        assert_eq!(selected[0].document_path, "central");
+        let central = diagnostics
+            .candidates
+            .iter()
+            .find(|candidate| candidate.document == "central")
+            .expect("central diagnostic");
+        assert_eq!(central.pagerank_rank, Some(1));
+        assert!(central.pagerank_contribution > 0.0);
     }
 
     #[test]

@@ -26,6 +26,7 @@ pub struct Chronicle {
     retrieval_distance_threshold: f32,
     retrieval_near_duplicate_threshold: f32,
     retrieval_max_chunks_per_document: usize,
+    pagerank_weight: f64,
     synthesis: SynthesisSettings,
     max_reply_length: usize,
     lifecycle: tokio::sync::Mutex<()>,
@@ -96,6 +97,7 @@ impl Chronicle {
         retrieval_distance_threshold: f32,
         retrieval_near_duplicate_threshold: f32,
         retrieval_max_chunks_per_document: usize,
+        pagerank_weight: f64,
         synthesis: SynthesisSettings,
         max_reply_length: usize,
     ) -> Self {
@@ -110,6 +112,7 @@ impl Chronicle {
             retrieval_distance_threshold,
             retrieval_near_duplicate_threshold,
             retrieval_max_chunks_per_document,
+            pagerank_weight,
             synthesis,
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
@@ -131,6 +134,7 @@ impl Chronicle {
         retrieval_distance_threshold: f32,
         retrieval_near_duplicate_threshold: f32,
         retrieval_max_chunks_per_document: usize,
+        pagerank_weight: f64,
         max_reply_length: usize,
     ) -> Self {
         Self {
@@ -144,6 +148,7 @@ impl Chronicle {
             retrieval_distance_threshold,
             retrieval_near_duplicate_threshold,
             retrieval_max_chunks_per_document,
+            pagerank_weight,
             synthesis: SynthesisSettings::default(),
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
@@ -278,6 +283,7 @@ impl Chronicle {
                     distance_threshold: self.retrieval_distance_threshold,
                     near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
                     max_chunks_per_document: self.retrieval_max_chunks_per_document,
+                    pagerank_weight: self.pagerank_weight,
                 },
                 access,
             )
@@ -354,6 +360,7 @@ impl Chronicle {
                     distance_threshold: self.retrieval_distance_threshold,
                     near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
                     max_chunks_per_document: self.synthesis.max_chunks_per_document,
+                    pagerank_weight: self.pagerank_weight,
                 },
                 access,
             )
@@ -937,6 +944,7 @@ mod tests {
             0.8,
             0.85,
             2,
+            0.15,
             max_reply_length,
         );
         Ok((chronicle, retriever, llm))
@@ -1523,7 +1531,7 @@ mod tests {
         model.fail_count = true;
         let llm = Arc::new(model);
         let chronicle =
-            Chronicle::with_dependencies(retriever, llm, runtime, 5, 15, 0.8, 0.85, 2, 100);
+            Chronicle::with_dependencies(retriever, llm, runtime, 5, 15, 0.8, 0.85, 2, 0.15, 100);
         assert!(
             chronicle
                 .ask("question")
@@ -1549,6 +1557,7 @@ mod tests {
             0.8,
             0.85,
             2,
+            0.15,
             100,
         );
         chronicle.start_llm().await?;
@@ -1578,6 +1587,7 @@ mod tests {
             0.8,
             0.85,
             2,
+            0.15,
             100,
         );
         assert!(chronicle.start_llm().await.is_err());

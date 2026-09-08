@@ -526,6 +526,7 @@ mod tests {
                 distance_threshold: 0.8,
                 near_duplicate_threshold: 0.85,
                 max_chunks_per_document: 2,
+                pagerank_weight: 0.0,
             },
         );
 

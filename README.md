@@ -263,8 +263,11 @@ not create graph edges. The graph and player/GM-specific PageRank scores rebuild
 after every indexing pass. Scores are retained for the forthcoming retrieval
 reranker and do not yet alter retrieval ranking.
 SQLite FTS5 BM25 and vector retrieval each fetch `retrieval_candidate_limit`
-candidates. Equal-weight reciprocal rank fusion (constant 60) merges the lists,
-then existing duplicate removal, document caps, and context budgeting apply.
+candidates. Reciprocal rank fusion (constant 60) merges the lists with a
+low-weight PageRank prior for those same candidates; `pagerank_weight` controls
+the prior and `0.0` disables it. PageRank never introduces a document absent
+from both candidate lists. Duplicate removal, document caps, and context
+budgeting then apply.
 `retrieval_distance_threshold` applies only to vector candidates. Lexical query
 words are quoted as literals rather than interpreted as FTS operators.
 

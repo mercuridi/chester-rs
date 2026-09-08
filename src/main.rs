@@ -117,6 +117,7 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
         config.chronicle.retrieval_distance_threshold,
         config.chronicle.retrieval_near_duplicate_threshold,
         config.chronicle.retrieval_max_chunks_per_document,
+        config.chronicle.pagerank_weight,
         config.chronicle.synthesis,
         config.chronicle.llm_max_reply_length,
     ))

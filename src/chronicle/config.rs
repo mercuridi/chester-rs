@@ -74,6 +74,9 @@ struct RawChronicleConfig {
     #[serde(default = "default_retrieval_max_chunks_per_document")]
     retrieval_max_chunks_per_document: usize,
 
+    #[serde(default = "default_pagerank_weight")]
+    pagerank_weight: f64,
+
     #[serde(default = "default_synthesis_retrieval_limit")]
     synthesis_retrieval_limit: usize,
 
@@ -158,6 +161,7 @@ pub struct ChronicleConfig {
     pub retrieval_distance_threshold: f32,
     pub retrieval_near_duplicate_threshold: f32,
     pub retrieval_max_chunks_per_document: usize,
+    pub pagerank_weight: f64,
     pub synthesis: SynthesisSettings,
     pub max_chunk_tokens: usize,
     pub chunk_overlap_tokens: usize,
@@ -217,6 +221,10 @@ fn default_retrieval_near_duplicate_threshold() -> f32 {
 
 fn default_retrieval_max_chunks_per_document() -> usize {
     2
+}
+
+fn default_pagerank_weight() -> f64 {
+    0.15
 }
 
 fn default_synthesis_retrieval_limit() -> usize {
@@ -385,6 +393,7 @@ impl Config {
             retrieval_distance_threshold: raw.chronicle.retrieval_distance_threshold,
             retrieval_near_duplicate_threshold: raw.chronicle.retrieval_near_duplicate_threshold,
             retrieval_max_chunks_per_document: raw.chronicle.retrieval_max_chunks_per_document,
+            pagerank_weight: raw.chronicle.pagerank_weight,
             synthesis: SynthesisSettings {
                 retrieval_limit: raw.chronicle.synthesis_retrieval_limit,
                 candidate_limit: raw.chronicle.synthesis_candidate_limit,
@@ -530,6 +539,9 @@ impl ChronicleConfig {
         }
         if self.retrieval_max_chunks_per_document == 0 {
             bail!("Chronicle retrieval_max_chunks_per_document must be greater than zero");
+        }
+        if !self.pagerank_weight.is_finite() || !(0.0..=1.0).contains(&self.pagerank_weight) {
+            bail!("Chronicle pagerank_weight must be finite and between 0.0 and 1.0");
         }
         if self.synthesis.retrieval_limit == 0 || self.synthesis.retrieval_limit > 100 {
             bail!("Chronicle synthesis_retrieval_limit must be between 1 and 100");
@@ -728,6 +740,7 @@ chunk_overlap_tokens = 48
             retrieval_distance_threshold: 0.8,
             retrieval_near_duplicate_threshold: 0.85,
             retrieval_max_chunks_per_document: 2,
+            pagerank_weight: 0.15,
             synthesis: SynthesisSettings {
                 retrieval_limit: 12,
                 candidate_limit: 40,
