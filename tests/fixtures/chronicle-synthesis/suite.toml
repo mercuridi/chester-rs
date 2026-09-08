@@ -39,7 +39,10 @@ id = "ember-kingdom-overview"
 question = "Give an overview of the Ember Kingdom."
 expected_route = "synthesis"
 required_facts = [
-  "The kingdom's history includes founding, war, relocation of the crown, and decline.",
+  "The Ember Kingdom was founded through the Ember Compact.",
+  "The Ember Kingdom fought in the Ashen War.",
+  "The crown later moved from Ashford to Lantern Bay after the river flood.",
+  "The Ember Kingdom later declined after the Ember Trade League dissolved.",
 ]
 prohibited_claims = [
   "The chronology is exhaustive.",
