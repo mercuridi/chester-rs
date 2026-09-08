@@ -11,7 +11,7 @@ use super::{
     chunker,
     db::repository::{IndexedChunk, IndexerDb},
     embedder::{Embedder, EmbeddingModel},
-    scanner,
+    link_resolver, scanner,
 };
 
 const EMBEDDING_BATCH_SIZE: usize = 16;
@@ -169,6 +169,13 @@ impl Indexer {
                 .with_context(|| {
                     format!("Failed to scan index directory: {}", self.root.display())
                 })?;
+        let link_resolution = link_resolver::resolve(&self.root, &documents)?;
+        debug!(
+            resolved = link_resolution.resolved.len(),
+            dangling = link_resolution.dangling.len(),
+            ambiguous = link_resolution.ambiguous.len(),
+            "Resolved Chronicle wikilinks"
+        );
 
         let indexed_documents = self
             .db
@@ -595,7 +602,9 @@ mod tests {
             metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "doc.md".into(),
             content: "content".into(),
+            public_body: String::new(),
             secret_content: Vec::new(),
+            secret_bodies: Vec::new(),
             content_hash: "hash".into(),
         };
         let baseline = index_fingerprint(&document, 100, 10);

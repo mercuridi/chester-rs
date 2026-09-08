@@ -9,3 +9,4 @@ pub mod schema;
 pub mod service;
 
 pub mod frontmatter;
+pub mod link_resolver;

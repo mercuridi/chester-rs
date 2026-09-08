@@ -143,7 +143,7 @@ fn scan_file(path: &Path) -> Result<Option<Document>> {
         return Ok(None);
     }
     let title = path.file_stem().unwrap_or_default().to_string_lossy();
-    let (body, secret_content) = split_secret_callouts(&body, &metadata.visibility)
+    let (body, secret_callouts) = split_secret_callouts(&body, &metadata.visibility)
         .with_context(|| format!("Invalid secret callout in {}", path.display()))?;
     let content = format!(
         "# {title}\n\n{}\n\n{}\n\n{}\n\n{body}",
@@ -155,9 +155,14 @@ fn scan_file(path: &Path) -> Result<Option<Document>> {
         metadata,
         path: path.to_path_buf(),
         content,
-        secret_content: secret_content
-            .into_iter()
+        public_body: body,
+        secret_content: secret_callouts
+            .iter()
             .map(|callout| format!("# {title}\n\n## {}\n\n{}", callout.title, callout.body))
+            .collect(),
+        secret_bodies: secret_callouts
+            .into_iter()
+            .map(|callout| callout.body)
             .collect(),
         content_hash,
     }))

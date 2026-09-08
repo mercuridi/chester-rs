@@ -20,8 +20,14 @@ pub struct Document {
     pub metadata: super::frontmatter::Metadata,
     pub path: PathBuf,
     pub content: String,
+    /// The original player-visible Markdown body, before searchable metadata
+    /// is prepended. Retained for graph-link extraction.
+    pub public_body: String,
     /// Individually protected passages extracted from `[!secret]` callouts.
     pub secret_content: Vec<String>,
+    /// Original bodies of protected callouts, retained separately so graph
+    /// links inherit secret visibility without parsing generated chunk text.
+    pub secret_bodies: Vec<String>,
     pub content_hash: String,
 }
 

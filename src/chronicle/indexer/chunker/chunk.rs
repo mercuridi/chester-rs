@@ -200,7 +200,9 @@ mod tests {
             metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "tokens.md".into(),
             content: vec!["word"; word_count].join(" "),
+            public_body: String::new(),
             secret_content: Vec::new(),
+            secret_bodies: Vec::new(),
             content_hash: String::new(),
         }
     }
@@ -307,7 +309,9 @@ mod tests {
             metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "nested.md".into(),
             content: source.to_owned(),
+            public_body: String::new(),
             secret_content: Vec::new(),
+            secret_bodies: Vec::new(),
             content_hash: String::new(),
         };
         let chunks = chunk(&document, &tokenizer, 512, 0)?;
@@ -371,7 +375,9 @@ mod tests {
             metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "sections.md".into(),
             content: format!("# One\n\n{words}\n\n# Two\n\n{words}"),
+            public_body: String::new(),
             secret_content: Vec::new(),
+            secret_bodies: Vec::new(),
             content_hash: String::new(),
         };
 
@@ -399,7 +405,9 @@ mod tests {
             metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
             path: "code.md".into(),
             content: format!("```text\n{}\n```", vec!["word"; 40].join(" ")),
+            public_body: String::new(),
             secret_content: Vec::new(),
+            secret_bodies: Vec::new(),
             content_hash: String::new(),
         };
 
@@ -497,7 +505,9 @@ mod tests {
                 metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
                 path: "empty.md".into(),
                 content: content.into(),
+                public_body: String::new(),
                 secret_content: Vec::new(),
+                secret_bodies: Vec::new(),
                 content_hash: String::new(),
             };
             assert!(chunk(&document, &tokenizer, 10, 0)?.is_empty());
