@@ -29,7 +29,7 @@ operation = "count"
 note_type = "character"
 [cases.plan.filters]
 role = "npc"
-character_status = "alive"
+life_status = "alive"
 
 [[cases]]
 id = "list-living-npcs"
@@ -41,7 +41,7 @@ operation = "list"
 note_type = "character"
 [cases.plan.filters]
 role = "npc"
-character_status = "alive"
+life_status = "alive"
 
 [[cases]]
 id = "missing-pcs"
@@ -52,7 +52,7 @@ operation = "count"
 note_type = "character"
 [cases.plan.filters]
 role = "pc"
-character_status = "missing"
+life_status = "missing"
 
 [[cases]]
 id = "unknown-npcs"
@@ -64,7 +64,7 @@ operation = "list"
 note_type = "character"
 [cases.plan.filters]
 role = "npc"
-character_status = "unknown"
+life_status = "unknown"
 
 [[cases]]
 id = "dead-pcs"
@@ -75,7 +75,7 @@ operation = "count"
 note_type = "character"
 [cases.plan.filters]
 role = "pc"
-character_status = "dead"
+life_status = "dead"
 
 [[cases]]
 id = "former-pcs"
@@ -96,7 +96,7 @@ expected_total = 5
 operation = "count"
 note_type = "character"
 [cases.plan.filters]
-character_status = "alive"
+life_status = "alive"
 
 [[cases]]
 id = "organisations"

@@ -349,7 +349,7 @@ impl IndexerDb {
             .role
             .map(crate::chronicle::query::plan::CharacterRole::as_str);
         let status = filters
-            .character_status
+            .life_status
             .map(crate::chronicle::query::plan::CharacterStatus::as_str);
         let mut count = structured_query(
             "SELECT COUNT(DISTINCT m.note_id) FROM note_metadata m",

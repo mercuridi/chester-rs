@@ -15,7 +15,7 @@ pub fn render(plan: &Plan, result: &StructuredResult, max_chars: usize) -> Strin
         ("lore" | "metagame", _) => format!("{note_type} notes"),
         _ => format!("{note_type}s"),
     };
-    let qualification = filters.character_status.map_or_else(String::new, |status| {
+    let qualification = filters.life_status.map_or_else(String::new, |status| {
         format!(" with status recorded as {}", status.as_str())
     });
     let header = format!("{} canon {noun} recorded{qualification}.", result.total);

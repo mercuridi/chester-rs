@@ -60,7 +60,7 @@ pub struct Filters {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<CharacterRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub character_status: Option<CharacterStatus>,
+    pub life_status: Option<CharacterStatus>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
 }
@@ -108,7 +108,7 @@ impl Plan {
             );
             ensure!(
                 note_type == "character"
-                    || (filters.role.is_none() && filters.character_status.is_none()),
+                    || (filters.role.is_none() && filters.life_status.is_none()),
                 "Character filters require character notes"
             );
             for condition in &filters.conditions {

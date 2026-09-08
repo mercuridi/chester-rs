@@ -928,11 +928,11 @@ mod tests {
             directory.path().join("test.sqlite3").display()
         ))
         .await?;
-        let (metadata, _) = crate::chronicle::indexer::frontmatter::parse("---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\ncharacter_status: alive\n---\n")?.context("note")?;
+        let (metadata, _) = crate::chronicle::indexer::frontmatter::parse("---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\nlife_status: alive\n---\n")?.context("note")?;
         db.replace_note("Ada.md", "hash", &[], &[], &metadata)
             .await?;
         chronicle.db = Some(db);
-        *llm.plan_output.lock().map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"count","note_type":"character","filters":{"role":"pc","character_status":"dead"}}"#.into();
+        *llm.plan_output.lock().map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"count","note_type":"character","filters":{"role":"pc","life_status":"dead"}}"#.into();
         let answer = chronicle.ask("How many dead PCs?").await?;
         assert!(answer.starts_with("0 canon PCs recorded"));
         *llm.plan_output

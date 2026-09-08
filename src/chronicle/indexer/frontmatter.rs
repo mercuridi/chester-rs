@@ -440,7 +440,7 @@ mod tests {
     #[test]
     fn parses_full_values_and_preserves_unknown_fields() -> Result<()> {
         let (metadata, body) = parse(&note(
-            "aliases: [Someone]\ntags: [npc, garden]\nsummary: A gardener\nrace: '[[Human]]'\nrole: npc\ncharacter_status: alive\nallies: ['[[Ember Guild]]']\nplayed_by: Ada\ncustom: [one, two]\n",
+            "aliases: [Someone]\ntags: [npc, garden]\nsummary: A gardener\nrace: '[[Human]]'\nrole: npc\nlife_status: alive\nallies: ['[[Ember Guild]]']\nplayed_by: Ada\ncustom: [one, two]\n",
         ))?
         .context("Expected parsed note")?;
         assert_eq!(metadata.id, "test");

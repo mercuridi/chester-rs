@@ -463,7 +463,7 @@ mod tests {
         let corpus = temp.path().join("corpus");
         std::fs::create_dir(&corpus)?;
         let path = corpus.join("Ada.md");
-        let source = "---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\ncharacter_status: alive\n---\nAda tends a garden.\n";
+        let source = "---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\nlife_status: alive\n---\nAda tends a garden.\n";
         std::fs::write(&path, source)?;
         let model = WordLevel::builder()
             .vocab([("[UNK]".into(), 0)].into_iter().collect())
