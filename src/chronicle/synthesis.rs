@@ -215,6 +215,120 @@ mod tests {
     }
 
     #[test]
+    fn exact_fit_stays_in_one_batch_and_the_next_item_starts_another() -> Result<()> {
+        let first = note("S1", "evidence");
+        let second = note("S2", "evidence");
+        let exact_budget = map_prompt("q", std::slice::from_ref(&first)).len();
+        let plan = pack_batches(
+            "q",
+            &[first.clone(), second.clone()],
+            exact_budget,
+            2,
+            map_prompt,
+            |prompt| Ok(prompt.len()),
+        )?;
+        assert_eq!(plan.batches, vec![vec![first], vec![second]]);
+        assert_eq!(plan.omitted_items, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn one_item_over_budget_is_rejected_even_when_the_batch_is_empty() {
+        let item = note("S1", "evidence");
+        let budget = map_prompt("q", &[]).len();
+        let error = pack_batches("q", &[item], budget, 2, map_prompt, |prompt| {
+            Ok(prompt.len())
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("single synthesis evidence item"));
+    }
+
+    #[test]
+    fn max_batches_one_reports_every_omitted_item() -> Result<()> {
+        let items = [note("S1", "one"), note("S2", "two"), note("S3", "three")];
+        let budget = map_prompt("q", &items[..2]).len();
+        let plan = pack_batches(
+            "q",
+            &items,
+            budget,
+            1,
+            map_prompt,
+            |prompt| Ok(prompt.len()),
+        )?;
+        assert_eq!(plan.batches, vec![items[..2].to_vec()]);
+        assert_eq!(plan.omitted_items, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn reduction_plans_can_converge_over_multiple_passes() -> Result<()> {
+        let mut notes = (0..8)
+            .map(|index| note(&format!("S{index}"), "x"))
+            .collect::<Vec<_>>();
+        let budget = reduce_prompt(
+            "q",
+            &[
+                EvidenceNote {
+                    source_labels: vec!["S1", "S2", "S3", "S4"]
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                    text: "x".into(),
+                },
+                EvidenceNote {
+                    source_labels: vec!["S5", "S6", "S7", "S8"]
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect(),
+                    text: "x".into(),
+                },
+            ],
+        )
+        .len();
+        let mut passes = 0;
+        while notes.len() > 1 {
+            let plan = pack_batches("q", &notes, budget, notes.len(), reduce_prompt, |prompt| {
+                Ok(prompt.len())
+            })?;
+            assert!(plan.batches.len() < notes.len());
+            notes = plan
+                .batches
+                .into_iter()
+                .map(|batch| EvidenceNote {
+                    source_labels: merged_labels(&batch),
+                    text: "x".into(),
+                })
+                .collect();
+            passes += 1;
+        }
+        assert_eq!(passes, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn reduction_reports_no_progress_when_no_pair_can_fit() -> Result<()> {
+        let notes = [note("S1", "x"), note("S2", "x")];
+        let budget = reduce_prompt("q", &notes[..1]).len();
+        let plan = pack_batches("q", &notes, budget, notes.len(), reduce_prompt, |prompt| {
+            Ok(prompt.len())
+        })?;
+        assert_eq!(plan.batches.len(), notes.len());
+        Ok(())
+    }
+
+    #[test]
+    fn final_prompt_partial_status_requires_additional_budget() {
+        let notes = [note("S1", "evidence")];
+        let complete = final_prompt("q", &notes).len();
+        let partial = final_prompt_with_partial_status("q", &notes, true).len();
+        assert!(partial > complete);
+        assert!(
+            !final_prompt_fits("q", &notes, true, complete, |prompt| Ok(prompt.len())).unwrap()
+        );
+        assert!(final_prompt_fits("q", &notes, true, partial, |prompt| Ok(prompt.len())).unwrap());
+    }
+
+    #[test]
     fn rejects_item_that_cannot_fit_alone() {
         let error = pack_batches(
             "q",

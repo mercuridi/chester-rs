@@ -556,6 +556,8 @@ mod tests {
     enum FakeOutcome {
         Results,
         TwoResults,
+        FourResults,
+        EightResults,
         BadQuestion,
         CorpusEmpty,
         NoResult,
@@ -632,6 +634,32 @@ mod tests {
                         distance: 0.1,
                     },
                 ])),
+                FakeOutcome::FourResults => Ok(RetrievalOutcome::Results(
+                    ["one", "two", "three", "four"]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(_index, text)| SearchResult {
+                            document_path: format!("{text}.md"),
+                            chunk_index: 0,
+                            heading: None,
+                            text: format!("{text} context"),
+                            overlaps_previous: false,
+                            distance: 0.1,
+                        })
+                        .collect(),
+                )),
+                FakeOutcome::EightResults => Ok(RetrievalOutcome::Results(
+                    (0..8)
+                        .map(|index| SearchResult {
+                            document_path: format!("{index}.md"),
+                            chunk_index: 0,
+                            heading: None,
+                            text: format!("context {index}"),
+                            overlaps_previous: false,
+                            distance: 0.1,
+                        })
+                        .collect(),
+                )),
                 FakeOutcome::BadQuestion => Ok(RetrievalOutcome::BadQuestion),
                 FakeOutcome::CorpusEmpty => Ok(RetrievalOutcome::CorpusEmpty),
                 FakeOutcome::NoResult => Ok(RetrievalOutcome::NoResultMeetsThreshold),
@@ -657,7 +685,7 @@ mod tests {
         runtime: GpuRuntime,
         outputs: Mutex<VecDeque<String>>,
         prompts: Mutex<Vec<String>>,
-        budget: usize,
+        budget: Mutex<usize>,
         plan_output: Mutex<String>,
         repair_plan_output: Mutex<Option<String>>,
         repair_requests: Mutex<Vec<(String, String)>>,
@@ -675,7 +703,7 @@ mod tests {
                 runtime,
                 outputs: Mutex::new(outputs.into_iter().map(str::to_owned).collect()),
                 prompts: Mutex::new(Vec::new()),
-                budget: 10_000,
+                budget: Mutex::new(10_000),
                 plan_output: Mutex::new(r#"{"operation":"search"}"#.into()),
                 repair_plan_output: Mutex::new(None),
                 repair_requests: Mutex::new(Vec::new()),
@@ -692,7 +720,7 @@ mod tests {
     #[async_trait::async_trait]
     impl LanguageModel for FakeLlm {
         fn prompt_token_budget(&self) -> usize {
-            self.budget
+            *self.budget.lock().expect("budget poisoned")
         }
 
         fn count_input_tokens(&self, prompt: &str) -> Result<usize> {
@@ -1134,6 +1162,162 @@ mod tests {
             "This is a partial synthesis based on the retrieved notes completed so far."
         ));
         assert!(answer.ends_with("answer"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn synthesis_reduces_evidence_over_multiple_passes() -> Result<()> {
+        let (mut chronicle, _retriever, llm) = service(
+            FakeOutcome::FourResults,
+            ["m1", "m2", "m3", "m4", "r1", "r2", "answer"],
+            500,
+        )?;
+        *llm.plan_output
+            .lock()
+            .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"synthesis"}"#.into();
+        let question = "Summarise the history of Northmere.";
+        let sources = crate::chronicle::synthesis::retrieved_evidence(&[
+            SearchResult {
+                document_path: "one.md".into(),
+                chunk_index: 0,
+                heading: None,
+                text: "one context".into(),
+                overlaps_previous: false,
+                distance: 0.1,
+            },
+            SearchResult {
+                document_path: "two.md".into(),
+                chunk_index: 0,
+                heading: None,
+                text: "two context".into(),
+                overlaps_previous: false,
+                distance: 0.1,
+            },
+            SearchResult {
+                document_path: "three.md".into(),
+                chunk_index: 0,
+                heading: None,
+                text: "three context".into(),
+                overlaps_previous: false,
+                distance: 0.1,
+            },
+            SearchResult {
+                document_path: "four.md".into(),
+                chunk_index: 0,
+                heading: None,
+                text: "four context".into(),
+                overlaps_previous: false,
+                distance: 0.1,
+            },
+        ]);
+        let map_budget = (0..4)
+            .map(|index| {
+                crate::chronicle::synthesis::map_prompt(question, &sources[index..index + 1]).len()
+            })
+            .max()
+            .unwrap();
+        chronicle.synthesis.batch_token_budget = map_budget;
+        *llm.budget.lock().map_err(|_| anyhow!("budget poisoned"))? =
+            crate::chronicle::synthesis::final_prompt(
+                question,
+                &[1, 2, 3, 4]
+                    .into_iter()
+                    .map(|index| super::super::synthesis::EvidenceNote {
+                        source_labels: vec![format!("S{index}")],
+                        text: format!("m{index}"),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .len()
+            .saturating_sub(1);
+        let answer = chronicle.ask(question).await?;
+        assert_eq!(answer, "answer");
+        let prompts = llm
+            .prompts
+            .lock()
+            .map_err(|_| anyhow!("prompts poisoned"))?;
+        assert_eq!(
+            prompts
+                .iter()
+                .filter(|prompt| prompt.contains("<evidence>"))
+                .count(),
+            4
+        );
+        assert_eq!(
+            prompts
+                .iter()
+                .filter(|prompt| prompt.contains("<evidence_notes>"))
+                .count(),
+            3
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn synthesis_surfaces_a_late_reduction_pipeline_failure() -> Result<()> {
+        let (mut chronicle, _retriever, llm) = service(
+            FakeOutcome::EightResults,
+            ["m1", "m2", "m3", "m4", "m5", "m6", "answer", "answer"],
+            500,
+        )?;
+        *llm.plan_output
+            .lock()
+            .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"synthesis"}"#.into();
+        let question = "Summarise the history of Northmere.";
+        let mut sources = crate::chronicle::synthesis::retrieved_evidence(&[
+            SearchResult {
+                document_path: "one.md".into(),
+                chunk_index: 0,
+                heading: None,
+                text: "one context".into(),
+                overlaps_previous: false,
+                distance: 0.1,
+            },
+            SearchResult {
+                document_path: "two.md".into(),
+                chunk_index: 0,
+                heading: None,
+                text: "two context".into(),
+                overlaps_previous: false,
+                distance: 0.1,
+            },
+            SearchResult {
+                document_path: "three.md".into(),
+                chunk_index: 0,
+                heading: None,
+                text: "three context".into(),
+                overlaps_previous: false,
+                distance: 0.1,
+            },
+            SearchResult {
+                document_path: "four.md".into(),
+                chunk_index: 0,
+                heading: None,
+                text: "four context".into(),
+                overlaps_previous: false,
+                distance: 0.1,
+            },
+        ]);
+        sources.extend(sources.clone());
+        let map_budget = crate::chronicle::synthesis::map_prompt(question, &sources[..1]).len();
+        chronicle.synthesis.batch_token_budget = map_budget + 20;
+        *llm.budget.lock().map_err(|_| anyhow!("budget poisoned"))? =
+            crate::chronicle::synthesis::final_prompt(
+                question,
+                &[1, 2, 3, 4, 5, 6, 7, 8]
+                    .into_iter()
+                    .map(|index| super::super::synthesis::EvidenceNote {
+                        source_labels: vec![format!("S{index}")],
+                        text: format!("m{index}"),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .len()
+            .saturating_sub(1);
+        *llm.fail_generate_on_call
+            .lock()
+            .map_err(|_| anyhow!("failure setting poisoned"))? = Some(7);
+        assert!(chronicle.ask(question).await.is_err());
         Ok(())
     }
 
