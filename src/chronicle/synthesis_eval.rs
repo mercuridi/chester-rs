@@ -110,10 +110,43 @@ fn prohibited(answer: &str, expectations: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn validate_fixture_metadata(topology: &Topology, safety: &Safety) -> Result<()> {
+    ensure!(
+        topology.document_count > 0,
+        "Synthesis topology has no documents"
+    );
+    ensure!(
+        topology.minimum_multi_document_cases <= topology.document_count,
+        "Synthesis topology has an invalid multi-document case minimum"
+    );
+    ensure!(
+        !topology.required_categories.is_empty()
+            && topology
+                .required_categories
+                .iter()
+                .all(|category| !category.trim().is_empty()),
+        "Synthesis topology has no valid required categories"
+    );
+    ensure!(
+        [
+            &safety.gm_only_note,
+            &safety.draft_contradiction_note,
+            &safety.instruction_like_note,
+            &safety.inaccessible_note,
+            &safety.mixed_event_note,
+        ]
+        .into_iter()
+        .all(|note| !note.trim().is_empty()),
+        "Synthesis safety metadata contains an empty note ID"
+    );
+    Ok(())
+}
+
 fn validate(suite: &Suite) -> Result<()> {
     ensure!(!suite.cases.is_empty(), "Synthesis suite has no cases");
     ensure!((0.0..=1.0).contains(&suite.minimum_required_fact_recall));
     ensure!((0.0..=1.0).contains(&suite.minimum_gap_recall));
+    validate_fixture_metadata(&suite.topology, &suite.safety)?;
     let mut ids = std::collections::HashSet::new();
     for case in &suite.cases {
         ensure!(
