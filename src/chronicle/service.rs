@@ -159,10 +159,6 @@ impl Chronicle {
     }
 
     #[instrument(skip(self, question), fields(question_len = question.len()))]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "test-friendly player-safe default")
-    )]
     pub async fn ask(&self, question: &str) -> Result<String> {
         self.ask_for(question, AccessScope::Player).await
     }
@@ -1324,7 +1320,7 @@ mod tests {
             .unwrap();
         chronicle.synthesis.batch_token_budget = map_budget;
         *llm.budget.lock().map_err(|_| anyhow!("budget poisoned"))? =
-            crate::chronicle::synthesis::final_prompt(
+            crate::chronicle::synthesis::final_prompt_with_partial_status(
                 question,
                 &[1, 2, 3, 4]
                     .into_iter()
@@ -1333,6 +1329,7 @@ mod tests {
                         text: format!("m{index}"),
                     })
                     .collect::<Vec<_>>(),
+                false,
             )
             .len()
             .saturating_sub(1);
@@ -1408,7 +1405,7 @@ mod tests {
         let map_budget = crate::chronicle::synthesis::map_prompt(question, &sources[..1]).len();
         chronicle.synthesis.batch_token_budget = map_budget + 20;
         *llm.budget.lock().map_err(|_| anyhow!("budget poisoned"))? =
-            crate::chronicle::synthesis::final_prompt(
+            crate::chronicle::synthesis::final_prompt_with_partial_status(
                 question,
                 &[1, 2, 3, 4, 5, 6, 7, 8]
                     .into_iter()
@@ -1417,6 +1414,7 @@ mod tests {
                         text: format!("m{index}"),
                     })
                     .collect::<Vec<_>>(),
+                false,
             )
             .len()
             .saturating_sub(1);

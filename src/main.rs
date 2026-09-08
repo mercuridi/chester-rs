@@ -242,8 +242,26 @@ fn build_framework(
 
 #[tokio::main]
 async fn main() {
-    // Keep normal operation useful without being noisy. Set RUST_LOG to override,
-    // for example: `RUST_LOG=chester_rs=debug cargo run`.
+    let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let env_path = project_root.join(".env");
+
+    // Load .env before constructing the logging filter. RUST_LOG in .env is
+    // intentionally authoritative, even if the process inherited another
+    // value from its shell environment.
+    #[allow(deprecated)]
+    let dotenv_entries = dotenv::from_path_iter(&env_path);
+    if let Ok(entries) = dotenv_entries {
+        for entry in entries.flatten() {
+            if entry.0 == "RUST_LOG" {
+                // SAFETY: this runs before Tokio starts any application tasks.
+                unsafe { std::env::set_var(entry.0, entry.1) };
+            }
+        }
+    }
+    from_path(&env_path).ok();
+
+    // Keep normal operation useful without being noisy. RUST_LOG is read from
+    // .env above, for example: `RUST_LOG=chester_rs=debug`.
     let (env_filter, invalid_filter) = match EnvFilter::try_from_default_env() {
         Ok(filter) => (filter, None),
         Err(error) => (EnvFilter::new("chester_rs=info,warn"), Some(error)),
@@ -339,7 +357,6 @@ async fn run() -> Result<()> {
         return Ok(());
     }
     let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    from_path(project_root.join(".env")).ok();
 
     tracing::info!("Starting Chester");
 

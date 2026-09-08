@@ -742,20 +742,6 @@ fn claim_results<T: Expectation>(
         .collect()
 }
 
-fn coverage<T: Expectation>(answer: &str, expectations: &[T], kind: ExpectationKind) -> f64 {
-    if expectations.is_empty() {
-        return 1.0;
-    }
-    #[allow(clippy::cast_precision_loss)]
-    {
-        claim_results(answer, expectations, kind)
-            .iter()
-            .filter(|result| result.status == ClaimStatus::Resolved)
-            .count() as f64
-            / expectations.len() as f64
-    }
-}
-
 fn resolved_coverage(results: &[ClaimResult]) -> f64 {
     if results.is_empty() {
         return 1.0;
@@ -804,14 +790,6 @@ fn contradiction_count(
         .chain(gaps.iter())
         .filter(|result| result.status == ClaimStatus::Contradicted)
         .count()
-}
-
-fn prohibited(answer: &str, expectations: &[ProhibitedExpectation]) -> Vec<String> {
-    claim_results(answer, expectations, ExpectationKind::Prohibited)
-        .into_iter()
-        .filter(|result| result.status == ClaimStatus::Contradicted)
-        .map(|result| result.claim)
-        .collect()
 }
 
 fn unresolved_targets<T: Expectation>(
@@ -1200,7 +1178,7 @@ mod tests {
         let answer =
             "The kingdom was founded when the river settlements ratified the Ember Compact.";
         assert_eq!(
-            coverage(
+            resolved_coverage(&claim_results(
                 answer,
                 &[FactExpectation {
                     id: "foundation".into(),
@@ -1211,11 +1189,11 @@ mod tests {
                     category: ClaimCategory::Core,
                 }],
                 ExpectationKind::Required,
-            ),
+            )),
             1.0
         );
         assert_eq!(
-            coverage(
+            resolved_coverage(&claim_results(
                 answer,
                 &[FactExpectation {
                     id: "foundation".into(),
@@ -1225,11 +1203,11 @@ mod tests {
                     category: ClaimCategory::Core,
                 }],
                 ExpectationKind::Required,
-            ),
+            )),
             1.0
         );
         assert_eq!(
-            prohibited(
+            claim_results(
                 answer,
                 &[ProhibitedExpectation {
                     id: "still-exists".into(),
@@ -1237,11 +1215,16 @@ mod tests {
                     aliases: Vec::new(),
                     entities: Vec::new(),
                 }],
-            ),
+                ExpectationKind::Prohibited,
+            )
+            .into_iter()
+            .filter(|result| result.status == ClaimStatus::Contradicted)
+            .map(|result| result.claim)
+            .collect::<Vec<_>>(),
             Vec::<String>::new()
         );
         assert_eq!(
-            prohibited(
+            claim_results(
                 "The kingdom still exists.",
                 &[ProhibitedExpectation {
                     id: "still-exists".into(),
@@ -1249,7 +1232,12 @@ mod tests {
                     aliases: Vec::new(),
                     entities: Vec::new(),
                 }],
+                ExpectationKind::Prohibited,
             )
+            .into_iter()
+            .filter(|result| result.status == ClaimStatus::Contradicted)
+            .map(|result| result.claim)
+            .collect::<Vec<_>>()
             .len(),
             1
         );
@@ -1425,15 +1413,20 @@ claim = "The interval is unknown."
 
         assert_eq!(results[0].status, ClaimStatus::Resolved);
         assert!(
-            prohibited(
+            claim_results(
                 "The Ember Kingdom does not still exist.",
                 &[ProhibitedExpectation {
                     id: "kingdom-still-exists".into(),
                     claim: "The Ember Kingdom still exists.".into(),
                     aliases: Vec::new(),
                     entities: vec!["Ember Kingdom".into()],
-                }]
+                }],
+                ExpectationKind::Prohibited,
             )
+            .into_iter()
+            .filter(|result| result.status == ClaimStatus::Contradicted)
+            .map(|result| result.claim)
+            .collect::<Vec<_>>()
             .is_empty()
         );
     }
