@@ -1134,7 +1134,12 @@ mod tests {
         db.resolve_string_or_wikilinks(&mut plain_target_plan)
             .await?;
         assert_eq!(
-            plain_target_plan.selection().ok_or_else(|| anyhow::anyhow!("missing selection"))?.1.conditions[0].value,
+            plain_target_plan
+                .selection()
+                .ok_or_else(|| anyhow::anyhow!("missing selection"))?
+                .1
+                .conditions[0]
+                .value,
             "[[Battle of Castle Vetra]]"
         );
         assert_eq!(db.execute_plan(&plain_target_plan).await?.total, 1);
@@ -1144,7 +1149,12 @@ mod tests {
         )?;
         db.resolve_string_or_wikilinks(&mut literal_plan).await?;
         assert_eq!(
-            literal_plan.selection().ok_or_else(|| anyhow::anyhow!("missing selection"))?.1.conditions[0].value,
+            literal_plan
+                .selection()
+                .ok_or_else(|| anyhow::anyhow!("missing selection"))?
+                .1
+                .conditions[0]
+                .value,
             "old age"
         );
         Ok(())

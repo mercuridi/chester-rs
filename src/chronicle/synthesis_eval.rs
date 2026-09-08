@@ -937,12 +937,15 @@ fn validate(suite: &Suite) -> Result<()> {
 }
 
 fn create_report_file(requested: Option<&Path>) -> Result<(std::fs::File, PathBuf)> {
-    let path = requested.map_or_else(|| {
-        PathBuf::from(format!(
-            "chronicle-synthesis-report-{}.json",
-            Utc::now().format("%Y%m%d-%H%M%S")
-        ))
-    }, Path::to_path_buf);
+    let path = requested.map_or_else(
+        || {
+            PathBuf::from(format!(
+                "chronicle-synthesis-report-{}.json",
+                Utc::now().format("%Y%m%d-%H%M%S")
+            ))
+        },
+        Path::to_path_buf,
+    );
     ensure!(!path.exists(), "Report path must be a new file");
     Ok((
         OpenOptions::new()
