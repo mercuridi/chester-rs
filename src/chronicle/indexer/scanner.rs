@@ -1,6 +1,6 @@
 // src/chronicle/indexer/scanner.rs
 
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -18,6 +18,13 @@ pub struct CorpusStats {
 
 #[instrument(skip(root))]
 pub fn scan_directory_with_stats(root: impl AsRef<Path>) -> Result<(Vec<Document>, CorpusStats)> {
+    scan_directory_with_stats_excluding(root, &HashSet::new())
+}
+
+pub fn scan_directory_with_stats_excluding(
+    root: impl AsRef<Path>,
+    excluded_note_ids: &HashSet<String>,
+) -> Result<(Vec<Document>, CorpusStats)> {
     let root = root.as_ref();
 
     if !root.is_dir() {
@@ -33,7 +40,7 @@ pub fn scan_directory_with_stats(root: impl AsRef<Path>) -> Result<(Vec<Document
         ..CorpusStats::default()
     };
     if !is_templates_directory(root) {
-        scan_directory_recursive(root, &mut documents, &mut stats)?;
+        scan_directory_recursive(root, &mut documents, &mut stats, excluded_note_ids)?;
     }
 
     let mut ids = std::collections::HashSet::new();
@@ -65,6 +72,7 @@ fn scan_directory_recursive(
     directory: &Path,
     documents: &mut Vec<Document>,
     stats: &mut CorpusStats,
+    excluded_note_ids: &HashSet<String>,
 ) -> Result<()> {
     for entry in fs::read_dir(directory)
         .with_context(|| format!("failed to read directory: {}", directory.display()))?
@@ -83,7 +91,7 @@ fn scan_directory_recursive(
                 continue;
             }
             stats.directories += 1;
-            scan_directory_recursive(&path, documents, stats)?;
+            scan_directory_recursive(&path, documents, stats, excluded_note_ids)?;
             continue;
         }
 
@@ -94,6 +102,9 @@ fn scan_directory_recursive(
         let Some(document) = scan_file(&path)? else {
             continue;
         };
+        if excluded_note_ids.contains(&document.metadata.id) {
+            continue;
+        }
         stats.files += 1;
         stats.words += document.content.split_whitespace().count();
         stats.characters += document.content.chars().count();
@@ -251,9 +262,9 @@ fn hash_content(content: &str) -> String {
 mod tests {
     use super::{
         hash_content, is_markdown_file, is_templates_directory, scan_directory_with_stats,
-        split_secret_callouts,
+        scan_directory_with_stats_excluding, split_secret_callouts,
     };
-    use std::{fs, path::Path};
+    use std::{collections::HashSet, fs, path::Path};
     use tempfile::tempdir;
 
     fn note(id: &str, status: &str) -> String {
@@ -280,6 +291,21 @@ mod tests {
             note("tower", "canon"),
         )?;
         assert!(scan_directory_with_stats(directory.path()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn excludes_configured_note_ids_before_returning_documents() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        fs::write(directory.path().join("index.md"), note("index", "canon"))?;
+        fs::write(directory.path().join("real.md"), note("real", "canon"))?;
+        let excluded = HashSet::from(["index".to_owned()]);
+
+        let (documents, stats) = scan_directory_with_stats_excluding(directory.path(), &excluded)?;
+
+        assert_eq!(stats.files, 1);
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].metadata.id, "real");
         Ok(())
     }
 

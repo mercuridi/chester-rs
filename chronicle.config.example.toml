@@ -7,6 +7,10 @@ chronicle = "sqlite://data/chronicle.sqlite3"
 [chronicle]
 corpus_dir = "corpus"
 
+# Note IDs to exclude completely from ingestion, embedding, indexing, and retrieval.
+# This is useful for index/central notes that mostly contain links.
+excluded_note_ids = []
+
 # The first `/chronicle start` downloads these files into the Hugging Face cache.
 llm_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
 llm_revision = "main"

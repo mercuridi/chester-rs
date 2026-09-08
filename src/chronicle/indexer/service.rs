@@ -118,6 +118,7 @@ pub struct Indexer {
     embedder: Box<dyn EmbeddingModel>,
     max_chunk_tokens: usize,
     chunk_overlap_tokens: usize,
+    excluded_note_ids: HashSet<String>,
 }
 
 impl Indexer {
@@ -134,7 +135,13 @@ impl Indexer {
             embedder: Box::new(embedder),
             max_chunk_tokens,
             chunk_overlap_tokens,
+            excluded_note_ids: HashSet::new(),
         }
+    }
+
+    pub fn with_excluded_note_ids(mut self, excluded_note_ids: HashSet<String>) -> Self {
+        self.excluded_note_ids = excluded_note_ids;
+        self
     }
 
     #[cfg(test)]
@@ -151,13 +158,17 @@ impl Indexer {
             embedder,
             max_chunk_tokens,
             chunk_overlap_tokens,
+            excluded_note_ids: HashSet::new(),
         }
     }
 
     #[instrument(skip(self), fields(root = %self.root.display()))]
     pub async fn index(&self) -> Result<IndexStats> {
-        let (documents, corpus_stats) = scanner::scan_directory_with_stats(&self.root)
-            .with_context(|| format!("Failed to scan index directory: {}", self.root.display()))?;
+        let (documents, corpus_stats) =
+            scanner::scan_directory_with_stats_excluding(&self.root, &self.excluded_note_ids)
+                .with_context(|| {
+                    format!("Failed to scan index directory: {}", self.root.display())
+                })?;
 
         let indexed_documents = self
             .db

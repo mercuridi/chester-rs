@@ -95,6 +95,10 @@ struct RawChronicleConfig {
 
     #[serde(default)]
     gm_user_ids: Vec<String>,
+
+    /// Note IDs that should never enter the Chronicle index or retrieval corpus.
+    #[serde(default)]
+    excluded_note_ids: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -157,6 +161,7 @@ pub struct ChronicleConfig {
     pub synthesis: SynthesisSettings,
     pub max_chunk_tokens: usize,
     pub chunk_overlap_tokens: usize,
+    pub excluded_note_ids: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -263,6 +268,19 @@ fn resolve_sqlite_url(project_root: &Path, url: &str) -> String {
     }
 }
 
+fn parse_excluded_note_ids(raw: &RawChronicleConfig) -> Result<HashSet<String>> {
+    let mut excluded_note_ids = HashSet::new();
+    for note_id in &raw.excluded_note_ids {
+        if note_id.trim().is_empty() {
+            bail!("Chronicle excluded note IDs cannot be empty");
+        }
+        if !excluded_note_ids.insert(note_id.clone()) {
+            bail!("Duplicate Chronicle excluded note ID `{note_id}`");
+        }
+    }
+    Ok(excluded_note_ids)
+}
+
 impl Config {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -281,6 +299,7 @@ impl Config {
         Self::from_raw(raw, project_root)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn from_raw(raw: RawConfig, project_root: &Path) -> Result<Self> {
         let mut alias_groups = HashMap::new();
 
@@ -347,7 +366,7 @@ impl Config {
                 bail!("Duplicate Chronicle GM user ID `{raw_user_id}`");
             }
         }
-
+        let excluded_note_ids = parse_excluded_note_ids(&raw.chronicle)?;
         let chronicle = ChronicleConfig {
             llm_repo: raw.chronicle.llm_repo,
             llm_revision: raw.chronicle.llm_revision,
@@ -375,6 +394,7 @@ impl Config {
             },
             max_chunk_tokens: raw.chronicle.max_chunk_tokens,
             chunk_overlap_tokens: raw.chronicle.chunk_overlap_tokens,
+            excluded_note_ids,
         };
 
         chronicle.validate()?;
@@ -717,6 +737,7 @@ chunk_overlap_tokens = 48
             },
             max_chunk_tokens: 480,
             chunk_overlap_tokens: 48,
+            excluded_note_ids: HashSet::new(),
         }
     }
 

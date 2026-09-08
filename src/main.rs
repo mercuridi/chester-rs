@@ -88,7 +88,8 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
         embedder,
         config.chronicle.max_chunk_tokens,
         config.chronicle.chunk_overlap_tokens,
-    );
+    )
+    .with_excluded_note_ids(config.chronicle.excluded_note_ids.clone());
 
     let indexing_stats = indexer
         .index()

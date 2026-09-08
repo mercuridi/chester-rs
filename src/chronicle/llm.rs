@@ -419,6 +419,7 @@ mod tests {
             },
             max_chunk_tokens: 100,
             chunk_overlap_tokens: 10,
+            excluded_note_ids: std::collections::HashSet::new(),
         }
     }
 
