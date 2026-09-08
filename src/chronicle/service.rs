@@ -168,70 +168,93 @@ impl Chronicle {
         let _lifecycle = self.lifecycle.lock().await;
         let _gpu_lease = self.runtime.acquire_inference()?;
 
-        if question.trim().is_empty() {
-            return Ok("Please provide a non-empty question.".into());
-        }
-        let plan = match self.llm.generate_plan(question).await {
-            Ok(response) => match planner::parse_for_question(question, &response) {
-                Ok(plan) => Some(plan),
-                Err(error) => {
-                    debug!(%error, planner_response = %response, "Chronicle query planner response rejected");
-                    debug!("Retrying Chronicle query planner with correction request");
-                    match self
-                        .llm
-                        .repair_plan(question, &response, &error.to_string())
-                        .await
-                    {
-                        Ok(retry_response) => {
-                            match planner::parse_for_question(question, &retry_response) {
-                                Ok(plan) => {
-                                    debug!(?plan, "Chronicle query planner retry accepted");
-                                    Some(plan)
-                                }
-                                Err(retry_error) => {
-                                    debug!(%retry_error, planner_response = %retry_response, "Chronicle query planner retry response rejected");
-                                    tracing::warn!(%retry_error, "Query planning failed after retry; using non-exhaustive retrieval");
-                                    None
+        let reply = if question.trim().is_empty() {
+            "Please provide a non-empty question.".into()
+        } else {
+            let plan = match self.llm.generate_plan(question).await {
+                Ok(response) => match planner::parse_for_question(question, &response) {
+                    Ok(plan) => Some(plan),
+                    Err(error) => {
+                        debug!(%error, planner_response = %response, "Chronicle query planner response rejected");
+                        debug!("Retrying Chronicle query planner with correction request");
+                        match self
+                            .llm
+                            .repair_plan(question, &response, &error.to_string())
+                            .await
+                        {
+                            Ok(retry_response) => {
+                                match planner::parse_for_question(question, &retry_response) {
+                                    Ok(plan) => {
+                                        debug!(?plan, "Chronicle query planner retry accepted");
+                                        Some(plan)
+                                    }
+                                    Err(retry_error) => {
+                                        debug!(%retry_error, planner_response = %retry_response, "Chronicle query planner retry response rejected");
+                                        tracing::warn!(%retry_error, "Query planning failed after retry; using non-exhaustive retrieval");
+                                        None
+                                    }
                                 }
                             }
-                        }
-                        Err(retry_error) => {
-                            tracing::warn!(%retry_error, initial_error = %error, "Query planning retry failed; using non-exhaustive retrieval");
-                            None
+                            Err(retry_error) => {
+                                tracing::warn!(%retry_error, initial_error = %error, "Query planning retry failed; using non-exhaustive retrieval");
+                                None
+                            }
                         }
                     }
+                },
+                Err(error) => {
+                    tracing::warn!(%error, "Query planning failed; using non-exhaustive retrieval");
+                    None
                 }
-            },
-            Err(error) => {
-                tracing::warn!(%error, "Query planning failed; using non-exhaustive retrieval");
-                None
+            };
+            if let Some(mut plan) = plan {
+                if plan.selection().is_some() {
+                    self.db
+                        .as_ref()
+                        .context("Structured datastore unavailable")?
+                        .resolve_string_or_wikilinks(&mut plan)
+                        .await?;
+                }
+                debug!(route = ?plan, "Validated Chronicle query plan");
+                match &plan {
+                    Plan::Count { .. } | Plan::List { .. } | Plan::CountMembers { .. } => {
+                        let result = self
+                            .db
+                            .as_ref()
+                            .context("Structured datastore unavailable")?
+                            .execute_plan_for(&plan, access)
+                            .await?;
+                        render::render(&plan, &result, self.max_reply_length)
+                    }
+                    Plan::Clarify {} => "Please name what you want counted or listed, and any character role or status filters."
+                        .chars()
+                        .take(self.max_reply_length)
+                        .collect(),
+                    Plan::Search {} => {
+                        self.answer_from_retrieval(question, RetrievalMode::Ordinary, access)
+                            .await?
+                    }
+                    Plan::Synthesis {} => self.answer_from_synthesis(question, access).await?,
+                    Plan::Unsupported {} => {
+                        self.answer_from_retrieval(
+                            question,
+                            RetrievalMode::UnsupportedStructuredQuery,
+                            access,
+                        )
+                        .await?
+                    }
+                }
+            } else {
+                self.answer_from_retrieval(question, RetrievalMode::PlanningFailure, access)
+                    .await?
             }
         };
-        let Some(mut plan) = plan else {
-            return self
-                .answer_from_retrieval(question, RetrievalMode::PlanningFailure, access)
-                .await;
-        };
-        if plan.selection().is_some() {
-            self.db
-                .as_ref()
-                .context("Structured datastore unavailable")?
-                .resolve_string_or_wikilinks(&mut plan)
-                .await?;
-        }
-        debug!(route = ?plan, "Validated Chronicle query plan");
-        match &plan {
-            Plan::Count { .. } | Plan::List { .. } | Plan::CountMembers { .. } => {
-                let result = self.db.as_ref().context("Structured datastore unavailable")?.execute_plan_for(&plan, access).await?;
-                Ok(render::render(&plan, &result, self.max_reply_length))
-            }
-            Plan::Clarify {} => Ok("Please name what you want counted or listed, and any character role or status filters.".chars().take(self.max_reply_length).collect()),
-            Plan::Search {} => self.answer_from_retrieval(question, RetrievalMode::Ordinary, access).await,
-            Plan::Synthesis {} => self.answer_from_synthesis(question, access).await,
-            Plan::Unsupported {} => self
-                .answer_from_retrieval(question, RetrievalMode::UnsupportedStructuredQuery, access)
-                .await,
-        }
+        debug!(reply = %reply, "Chronicle final reply");
+        info!(
+            reply_len = reply.chars().count(),
+            "Completed Chronicle question"
+        );
+        Ok(reply)
     }
 
     async fn answer_from_retrieval(
@@ -579,10 +602,6 @@ impl Chronicle {
             answer = truncate_to_char_limit(&answer, answer_limit);
             truncated = true;
         }
-        info!(
-            answer_len = answer.chars().count(),
-            "Completed Chronicle question"
-        );
         Ok((answer, retried, truncated))
     }
 
