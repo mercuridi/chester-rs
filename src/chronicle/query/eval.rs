@@ -198,7 +198,14 @@ async fn evaluate(
                         report.actual_plan = Some(plan);
                     }
                     Err(initial_error) => {
-                        match llm.repair_plan(&report.case.question, &response).await {
+                        match llm
+                            .repair_plan(
+                                &report.case.question,
+                                &response,
+                                &initial_error.to_string(),
+                            )
+                            .await
+                        {
                             Ok(retry_response) => {
                                 report.planner_responses.push(retry_response.clone());
                                 match planner::parse_for_question(

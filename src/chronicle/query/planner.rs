@@ -10,13 +10,13 @@ The indexed corpus contains canon notes only. Supported operations:
 {"operation":"unsupported"}
 {"operation":"clarify"}
 Allowed note_type values: adventure, aspect, character, deity, event, language, location, lore, metagame, monster, object, organisation, race. Template notes are excluded from the index; counts or lists of templates are unsupported.
-Legacy character filters are role = pc|npc|ex-pc and character_status = alive|dead|missing|unknown. For every other declared metadata field, use filters.conditions: [{"field":"FIELD","operator":"equals|contains","value":"VALUE"}]. Conditions are ANDed. `equals` is for scalar fields; `contains` is for list fields. The current declared fields and their note-type applicability are appended below this instruction; use those exact names and do not prefer one declared field over another. Wikilink fields require an exact Obsidian wikilink value such as [[Target]]. Omit filters not requested; never add a filter based on a stereotype or implication. NPC means non-player character; PC means player character; ex-PC means former player character. Living means alive. 'Unknown status' means explicitly unknown, not omitted metadata. Use singular note_type values; organizations maps to organisation.
+Legacy character filters are role = pc|npc|ex-pc and character_status = alive|dead|missing|unknown. For every other declared metadata field, use ONLY filters.conditions; never put a generic field directly inside filters. Conditions are ANDed. `equals` is for scalar fields; `contains` is for list fields. For example, appearances uses {"conditions":[{"field":"appearances","operator":"contains","value":"[[Riftweavers]]"}]}; played_by uses {"conditions":[{"field":"played_by","operator":"equals","value":"Rowan"}]}; and two restrictions use one conditions array with two objects. The current declared fields and their note-type applicability are appended below this instruction; use those exact names and do not prefer one declared field over another. Wikilink fields require an exact Obsidian wikilink value such as [[Target]]. Omit filters not requested; never add a filter based on a stereotype or implication. NPC means non-player character; PC means player character; ex-PC means former player character. Living means alive. 'Unknown status' means explicitly unknown, not omitted metadata. Use singular note_type values; organizations maps to organisation.
 Choose count only when the question asks how many, a number, or a total of matching recorded notes. Choose list when it asks to list, name, or identify who/what the matching notes are. For example: 'List former player characters.' = {"operation":"list","note_type":"character","filters":{"role":"ex-pc"}}; 'List NPCs explicitly recorded with unknown character status.' = {"operation":"list","note_type":"character","filters":{"role":"npc","character_status":"unknown"}}. Do not add role:npc to 'characters' unless NPC is explicitly stated.
 Count/list are ONLY for counts or names of recorded notes matching the declared schema. Never drop a restriction to make a question supported. Use exactly {"operation":"unsupported"} for unsupported operators, values, fields, negation words such as not/no/without, OR words such as or/either, historical state, non-canon notes, missing-field tests, or population totals. 'List locations' is list location with empty filters. 'List characters who are not dead.' is unsupported because negation is unavailable. 'List PCs or former PCs.' is unsupported because OR is unavailable.
-Use synthesis for broad, open-ended questions that need a coherent narrative assembled from multiple passages, such as histories, overviews, or how something developed. 'Summarise the history of the Ember Kingdom.' is synthesis. 'Give an overview of the Moonspire rebellion.' is synthesis. Do not use synthesis for a focused fact lookup just because it asks for an explanation.
-Use search for ordinary factual questions, focused explanations, and where/who lookups about a named entity. 'Who leads the Ember Guild?' is search. 'Where is Moonspire?' is search. 'Why did the Moonspire rebellion begin?' is search. 'How many enemies does Ilyra have?' is unsupported. 'Who are Ilyra's enemies?' is unsupported.
+Use synthesis for broad, open-ended questions that need a coherent narrative assembled from multiple passages, such as histories, overviews, or how something developed. 'Summarise the history of the Ember Kingdom.' is synthesis. 'Give an overview of the Moonspire rebellion.' is synthesis. Do not use synthesis for a focused fact lookup just because it asks for an explanation. Synthesis MUST be exactly {"operation":"synthesis"}; never add note_type or filters.
+Use search for ordinary factual questions, focused explanations, and where/who lookups about a named entity. 'Who leads the Ember Guild?' is search. 'Where is Moonspire?' is search. 'Why did the Moonspire rebellion begin?' is search. 'How many enemies does Ilyra have?' is unsupported. 'Who are Ilyra's enemies?' is unsupported. Search MUST be exactly {"operation":"search"}; never add note_type or filters.
 Use clarify for missing subjects or unresolved conversational references such as 'List them', 'How many are there?', or 'How many are missing?' without identifying what is counted. There is no conversation history. Never invent a subject or entity type.
-For unsupported questions, output only {"operation":"unsupported"}; do not include note_type or filters. For every structured plan, copy only values explicitly requested by the question. No additional keys, SQL, operators, markdown, or commentary."#;
+For unsupported questions, output only {"operation":"unsupported"}; do not include note_type or filters. Clarify MUST be exactly {"operation":"clarify"}. For every structured plan, copy only values explicitly requested by the question. No additional keys, SQL, operators, markdown, or commentary."#;
 
 /// The planner receives its allowed fields from the same runtime taxonomy that
 /// validates and indexes frontmatter, preventing a hand-maintained prompt list
@@ -51,28 +51,31 @@ pub fn parse(response: &str) -> Result<Plan> {
 }
 
 pub fn parse_for_question(question: &str, response: &str) -> Result<Plan> {
-    let plan = parse(response)?;
     let question = question.to_lowercase();
-    let unsafe_structured_query = [
-        " not ",
-        " without ",
-        " no ",
-        " or ",
-        "either ",
-        "draft",
-        "non-canon",
-        "noncanon",
-        "deprecated",
-        "speculative",
-        "no character status",
-        "missing character status",
-    ]
-    .iter()
-    .any(|marker| question.contains(marker));
-    if unsafe_structured_query && plan.selection().is_some() {
+    let words = question.split_whitespace().collect::<Vec<_>>();
+    let unsafe_structured_query = ["not", "without", "no", "or", "either"]
+        .iter()
+        .any(|marker| words.contains(marker))
+        || [
+            "draft",
+            "non-canon",
+            "noncanon",
+            "deprecated",
+            "speculative",
+            "no character status",
+            "missing character status",
+            "last year",
+            "historically",
+            "as of",
+            "before",
+            "after",
+        ]
+        .iter()
+        .any(|marker| question.contains(marker));
+    if unsafe_structured_query {
         return Ok(Plan::Unsupported {});
     }
-    Ok(plan)
+    parse(response)
 }
 
 #[cfg(test)]
@@ -90,11 +93,28 @@ mod tests {
             parse_for_question("How many draft NPCs are recorded?", structured)?,
             Plan::Unsupported {}
         );
+        assert_eq!(
+            parse_for_question("List characters who are not dead.", "not valid JSON")?,
+            Plan::Unsupported {}
+        );
+        assert_eq!(
+            parse_for_question("How many NPCs were alive last year?", "not valid JSON")?,
+            Plan::Unsupported {}
+        );
         assert!(matches!(
             parse_for_question("How many living NPCs are recorded?", structured)?,
             Plan::List { .. } | Plan::Count { .. }
         ));
         Ok(())
+    }
+
+    #[test]
+    fn prompt_shows_generic_conditions_and_bare_non_structured_routes() {
+        let prompt = system_prompt();
+        assert!(prompt.contains("never put a generic field directly inside filters"));
+        assert!(prompt.contains("\"field\":\"appearances\""));
+        assert!(prompt.contains("Synthesis MUST be exactly {\"operation\":\"synthesis\"}"));
+        assert!(prompt.contains("Search MUST be exactly {\"operation\":\"search\"}"));
     }
 
     #[test]

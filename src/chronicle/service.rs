@@ -181,7 +181,11 @@ impl Chronicle {
                 Err(error) => {
                     debug!(%error, planner_response = %response, "Chronicle query planner response rejected");
                     debug!("Retrying Chronicle query planner with correction request");
-                    match self.llm.repair_plan(question, &response).await {
+                    match self
+                        .llm
+                        .repair_plan(question, &response, &error.to_string())
+                        .await
+                    {
                         Ok(retry_response) => {
                             match planner::parse_for_question(question, &retry_response) {
                                 Ok(plan) => {
@@ -768,7 +772,7 @@ mod tests {
         budget: Mutex<usize>,
         plan_output: Mutex<String>,
         repair_plan_output: Mutex<Option<String>>,
-        repair_requests: Mutex<Vec<(String, String)>>,
+        repair_requests: Mutex<Vec<(String, String, String)>>,
         fail_count: bool,
         fail_generate_on_call: Mutex<Option<usize>>,
         generate_calls: Mutex<usize>,
@@ -818,11 +822,20 @@ mod tests {
                 .clone())
         }
 
-        async fn repair_plan(&self, question: &str, rejected_response: &str) -> Result<String> {
+        async fn repair_plan(
+            &self,
+            question: &str,
+            rejected_response: &str,
+            rejection_error: &str,
+        ) -> Result<String> {
             self.repair_requests
                 .lock()
                 .map_err(|_| anyhow!("repair requests poisoned"))?
-                .push((question.into(), rejected_response.into()));
+                .push((
+                    question.into(),
+                    rejected_response.into(),
+                    rejection_error.into(),
+                ));
             self.repair_plan_output
                 .lock()
                 .map_err(|_| anyhow!("repair plan poisoned"))?
@@ -976,16 +989,14 @@ mod tests {
         assert!(answer.starts_with("2 canon PCs recorded"));
         assert!(answer.contains("Garr [garr]"));
         assert!(answer.contains("Jora [jora]"));
-        assert_eq!(
-            llm.repair_requests
-                .lock()
-                .map_err(|_| anyhow!("repair requests poisoned"))?
-                .as_slice(),
-            &[(
-                "List all PCs played by Rowan.".into(),
-                "This is not a JSON query plan.".into()
-            )]
-        );
+        let repair_requests = llm
+            .repair_requests
+            .lock()
+            .map_err(|_| anyhow!("repair requests poisoned"))?;
+        assert_eq!(repair_requests.len(), 1);
+        assert_eq!(repair_requests[0].0, "List all PCs played by Rowan.");
+        assert_eq!(repair_requests[0].1, "This is not a JSON query plan.");
+        assert!(repair_requests[0].2.contains("Invalid query plan JSON"));
         assert!(
             retriever
                 .calls
