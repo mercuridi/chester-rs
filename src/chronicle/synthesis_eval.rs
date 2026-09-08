@@ -22,7 +22,27 @@ struct Suite {
     minimum_required_fact_recall: f64,
     maximum_prohibited_claims: usize,
     minimum_gap_recall: f64,
+    topology: Topology,
+    safety: Safety,
     cases: Vec<Case>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Topology {
+    document_count: usize,
+    minimum_multi_document_cases: usize,
+    required_categories: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Safety {
+    gm_only_note: String,
+    draft_contradiction_note: String,
+    instruction_like_note: String,
+    inaccessible_note: String,
+    mixed_event_note: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
