@@ -480,6 +480,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_appearances_for_non_character_notes() -> Result<()> {
+        let source = "---\nid: treaty\ntype: event\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nappearances: ['[[Blueskies]]']\n---\n";
+        let (metadata, _) = parse(source)?.context("Expected parsed note")?;
+        assert_eq!(
+            metadata.fields.get("appearances"),
+            Some(&MetadataValue::WikilinkList(vec!["[[Blueskies]]".into()]))
+        );
+        assert!(!metadata.unknown_fields.contains_key("appearances"));
+        Ok(())
+    }
+
+    #[test]
     fn parses_all_declared_value_shapes_for_each_document_type() -> Result<()> {
         let cases = [
             (

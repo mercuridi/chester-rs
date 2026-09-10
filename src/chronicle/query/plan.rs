@@ -194,6 +194,10 @@ mod tests {
             r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
         )?;
         plan.validate()?;
+        let event_appearances = serde_json::from_str::<Plan>(
+            r#"{"operation":"list","note_type":"event","filters":{"conditions":[{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
+        )?;
+        event_appearances.validate()?;
         let role = serde_json::from_str::<Plan>(
             r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"},{"field":"life_status","operator":"equals","value":"alive"}]}}"#,
         )?;

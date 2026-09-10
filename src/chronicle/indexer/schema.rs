@@ -169,6 +169,7 @@ const UNIVERSAL_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::required("visibility", ValueType::FixedEnum(&VISIBILITY)),
     FieldDefinition::required("created", ValueType::Date),
     FieldDefinition::required("updated", ValueType::Date),
+    FieldDefinition::optional("appearances", ValueType::WikilinkList),
 ];
 
 const ADVENTURE_FIELDS: &[FieldDefinition] = &[
@@ -195,7 +196,6 @@ const CHARACTER_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::optional("life_status", ValueType::FixedEnum(&LIFE_STATUS)),
     FieldDefinition::optional("life_status_cause", ValueType::StringOrWikilink),
     FieldDefinition::optional("life_status_since", ValueType::String),
-    FieldDefinition::optional("appearances", ValueType::WikilinkList),
     FieldDefinition::optional("affiliations", ValueType::WikilinkList),
     FieldDefinition::optional("allies", ValueType::WikilinkList),
     FieldDefinition::optional("enemies", ValueType::WikilinkList),
@@ -460,6 +460,10 @@ mod tests {
         assert_eq!(
             field_definition("location", "created").map(|field| field.presence),
             Some(Presence::Required)
+        );
+        assert_eq!(
+            field_definition("location", "appearances").map(|field| field.value_type),
+            Some(ValueType::WikilinkList)
         );
     }
 
