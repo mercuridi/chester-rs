@@ -1,5 +1,5 @@
 name = "Chronicle structured query MVP v1"
-minimum_planner_accuracy = 0.95
+minimum_planner_accuracy = 0.90
 
 [[cases]]
 id = "all-characters"

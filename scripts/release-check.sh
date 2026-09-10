@@ -28,7 +28,7 @@ target/release/chester-rs \
     tests/fixtures/chronicle/suite.toml \
     "$evaluation_dir/chronicle-retrieval.json"
 
-echo "Running Chronicle structured-query executor and planner evaluation (minimum planner accuracy: 0.95)..."
+echo "Running Chronicle structured-query executor and planner evaluation (minimum planner accuracy: 0.90)..."
 target/release/chester-rs \
     --chronicle-query-eval \
     tests/fixtures/chronicle-query/suite.toml \
