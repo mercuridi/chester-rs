@@ -289,6 +289,109 @@ fn parse_excluded_note_ids(raw: &RawChronicleConfig) -> Result<HashSet<String>> 
     Ok(excluded_note_ids)
 }
 
+fn build_alias_groups(
+    raw_groups: HashMap<String, RawAliasGroup>,
+) -> Result<HashMap<String, AliasGroup>> {
+    let mut alias_groups = HashMap::new();
+    for (group_id, raw_group) in raw_groups {
+        if group_id.trim().is_empty() {
+            bail!("Alias group ID cannot be empty");
+        }
+        if raw_group.name.trim().is_empty() {
+            bail!("Alias group `{group_id}` has an empty name");
+        }
+        let mut aliases = HashMap::new();
+        for (raw_user_id, alias) in raw_group.aliases {
+            let user_id = parse_user_id(&raw_user_id).with_context(|| {
+                format!("Invalid user ID `{raw_user_id}` in alias group `{group_id}`")
+            })?;
+            if alias.trim().is_empty() {
+                bail!("Alias for user `{raw_user_id}` in alias group `{group_id}` cannot be empty");
+            }
+            aliases.insert(user_id, alias);
+        }
+        alias_groups.insert(
+            group_id,
+            AliasGroup {
+                name: raw_group.name,
+                aliases,
+            },
+        );
+    }
+    Ok(alias_groups)
+}
+
+fn build_guilds(
+    raw_guilds: HashMap<String, RawGuildConfig>,
+    alias_groups: &HashMap<String, AliasGroup>,
+) -> Result<HashMap<GuildId, GuildConfig>> {
+    let mut guilds = HashMap::new();
+    for (raw_guild_id, raw_guild) in raw_guilds {
+        let guild_id = parse_guild_id(&raw_guild_id)
+            .with_context(|| format!("Invalid guild ID `{raw_guild_id}`"))?;
+        for group_id in &raw_guild.alias_groups {
+            if !alias_groups.contains_key(group_id) {
+                bail!("Guild `{raw_guild_id}` references unknown alias group `{group_id}`");
+            }
+        }
+        guilds.insert(
+            guild_id,
+            GuildConfig {
+                alias_groups: raw_guild.alias_groups,
+            },
+        );
+    }
+    Ok(guilds)
+}
+
+fn parse_chronicle_gm_user_ids(raw_user_ids: &[String]) -> Result<HashSet<UserId>> {
+    let mut user_ids = HashSet::new();
+    for raw_user_id in raw_user_ids {
+        let user_id = parse_user_id(raw_user_id)
+            .with_context(|| format!("Invalid Chronicle GM user ID `{raw_user_id}`"))?;
+        if !user_ids.insert(user_id) {
+            bail!("Duplicate Chronicle GM user ID `{raw_user_id}`");
+        }
+    }
+    Ok(user_ids)
+}
+
+fn build_chronicle_config(raw: RawChronicleConfig, project_root: &Path) -> Result<ChronicleConfig> {
+    let excluded_note_ids = parse_excluded_note_ids(&raw)?;
+    let chronicle = ChronicleConfig {
+        llm_repo: raw.llm_repo,
+        llm_revision: raw.llm_revision,
+        llm_model_file: raw.llm_model_file,
+        llm_tokenizer_repo: raw.llm_tokenizer_repo,
+        llm_tokenizer_file: raw.llm_tokenizer_file,
+        corpus_dir: resolve_path(project_root, &raw.corpus_dir),
+        llm_max_tokens: raw.llm_max_tokens,
+        llm_context_limit: raw.llm_context_limit,
+        llm_temperature: raw.llm_temperature,
+        llm_seed: raw.llm_seed,
+        llm_system_prompt: raw.llm_system_prompt,
+        llm_max_reply_length: raw.llm_max_reply_length,
+        retrieval_limit: raw.retrieval_limit,
+        retrieval_candidate_limit: raw.retrieval_candidate_limit,
+        retrieval_distance_threshold: raw.retrieval_distance_threshold,
+        retrieval_near_duplicate_threshold: raw.retrieval_near_duplicate_threshold,
+        retrieval_max_chunks_per_document: raw.retrieval_max_chunks_per_document,
+        pagerank_weight: raw.pagerank_weight,
+        synthesis: SynthesisSettings {
+            retrieval_limit: raw.synthesis_retrieval_limit,
+            candidate_limit: raw.synthesis_candidate_limit,
+            max_chunks_per_document: raw.synthesis_max_chunks_per_document,
+            batch_token_budget: raw.synthesis_batch_token_budget,
+            max_batches: raw.synthesis_max_batches,
+        },
+        max_chunk_tokens: raw.max_chunk_tokens,
+        chunk_overlap_tokens: raw.chunk_overlap_tokens,
+        excluded_note_ids,
+    };
+    chronicle.validate()?;
+    Ok(chronicle)
+}
+
 impl Config {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
@@ -307,106 +410,11 @@ impl Config {
         Self::from_raw(raw, project_root)
     }
 
-    #[allow(clippy::too_many_lines)]
     fn from_raw(raw: RawConfig, project_root: &Path) -> Result<Self> {
-        let mut alias_groups = HashMap::new();
-
-        for (group_id, raw_group) in raw.alias_groups {
-            if group_id.trim().is_empty() {
-                bail!("Alias group ID cannot be empty");
-            }
-
-            if raw_group.name.trim().is_empty() {
-                bail!("Alias group `{group_id}` has an empty name");
-            }
-
-            let mut aliases = HashMap::new();
-
-            for (raw_user_id, alias) in raw_group.aliases {
-                let user_id = parse_user_id(&raw_user_id).with_context(|| {
-                    format!("Invalid user ID `{raw_user_id}` in alias group `{group_id}`")
-                })?;
-
-                if alias.trim().is_empty() {
-                    bail!(
-                        "Alias for user `{raw_user_id}` in alias group `{group_id}` \
-                        cannot be empty"
-                    );
-                }
-
-                aliases.insert(user_id, alias);
-            }
-
-            alias_groups.insert(
-                group_id,
-                AliasGroup {
-                    name: raw_group.name,
-                    aliases,
-                },
-            );
-        }
-
-        let mut guilds = HashMap::new();
-
-        for (raw_guild_id, raw_guild) in raw.guilds {
-            let guild_id = parse_guild_id(&raw_guild_id)
-                .with_context(|| format!("Invalid guild ID `{raw_guild_id}`"))?;
-
-            for group_id in &raw_guild.alias_groups {
-                if !alias_groups.contains_key(group_id) {
-                    bail!("Guild `{raw_guild_id}` references unknown alias group `{group_id}`");
-                }
-            }
-
-            guilds.insert(
-                guild_id,
-                GuildConfig {
-                    alias_groups: raw_guild.alias_groups,
-                },
-            );
-        }
-
-        let mut chronicle_gm_user_ids = HashSet::new();
-        for raw_user_id in &raw.chronicle.gm_user_ids {
-            let user_id = parse_user_id(raw_user_id)
-                .with_context(|| format!("Invalid Chronicle GM user ID `{raw_user_id}`"))?;
-            if !chronicle_gm_user_ids.insert(user_id) {
-                bail!("Duplicate Chronicle GM user ID `{raw_user_id}`");
-            }
-        }
-        let excluded_note_ids = parse_excluded_note_ids(&raw.chronicle)?;
-        let chronicle = ChronicleConfig {
-            llm_repo: raw.chronicle.llm_repo,
-            llm_revision: raw.chronicle.llm_revision,
-            llm_model_file: raw.chronicle.llm_model_file,
-            llm_tokenizer_repo: raw.chronicle.llm_tokenizer_repo,
-            llm_tokenizer_file: raw.chronicle.llm_tokenizer_file,
-            corpus_dir: resolve_path(project_root, &raw.chronicle.corpus_dir),
-            llm_max_tokens: raw.chronicle.llm_max_tokens,
-            llm_context_limit: raw.chronicle.llm_context_limit,
-            llm_temperature: raw.chronicle.llm_temperature,
-            llm_seed: raw.chronicle.llm_seed,
-            llm_system_prompt: raw.chronicle.llm_system_prompt,
-            llm_max_reply_length: raw.chronicle.llm_max_reply_length,
-            retrieval_limit: raw.chronicle.retrieval_limit,
-            retrieval_candidate_limit: raw.chronicle.retrieval_candidate_limit,
-            retrieval_distance_threshold: raw.chronicle.retrieval_distance_threshold,
-            retrieval_near_duplicate_threshold: raw.chronicle.retrieval_near_duplicate_threshold,
-            retrieval_max_chunks_per_document: raw.chronicle.retrieval_max_chunks_per_document,
-            pagerank_weight: raw.chronicle.pagerank_weight,
-            synthesis: SynthesisSettings {
-                retrieval_limit: raw.chronicle.synthesis_retrieval_limit,
-                candidate_limit: raw.chronicle.synthesis_candidate_limit,
-                max_chunks_per_document: raw.chronicle.synthesis_max_chunks_per_document,
-                batch_token_budget: raw.chronicle.synthesis_batch_token_budget,
-                max_batches: raw.chronicle.synthesis_max_batches,
-            },
-            max_chunk_tokens: raw.chronicle.max_chunk_tokens,
-            chunk_overlap_tokens: raw.chronicle.chunk_overlap_tokens,
-            excluded_note_ids,
-        };
-
-        chronicle.validate()?;
+        let alias_groups = build_alias_groups(raw.alias_groups)?;
+        let guilds = build_guilds(raw.guilds, &alias_groups)?;
+        let chronicle_gm_user_ids = parse_chronicle_gm_user_ids(&raw.chronicle.gm_user_ids)?;
+        let chronicle = build_chronicle_config(raw.chronicle, project_root)?;
 
         if raw.database.jester.trim().is_empty() || raw.database.chronicle.trim().is_empty() {
             bail!("Database URLs cannot be empty");
