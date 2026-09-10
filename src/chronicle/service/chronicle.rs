@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
 use super::super::{
-    config::SynthesisSettings,
+    config::chronicle::SynthesisSettings,
     indexer::{
         db::repository::facade::{AccessScope, IndexerDb, SearchResult},
         retriever::{Retriever, RetrieverApi},

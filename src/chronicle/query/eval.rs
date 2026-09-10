@@ -1,7 +1,7 @@
 //! Separate structured-query evaluation; leaves the retrieval baseline unchanged.
 use super::{plan::Plan, planner};
 use crate::chronicle::{
-    config::Config,
+    config::app::Config,
     indexer::{
         db::repository::facade::{AccessScope, IndexerDb, StructuredResult},
         scanner,
@@ -303,11 +303,11 @@ pub async fn run(
             Config::load(Path::new(env!("CARGO_MANIFEST_DIR")).join(".chronicle/config.toml"))?;
         planner_model = Some(format!(
             "{}@{} / {}",
-            config.chronicle.llm_repo,
-            config.chronicle.llm_revision,
-            config.chronicle.llm_model_file
+            config.chronicle.llm.model.repo,
+            config.chronicle.llm.model.revision,
+            config.chronicle.llm.model.file
         ));
-        let llm = Llm::new(&config.chronicle, runtime.clone());
+        let llm = Llm::new(&config.chronicle.llm, runtime.clone());
         llm.load().await?;
         Some(llm)
     } else {

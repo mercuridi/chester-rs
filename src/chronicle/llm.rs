@@ -10,7 +10,7 @@ use candle_transformers::{generation::LogitsProcessor, models::quantized_qwen2::
 use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::Tokenizer;
 
-use super::{config::ChronicleConfig, runtime::GpuRuntime};
+use super::{config::chronicle::LlmSettings, runtime::GpuRuntime};
 use tracing::{info, instrument};
 
 #[async_trait::async_trait]
@@ -55,23 +55,23 @@ struct LoadedLlm {
 }
 
 impl Llm {
-    pub fn new(config: &ChronicleConfig, runtime: GpuRuntime) -> Self {
+    pub fn new(config: &LlmSettings, runtime: GpuRuntime) -> Self {
         Self {
             model: Arc::new(Mutex::new(None)),
             runtime,
-            repo: config.llm_repo.clone(),
-            revision: config.llm_revision.clone(),
-            model_file: config.llm_model_file.clone(),
-            tokenizer_repo: config.llm_tokenizer_repo.clone(),
-            tokenizer_file: config.llm_tokenizer_file.clone(),
-            max_tokens: config.llm_max_tokens as usize,
-            context_limit: config.llm_context_limit,
-            temperature: f64::from(config.llm_temperature),
-            seed: config.llm_seed,
+            repo: config.model.repo.clone(),
+            revision: config.model.revision.clone(),
+            model_file: config.model.file.clone(),
+            tokenizer_repo: config.tokenizer.repo.clone(),
+            tokenizer_file: config.tokenizer.file.clone(),
+            max_tokens: config.max_tokens as usize,
+            context_limit: config.context_limit,
+            temperature: f64::from(config.temperature),
+            seed: config.seed,
             system_prompt: format!(
                 "{}\n\nKeep every answer at or below {} characters.",
-                config.llm_system_prompt.trim_end(),
-                config.llm_max_reply_length
+                config.system_prompt.trim_end(),
+                config.max_reply_length
             ),
         }
     }
@@ -387,40 +387,28 @@ fn plan_repair_guidance(rejection_error: &str) -> &'static str {
 mod tests {
     use super::Llm;
     use crate::chronicle::{
-        config::{ChronicleConfig, SynthesisSettings},
+        config::chronicle::{LlmSettings, RepositoryFile},
         runtime::GpuRuntime,
     };
 
-    fn config() -> ChronicleConfig {
-        ChronicleConfig {
-            llm_repo: "repo".into(),
-            llm_revision: "revision".into(),
-            llm_model_file: "model".into(),
-            llm_tokenizer_repo: "tokenizer-repo".into(),
-            llm_tokenizer_file: "tokenizer".into(),
-            corpus_dir: "corpus".into(),
-            llm_max_tokens: 256,
-            llm_context_limit: 1024,
-            llm_temperature: 0.5,
-            llm_seed: 7,
-            llm_system_prompt: "System prompt\n\n".into(),
-            llm_max_reply_length: 100,
-            retrieval_limit: 5,
-            retrieval_candidate_limit: 10,
-            retrieval_distance_threshold: 0.8,
-            retrieval_near_duplicate_threshold: 0.85,
-            retrieval_max_chunks_per_document: 2,
-            pagerank_weight: 0.15,
-            synthesis: SynthesisSettings {
-                retrieval_limit: 12,
-                candidate_limit: 40,
-                max_chunks_per_document: 3,
-                batch_token_budget: 400,
-                max_batches: 6,
+    fn config() -> LlmSettings {
+        LlmSettings {
+            model: RepositoryFile {
+                repo: "repo".into(),
+                revision: "revision".into(),
+                file: "model".into(),
             },
-            max_chunk_tokens: 100,
-            chunk_overlap_tokens: 10,
-            excluded_note_ids: std::collections::HashSet::new(),
+            tokenizer: RepositoryFile {
+                repo: "tokenizer-repo".into(),
+                revision: String::new(),
+                file: "tokenizer".into(),
+            },
+            max_tokens: 256,
+            context_limit: 1024,
+            temperature: 0.5,
+            seed: 7,
+            system_prompt: "System prompt\n\n".into(),
+            max_reply_length: 100,
         }
     }
 

@@ -7,7 +7,7 @@ use tracing::{debug, info};
 use crate::{
     chronicle::transcription::constants::TRANSCRIPT_PAGE_LIMIT,
     chronicle::{
-        config::{AliasGroup, Config},
+        config::{app::Config, discord::AliasGroup},
         recording::recorder::{RecordingManifest, notify_recording_user},
         transcription::{
             service::{TranscribedSegment, TranscriptionService},
@@ -747,7 +747,7 @@ mod tests {
         scene_offset_seconds, transcript_path,
     };
     use crate::chronicle::{
-        config::AliasGroup,
+        config::discord::AliasGroup,
         recording::recorder::{ManifestStatus, RecordingManifest, SceneEvent},
         transcription::{
             constants::TRANSCRIPT_PAGE_LIMIT, service::TranscribedSegment,

@@ -1,6 +1,6 @@
 //! Model-backed bounded-synthesis evaluation with deterministic rubric scoring.
 use super::super::{
-    config::Config,
+    config::app::Config,
     indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
     llm::{LanguageModel, Llm},
     query::{plan::Plan, planner},
@@ -1209,29 +1209,31 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
         corpus,
         database,
         Embedder::load(candle_core::Device::Cpu)?,
-        config.chronicle.max_chunk_tokens,
-        config.chronicle.chunk_overlap_tokens,
+        config.chronicle.indexing.max_chunk_tokens,
+        config.chronicle.indexing.chunk_overlap_tokens,
     );
     indexer.index().await?;
     let (database, _) = indexer.into_parts();
     let runtime = GpuRuntime::new();
-    let llm = Llm::new(&config.chronicle, runtime.clone());
+    let llm = Llm::new(&config.chronicle.llm, runtime.clone());
     let model = format!(
         "{}@{} / {}",
-        config.chronicle.llm_repo, config.chronicle.llm_revision, config.chronicle.llm_model_file
+        config.chronicle.llm.model.repo,
+        config.chronicle.llm.model.revision,
+        config.chronicle.llm.model.file
     );
     let chronicle = Chronicle::new(
         database,
         llm.clone(),
         runtime.clone(),
-        config.chronicle.retrieval_limit,
-        config.chronicle.retrieval_candidate_limit,
-        config.chronicle.retrieval_distance_threshold,
-        config.chronicle.retrieval_near_duplicate_threshold,
-        config.chronicle.retrieval_max_chunks_per_document,
-        config.chronicle.pagerank_weight,
+        config.chronicle.retrieval.limit,
+        config.chronicle.retrieval.candidate_limit,
+        config.chronicle.retrieval.distance_threshold,
+        config.chronicle.retrieval.near_duplicate_threshold,
+        config.chronicle.retrieval.max_chunks_per_document,
+        config.chronicle.retrieval.pagerank_weight,
         config.chronicle.synthesis,
-        config.chronicle.llm_max_reply_length,
+        config.chronicle.llm.max_reply_length,
     );
     chronicle.start_llm().await?;
     let judge = SynthesisJudge::new(std::sync::Arc::new(llm.clone()));

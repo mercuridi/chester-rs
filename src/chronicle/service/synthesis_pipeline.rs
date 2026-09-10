@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use super::super::{
-    config::SynthesisSettings,
+    config::chronicle::SynthesisSettings,
     indexer::{
         db::repository::facade::{AccessScope, SearchResult},
         retriever::{

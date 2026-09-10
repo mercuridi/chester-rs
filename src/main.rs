@@ -4,8 +4,6 @@ mod discord;
 mod jester;
 mod utils;
 
-use std::path::PathBuf;
-
 ////////////////////////////////////////////////////////////////////////////////
 use dotenv::from_path;
 /// Imports
@@ -20,7 +18,7 @@ use tracing::info;
 
 use crate::{
     chronicle::{
-        config::Config,
+        config::app::Config,
         indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,
         recording::recorder::{notify_recording_user, scan_incomplete_manifests},
@@ -89,13 +87,13 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
     let embedder =
         Embedder::load(device).context("Failed to load the Chronicle embedding model")?;
     let indexer = Indexer::new(
-        PathBuf::from(&config.chronicle.corpus_dir),
+        config.chronicle.indexing.corpus_dir.clone(),
         chronicle_db,
         embedder,
-        config.chronicle.max_chunk_tokens,
-        config.chronicle.chunk_overlap_tokens,
+        config.chronicle.indexing.max_chunk_tokens,
+        config.chronicle.indexing.chunk_overlap_tokens,
     )
-    .with_excluded_note_ids(config.chronicle.excluded_note_ids.clone());
+    .with_excluded_note_ids(config.chronicle.indexing.excluded_note_ids.clone());
 
     let indexing_stats = indexer
         .index()
@@ -111,21 +109,21 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
 
     let (chronicle_db, _embedder) = indexer.into_parts();
     let runtime = GpuRuntime::new();
-    let llm = Llm::new(&config.chronicle, runtime.clone());
+    let llm = Llm::new(&config.chronicle.llm, runtime.clone());
     tracing::info!("Chronicle services initialized");
 
     Ok(Chronicle::new(
         chronicle_db,
         llm,
         runtime,
-        config.chronicle.retrieval_limit,
-        config.chronicle.retrieval_candidate_limit,
-        config.chronicle.retrieval_distance_threshold,
-        config.chronicle.retrieval_near_duplicate_threshold,
-        config.chronicle.retrieval_max_chunks_per_document,
-        config.chronicle.pagerank_weight,
+        config.chronicle.retrieval.limit,
+        config.chronicle.retrieval.candidate_limit,
+        config.chronicle.retrieval.distance_threshold,
+        config.chronicle.retrieval.near_duplicate_threshold,
+        config.chronicle.retrieval.max_chunks_per_document,
+        config.chronicle.retrieval.pagerank_weight,
         config.chronicle.synthesis,
-        config.chronicle.llm_max_reply_length,
+        config.chronicle.llm.max_reply_length,
     ))
 }
 
@@ -433,10 +431,10 @@ async fn run() -> Result<()> {
         )
     })?;
     tracing::debug!(
-        corpus_dir = %config.chronicle.corpus_dir,
-        retrieval_limit = config.chronicle.retrieval_limit,
-        max_chunk_tokens = config.chronicle.max_chunk_tokens,
-        max_reply_length = config.chronicle.llm_max_reply_length,
+        corpus_dir = %config.chronicle.indexing.corpus_dir.display(),
+        retrieval_limit = config.chronicle.retrieval.limit,
+        max_chunk_tokens = config.chronicle.indexing.max_chunk_tokens,
+        max_reply_length = config.chronicle.llm.max_reply_length,
         "Loaded configuration"
     );
 
