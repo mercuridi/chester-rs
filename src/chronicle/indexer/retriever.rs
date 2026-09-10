@@ -116,173 +116,186 @@ pub fn select_with_diagnostics_and_pagerank(
     settings: SearchSettings,
     pagerank: &HashMap<String, PageRankSignal>,
 ) -> (Vec<SearchResult>, RetrievalDiagnostics) {
-    let mut diagnostics = build_candidate_diagnostics(&vector, &lexical, settings, pagerank);
-    let vector = filter_vector_candidates(vector, settings.distance_threshold);
-    let fused = score_fused_candidates(
-        vector,
-        lexical,
-        settings.pagerank_weight,
-        pagerank,
-        &mut diagnostics,
-    );
-    let accepted = apply_selection_constraints(fused, settings, &mut diagnostics);
+    let mut candidates = build_ranked_candidates(vector, lexical, pagerank);
+    filter_vector_candidates(&mut candidates, settings.distance_threshold);
+    score_fused_candidates(&mut candidates, settings.pagerank_weight);
+    let accepted = apply_selection_constraints(&mut candidates, settings);
 
-    (accepted, finalize_diagnostics(settings, diagnostics))
+    (accepted, finalize_diagnostics(settings, candidates))
 }
 
 type CandidateKey = (String, i64);
-type CandidateDiagnostics = std::collections::BTreeMap<CandidateKey, CandidateDiagnostic>;
 
 #[derive(Debug)]
-struct FusedCandidate {
+struct RankedCandidate {
     result: SearchResult,
+    vector_rank: Option<usize>,
+    vector_distance: Option<f32>,
+    vector_passed_threshold: bool,
+    lexical_rank: Option<usize>,
     rrf_score: f64,
+    pagerank_score: Option<f64>,
+    pagerank_rank: Option<i64>,
     pagerank_contribution: f64,
+    /// Reserved for a future reranking stage between fusion and constraints.
+    reranker_contribution: f64,
     final_fusion_score: f64,
+    eligible: bool,
+    final_rank: Option<usize>,
+    decision: &'static str,
 }
 
-fn build_candidate_diagnostics(
-    vector: &[SearchResult],
-    lexical: &[SearchResult],
-    settings: SearchSettings,
-    pagerank: &HashMap<String, PageRankSignal>,
-) -> CandidateDiagnostics {
-    let mut diagnostics = CandidateDiagnostics::new();
-    for (is_vector, ranking) in [(true, &vector), (false, &lexical)] {
-        for (index, result) in ranking.iter().enumerate() {
-            let record = diagnostics
-                .entry((result.document_path.clone(), result.chunk_index))
-                .or_insert_with(|| CandidateDiagnostic {
-                    document: result.document_path.clone(),
-                    chunk_index: result.chunk_index,
-                    vector_rank: None,
-                    vector_distance: None,
-                    vector_passed_threshold: false,
-                    lexical_rank: None,
-                    fused_rank: None,
-                    rrf_score: 0.0,
-                    pagerank_score: pagerank
-                        .get(&result.document_path)
-                        .map(|signal| signal.score),
-                    pagerank_rank: pagerank
-                        .get(&result.document_path)
-                        .map(|signal| signal.rank),
-                    pagerank_contribution: 0.0,
-                    final_fusion_score: 0.0,
-                    decision: "vector_threshold",
-                });
-            if is_vector {
-                record.vector_rank = Some(index + 1);
-                record.vector_distance = result.distance.is_finite().then_some(result.distance);
-                record.vector_passed_threshold = result.distance <= settings.distance_threshold;
-            } else {
-                record.lexical_rank = Some(index + 1);
-            }
+impl RankedCandidate {
+    fn new(result: SearchResult, pagerank: Option<PageRankSignal>) -> Self {
+        Self {
+            result,
+            vector_rank: None,
+            vector_distance: None,
+            vector_passed_threshold: false,
+            lexical_rank: None,
+            rrf_score: 0.0,
+            pagerank_score: pagerank.map(|signal| signal.score),
+            pagerank_rank: pagerank.map(|signal| signal.rank),
+            pagerank_contribution: 0.0,
+            reranker_contribution: 0.0,
+            final_fusion_score: 0.0,
+            eligible: false,
+            final_rank: None,
+            decision: "vector_threshold",
         }
     }
-    diagnostics
+
+    fn key(&self) -> CandidateKey {
+        (self.result.document_path.clone(), self.result.chunk_index)
+    }
+
+    fn diagnostic(self) -> CandidateDiagnostic {
+        CandidateDiagnostic {
+            document: self.result.document_path,
+            chunk_index: self.result.chunk_index,
+            vector_rank: self.vector_rank,
+            vector_distance: self.vector_distance,
+            vector_passed_threshold: self.vector_passed_threshold,
+            lexical_rank: self.lexical_rank,
+            fused_rank: self.final_rank,
+            rrf_score: self.rrf_score,
+            pagerank_score: self.pagerank_score,
+            pagerank_rank: self.pagerank_rank,
+            pagerank_contribution: self.pagerank_contribution,
+            final_fusion_score: self.final_fusion_score,
+            decision: self.decision,
+        }
+    }
 }
 
-fn filter_vector_candidates(
-    vector: Vec<SearchResult>,
-    distance_threshold: f32,
-) -> Vec<SearchResult> {
-    vector
-        .into_iter()
-        .filter(|result| result.distance <= distance_threshold)
-        .collect()
-}
-
-fn score_fused_candidates(
+fn build_ranked_candidates(
     vector: Vec<SearchResult>,
     lexical: Vec<SearchResult>,
-    pagerank_weight: f64,
     pagerank: &HashMap<String, PageRankSignal>,
-    diagnostics: &mut CandidateDiagnostics,
-) -> Vec<FusedCandidate> {
-    let mut candidates: HashMap<CandidateKey, FusedCandidate> = HashMap::new();
-    for ranking in [vector, lexical] {
-        for (rank, result) in ranking.into_iter().enumerate() {
-            #[allow(clippy::cast_precision_loss)]
-            let contribution = 1.0 / (60.0 + (rank + 1) as f64);
-            let key = (result.document_path.clone(), result.chunk_index);
+) -> Vec<RankedCandidate> {
+    let mut candidates = std::collections::BTreeMap::new();
+    for (is_vector, ranking) in [(true, vector), (false, lexical)] {
+        for (index, result) in ranking.into_iter().enumerate() {
             let candidate = candidates
-                .entry(key.clone())
-                .or_insert_with(|| FusedCandidate {
-                    result,
-                    rrf_score: 0.0,
-                    pagerank_contribution: 0.0,
-                    final_fusion_score: 0.0,
+                .entry((result.document_path.clone(), result.chunk_index))
+                .or_insert_with(|| {
+                    RankedCandidate::new(
+                        result.clone(),
+                        pagerank.get(&result.document_path).copied(),
+                    )
                 });
-            candidate.rrf_score += contribution;
-            candidate.final_fusion_score += contribution;
-
-            if let Some(record) = diagnostics.get_mut(&key) {
-                record.rrf_score = candidate.rrf_score;
-                record.final_fusion_score = candidate.final_fusion_score;
+            if is_vector {
+                candidate.vector_rank = Some(index + 1);
+                candidate.vector_distance = result.distance.is_finite().then_some(result.distance);
+            } else {
+                candidate.lexical_rank = Some(index + 1);
             }
         }
     }
-    for (key, candidate) in &mut candidates {
-        if let Some(signal) = pagerank
-            .get(&candidate.result.document_path)
-            .filter(|signal| signal.rank > 0)
+    candidates.into_values().collect()
+}
+
+fn filter_vector_candidates(candidates: &mut [RankedCandidate], distance_threshold: f32) {
+    for candidate in candidates {
+        candidate.vector_passed_threshold =
+            candidate.vector_rank.is_some() && candidate.result.distance <= distance_threshold;
+        candidate.eligible = candidate.vector_passed_threshold || candidate.lexical_rank.is_some();
+    }
+}
+
+fn score_fused_candidates(candidates: &mut [RankedCandidate], pagerank_weight: f64) {
+    for candidate in candidates.iter_mut().filter(|candidate| candidate.eligible) {
+        for rank in [
+            candidate
+                .vector_rank
+                .filter(|_| candidate.vector_passed_threshold),
+            candidate.lexical_rank,
+        ]
+        .into_iter()
+        .flatten()
         {
             #[allow(clippy::cast_precision_loss)]
-            let contribution = pagerank_weight / (60.0 + signal.rank as f64);
-            candidate.pagerank_contribution = contribution;
-            candidate.final_fusion_score += contribution;
-            if let Some(record) = diagnostics.get_mut(key) {
-                record.pagerank_contribution = contribution;
-                record.final_fusion_score = candidate.final_fusion_score;
-            }
+            let contribution = 1.0 / (60.0 + rank as f64);
+            candidate.rrf_score += contribution;
         }
+        if let Some(rank) = candidate.pagerank_rank.filter(|rank| *rank > 0) {
+            #[allow(clippy::cast_precision_loss)]
+            let contribution = pagerank_weight / (60.0 + rank as f64);
+            candidate.pagerank_contribution = contribution;
+        }
+        candidate.final_fusion_score =
+            candidate.rrf_score + candidate.pagerank_contribution + candidate.reranker_contribution;
     }
-    let mut candidates = candidates.into_iter().collect::<Vec<_>>();
-    candidates.sort_by(|(left_key, left), (right_key, right)| {
+    candidates.sort_by(|left, right| {
         right
-            .final_fusion_score
-            .total_cmp(&left.final_fusion_score)
-            .then_with(|| left_key.cmp(right_key))
+            .eligible
+            .cmp(&left.eligible)
+            .then_with(|| right.final_fusion_score.total_cmp(&left.final_fusion_score))
+            .then_with(|| left.key().cmp(&right.key()))
     });
-    candidates
-        .into_iter()
-        .map(|(_, candidate)| candidate)
-        .collect()
+    for (index, candidate) in candidates
+        .iter_mut()
+        .filter(|candidate| candidate.eligible)
+        .enumerate()
+    {
+        candidate.final_rank = Some(index + 1);
+    }
 }
 
 fn apply_selection_constraints(
-    fused: Vec<FusedCandidate>,
+    candidates: &mut [RankedCandidate],
     settings: SearchSettings,
-    diagnostics: &mut CandidateDiagnostics,
 ) -> Vec<SearchResult> {
     let mut accepted = Vec::new();
     let mut exact_keys = HashSet::new();
     let mut counts = HashMap::new();
-    for (index, candidate) in fused.into_iter().enumerate() {
-        let candidate = candidate.result;
+    for candidate in candidates.iter_mut().filter(|candidate| candidate.eligible) {
         let decision = if accepted.len() >= settings.limit {
             "result_limit"
-        } else if !exact_keys.insert(canonical_text(&candidate.text)) {
+        } else if !exact_keys.insert(canonical_text(&candidate.result.text)) {
             "exact_duplicate"
-        } else if is_near_duplicate(&candidate, &accepted, settings.near_duplicate_threshold) {
+        } else if is_near_duplicate(
+            &candidate.result,
+            &accepted,
+            settings.near_duplicate_threshold,
+        ) {
             "near_duplicate"
-        } else if counts.get(&candidate.document_path).copied().unwrap_or(0)
+        } else if counts
+            .get(&candidate.result.document_path)
+            .copied()
+            .unwrap_or(0)
             >= settings.max_chunks_per_document
         {
             "document_cap"
         } else {
             "selected"
         };
-        if let Some(record) =
-            diagnostics.get_mut(&(candidate.document_path.clone(), candidate.chunk_index))
-        {
-            record.fused_rank = Some(index + 1);
-            record.decision = decision;
-        }
+        candidate.decision = decision;
         if decision == "selected" {
-            *counts.entry(candidate.document_path.clone()).or_insert(0) += 1;
-            accepted.push(candidate);
+            *counts
+                .entry(candidate.result.document_path.clone())
+                .or_insert(0) += 1;
+            accepted.push(candidate.result.clone());
         }
     }
     accepted
@@ -290,11 +303,15 @@ fn apply_selection_constraints(
 
 fn finalize_diagnostics(
     settings: SearchSettings,
-    diagnostics: CandidateDiagnostics,
+    mut candidates: Vec<RankedCandidate>,
 ) -> RetrievalDiagnostics {
+    candidates.sort_by_key(RankedCandidate::key);
     RetrievalDiagnostics {
         settings,
-        candidates: diagnostics.into_values().collect(),
+        candidates: candidates
+            .into_iter()
+            .map(RankedCandidate::diagnostic)
+            .collect(),
     }
 }
 
@@ -435,16 +452,17 @@ fn reciprocal_rank_fusion_with_pagerank(
     pagerank_weight: f64,
     pagerank: &HashMap<String, PageRankSignal>,
 ) -> Vec<SearchResult> {
-    score_fused_candidates(
-        vector,
-        lexical,
-        pagerank_weight,
-        pagerank,
-        &mut CandidateDiagnostics::new(),
-    )
-    .into_iter()
-    .map(|candidate| candidate.result)
-    .collect()
+    let mut candidates = build_ranked_candidates(vector, lexical, pagerank);
+    for candidate in &mut candidates {
+        candidate.vector_passed_threshold = candidate.vector_rank.is_some();
+        candidate.eligible = candidate.vector_passed_threshold || candidate.lexical_rank.is_some();
+    }
+    score_fused_candidates(&mut candidates, pagerank_weight);
+    candidates
+        .into_iter()
+        .filter(|candidate| candidate.eligible)
+        .map(|candidate| candidate.result)
+        .collect()
 }
 
 #[cfg(test)]
