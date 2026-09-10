@@ -274,8 +274,8 @@ async fn write_metadata(
         .bind(&metadata.status).bind(&metadata.visibility)
         .bind(serde_json::to_string(&metadata.aliases)?).bind(serde_json::to_string(&metadata.tags)?)
         .bind(&metadata.summary).bind(&metadata.created).bind(&metadata.updated)
-        .bind(string_field(metadata, "role").or_else(|| metadata.role.map(crate::chronicle::query::plan::CharacterRole::as_str)))
-        .bind(string_field(metadata, "life_status").or_else(|| metadata.life_status.map(crate::chronicle::query::plan::CharacterStatus::as_str)))
+        .bind(string_field(metadata, "role"))
+        .bind(string_field(metadata, "life_status"))
         .execute(&mut *connection).await?;
 
     for table in [
@@ -403,8 +403,8 @@ async fn write_metadata(
         "character" => {
             sqlx::query("INSERT INTO character_metadata(document_id, race, role, life_status, life_status_cause, life_status_since, location, birthplace, birth_year, nationality, played_by, pronouns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(document_id).bind(string_field(metadata, "race"))
-                .bind(string_field(metadata, "role").or_else(|| metadata.role.map(crate::chronicle::query::plan::CharacterRole::as_str)))
-                .bind(string_field(metadata, "life_status").or_else(|| metadata.life_status.map(crate::chronicle::query::plan::CharacterStatus::as_str)))
+                .bind(string_field(metadata, "role"))
+                .bind(string_field(metadata, "life_status"))
                 .bind(string_field(metadata, "life_status_cause")).bind(string_field(metadata, "life_status_since"))
                 .bind(string_field(metadata, "location")).bind(string_field(metadata, "birthplace")).bind(string_field(metadata, "birth_year"))
                 .bind(string_field(metadata, "nationality")).bind(string_field(metadata, "played_by"))

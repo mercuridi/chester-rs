@@ -9,10 +9,13 @@ use tracing::{debug, info, instrument, warn};
 
 use super::{
     chunker,
-    db::repository::facade::{AccessScope, IndexedChunk, IndexerDb},
+    db::repository::facade::{IndexedChunk, IndexerDb},
     embedder::{Embedder, EmbeddingModel},
     link_resolver, scanner,
 };
+
+#[cfg(test)]
+use super::db::repository::facade::AccessScope;
 
 const EMBEDDING_BATCH_SIZE: usize = 16;
 
@@ -525,7 +528,7 @@ mod tests {
         let docs = db.all_documents().await?;
         let (mut metadata, _) = super::super::frontmatter::parse(source)?.context("note")?;
         // Simulate an existing index whose new metadata columns have not been populated.
-        metadata.role = None;
+        metadata.fields.remove("role");
         db.refresh_metadata(docs[0].id, &docs[0].content_hash, &metadata)
             .await?;
         assert_eq!(indexer.index().await?.unchanged, 1);

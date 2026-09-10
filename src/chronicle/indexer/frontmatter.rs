@@ -24,8 +24,7 @@ pub enum MetadataValue {
 ///
 /// `fields` is the complete normalized representation of declared fields.
 /// `unknown_fields` retains undeclared YAML values until the runtime schema is
-/// extended. The `role` and `life_status` fields are retained for the current
-/// structured-query implementation and mirror values in `fields`.
+/// extended.
 #[derive(Debug, Clone, Default)]
 pub struct Metadata {
     pub id: String,
@@ -37,8 +36,6 @@ pub struct Metadata {
     pub visibility: String,
     pub created: String,
     pub updated: String,
-    pub role: Option<crate::chronicle::query::plan::CharacterRole>,
-    pub life_status: Option<crate::chronicle::query::plan::CharacterStatus>,
     pub fields: BTreeMap<String, MetadataValue>,
     #[allow(dead_code)]
     pub unknown_fields: BTreeMap<String, Value>,
@@ -46,8 +43,24 @@ pub struct Metadata {
 
 /// Missing frontmatter is ineligible; malformed frontmatter is an ingestion
 /// error. Unknown fields are preserved and warned about.
-#[allow(clippy::too_many_lines)]
 pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
+    let Some((mapping, body)) = parse_frontmatter(source)? else {
+        return Ok(None);
+    };
+    let note_type = required_string(&mapping, "type")?;
+    let (fields, mut validation_errors) = parse_schema_fields(&mapping, &note_type)?;
+    let unknown_fields = collect_unknown_fields(&mapping, &note_type)?;
+    if let Err(error) = validate_event_occurrence_conflict(&fields, &note_type) {
+        validation_errors.push(format!("event occurrence: {error:#}"));
+    }
+    report_validation_errors(validation_errors)?;
+    Ok(Some((
+        build_metadata(note_type, fields, unknown_fields)?,
+        body,
+    )))
+}
+
+fn parse_frontmatter(source: &str) -> Result<Option<(Mapping, String)>> {
     let source = source.trim_start_matches('\u{feff}');
     let mut lines = source.split_inclusive('\n');
     if lines.next().map(str::trim) != Some("---") {
@@ -55,45 +68,55 @@ pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
     }
 
     let mut yaml = String::new();
-    let mut closed = false;
     for line in lines.by_ref() {
         if line.trim() == "---" {
-            closed = true;
-            break;
+            let document: Value =
+                serde_yaml::from_str(&yaml).context("Invalid Chronicle frontmatter")?;
+            let Value::Mapping(mapping) = document else {
+                bail!("Chronicle frontmatter must be a YAML mapping");
+            };
+            return Ok(Some((mapping, lines.collect())));
         }
         yaml.push_str(line);
     }
-    if !closed {
-        bail!("Unclosed YAML frontmatter");
-    }
+    bail!("Unclosed YAML frontmatter")
+}
 
-    let document: Value = serde_yaml::from_str(&yaml).context("Invalid Chronicle frontmatter")?;
-    let mapping = document
-        .as_mapping()
-        .context("Chronicle frontmatter must be a YAML mapping")?;
-    let note_type = required_string(mapping, "type")?;
-
+fn parse_schema_fields(
+    mapping: &Mapping,
+    note_type: &str,
+) -> Result<(BTreeMap<String, MetadataValue>, Vec<String>)> {
     let mut fields = BTreeMap::new();
     let mut validation_errors = Vec::new();
     for field in schema::UNIVERSAL_FIELD_DEFINITIONS {
-        if let Err(error) = parse_declared_field(mapping, field, &mut fields) {
-            validation_errors.push(format!("{}: {error:#}", field.name));
-        }
+        collect_field_validation(mapping, field, &mut fields, &mut validation_errors);
     }
-    if let Some(type_definition) = schema::document_type_definition(&note_type) {
+    if let Some(type_definition) = schema::document_type_definition(note_type) {
         for field in type_definition.fields {
-            let field = schema::field_definition(&note_type, field.name)
+            let field = schema::field_definition(note_type, field.name)
                 .with_context(|| format!("No schema definition for field `{}`", field.name))?;
-            if let Err(error) = parse_declared_field(mapping, &field, &mut fields) {
-                validation_errors.push(format!("{}: {error:#}", field.name));
-            }
+            collect_field_validation(mapping, &field, &mut fields, &mut validation_errors);
         }
     }
+    Ok((fields, validation_errors))
+}
 
+fn collect_field_validation(
+    mapping: &Mapping,
+    field: &FieldDefinition,
+    fields: &mut BTreeMap<String, MetadataValue>,
+    validation_errors: &mut Vec<String>,
+) {
+    if let Err(error) = parse_declared_field(mapping, field, fields) {
+        validation_errors.push(format!("{}: {error:#}", field.name));
+    }
+}
+
+fn collect_unknown_fields(mapping: &Mapping, note_type: &str) -> Result<BTreeMap<String, Value>> {
     let declared_names = mapping
         .keys()
         .filter_map(Value::as_str)
-        .filter(|name| schema::field_definition(&note_type, name).is_some())
+        .filter(|name| schema::field_definition(note_type, name).is_some())
         .collect::<HashSet<_>>();
     let mut unknown_fields = BTreeMap::new();
     for (key, value) in mapping {
@@ -115,21 +138,28 @@ pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
         );
         unknown_fields.insert(name.to_owned(), value.clone());
     }
+    Ok(unknown_fields)
+}
 
-    if let Err(error) = validate_event_occurrence_conflict(&fields, &note_type) {
-        validation_errors.push(format!("event occurrence: {error:#}"));
+fn report_validation_errors(validation_errors: Vec<String>) -> Result<()> {
+    if validation_errors.is_empty() {
+        return Ok(());
     }
-    if !validation_errors.is_empty() {
-        bail!(
-            "Chronicle frontmatter validation failed:\n{}",
-            validation_errors
-                .into_iter()
-                .map(|error| format!("- {error}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        );
-    }
+    bail!(
+        "Chronicle frontmatter validation failed:\n{}",
+        validation_errors
+            .into_iter()
+            .map(|error| format!("- {error}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+}
 
+fn build_metadata(
+    note_type: String,
+    fields: BTreeMap<String, MetadataValue>,
+    unknown_fields: BTreeMap<String, Value>,
+) -> Result<Metadata> {
     let id = required_non_empty_string(&fields, "id")?;
     let status = required_enum_string(&fields, "status")?;
     let visibility = required_enum_string(&fields, "visibility")?;
@@ -139,24 +169,19 @@ pub fn parse(source: &str) -> Result<Option<(Metadata, String)>> {
     let created = required_string_value(&fields, "created")?;
     let updated = required_string_value(&fields, "updated")?;
 
-    Ok(Some((
-        Metadata {
-            id,
-            note_type,
-            aliases,
-            tags,
-            summary,
-            status,
-            visibility,
-            created,
-            updated,
-            role: optional_character_role(&fields),
-            life_status: optional_life_status(&fields),
-            fields,
-            unknown_fields,
-        },
-        lines.collect(),
-    )))
+    Ok(Metadata {
+        id,
+        note_type,
+        aliases,
+        tags,
+        summary,
+        status,
+        visibility,
+        created,
+        updated,
+        fields,
+        unknown_fields,
+    })
 }
 
 fn parse_declared_field(
@@ -359,35 +384,6 @@ fn required_string_list(
     match fields.get(field) {
         Some(MetadataValue::StringList(values)) => Ok(values.clone()),
         _ => bail!("Frontmatter field `{field}` must be a string list"),
-    }
-}
-
-fn optional_character_role(
-    fields: &BTreeMap<String, MetadataValue>,
-) -> Option<crate::chronicle::query::plan::CharacterRole> {
-    match fields.get("role") {
-        Some(MetadataValue::Enum(value)) => match value.as_str() {
-            "pc" => Some(crate::chronicle::query::plan::CharacterRole::Pc),
-            "npc" => Some(crate::chronicle::query::plan::CharacterRole::Npc),
-            "ex-pc" => Some(crate::chronicle::query::plan::CharacterRole::ExPc),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn optional_life_status(
-    fields: &BTreeMap<String, MetadataValue>,
-) -> Option<crate::chronicle::query::plan::CharacterStatus> {
-    match fields.get("life_status") {
-        Some(MetadataValue::Enum(value)) => match value.as_str() {
-            "alive" => Some(crate::chronicle::query::plan::CharacterStatus::Alive),
-            "dead" => Some(crate::chronicle::query::plan::CharacterStatus::Dead),
-            "missing" => Some(crate::chronicle::query::plan::CharacterStatus::Missing),
-            "unknown" => Some(crate::chronicle::query::plan::CharacterStatus::Unknown),
-            _ => None,
-        },
-        _ => None,
     }
 }
 
