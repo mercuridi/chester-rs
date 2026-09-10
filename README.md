@@ -191,6 +191,11 @@ RUST_LOG=chester_rs=info,chester_rs::chronicle=debug cargo run --release
 RUST_LOG=warn cargo run --release
 ```
 
+Chester writes logs to both the terminal and a timestamped logfile under
+`logs/application/`. Filenames include the selected log level and application
+version, for example `chester-20260910-143015-info-v3.0.0.log`. The logfile uses
+the same `RUST_LOG` filtering as terminal output.
+
 At startup the bot opens the two SQLite databases, indexes `corpus/`, verifies `yt-dlp` and `ffmpeg`, synchronizes missing music, and then connects to Discord. A failure in any of those stages prevents login.
 
 ## Commands

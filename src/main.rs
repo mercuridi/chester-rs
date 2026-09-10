@@ -31,12 +31,18 @@ use crate::{
     jester::library::sync::sync_audio_library,
 };
 use anyhow::{Context, Result, bail};
+use chrono::Utc;
+use std::fs::{self, OpenOptions};
+use std::path::Path;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 const DEFAULT_CHRONICLE_EVAL_SUITE: &str = "tests/fixtures/chronicle/suite.toml";
 const DEFAULT_CHRONICLE_QUERY_EVAL_SUITE: &str = "tests/fixtures/chronicle-query/suite.toml";
 const DEFAULT_CHRONICLE_SYNTHESIS_EVAL_SUITE: &str =
     "tests/fixtures/chronicle-synthesis/suite.toml";
+const DEFAULT_LOG_LEVEL: &str = "info";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
@@ -269,9 +275,24 @@ async fn main() {
         Err(error) => (EnvFilter::new("chester_rs=info,warn"), Some(error)),
     };
 
+    let log_directory = project_root.join("logs/application");
+    let log_file = match create_log_file(&log_directory) {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("Failed to initialize logfile: {error:#}");
+            std::process::exit(1);
+        }
+    };
+    let terminal_layer = tracing_subscriber::fmt::layer();
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_ansi(false)
+        .with_writer(log_file);
+
     #[allow(clippy::print_stderr)]
-    if let Err(error) = tracing_subscriber::fmt()
-        .with_env_filter(env_filter)
+    if let Err(error) = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(terminal_layer)
+        .with(file_layer)
         .try_init()
     {
         eprintln!("Failed to initialize logging: {error}");
@@ -287,6 +308,47 @@ async fn main() {
         tracing::debug!(error = ?error, "Startup error chain");
         std::process::exit(1);
     }
+}
+
+fn create_log_file(directory: &Path) -> Result<std::fs::File> {
+    fs::create_dir_all(directory).with_context(|| {
+        format!(
+            "Failed to create logfile directory at {}",
+            directory.display()
+        )
+    })?;
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
+    let level = configured_log_level();
+    let version = env!("CARGO_PKG_VERSION");
+    let mut suffix = 0_u64;
+    loop {
+        let filename = if suffix == 0 {
+            format!("chester-{timestamp}-{level}-v{version}.log")
+        } else {
+            format!("chester-{timestamp}-{level}-v{version}-{suffix}.log")
+        };
+        let path = directory.join(filename);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok(file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => suffix += 1,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("Failed to create logfile at {}", path.display()));
+            }
+        }
+    }
+}
+
+fn configured_log_level() -> &'static str {
+    let settings = std::env::var("RUST_LOG").unwrap_or_default().to_lowercase();
+    ["trace", "debug", "info", "warn", "error"]
+        .into_iter()
+        .find(|level| {
+            settings
+                .split(|c: char| !c.is_ascii_alphabetic())
+                .any(|part| part == *level)
+        })
+        .unwrap_or(DEFAULT_LOG_LEVEL)
 }
 
 async fn run_evaluation_command() -> Result<bool> {
