@@ -341,7 +341,54 @@ fn create_report_file(requested_path: Option<&Path>) -> Result<(File, std::path:
     }
 }
 
-#[allow(clippy::too_many_lines)]
+fn fixture_registry(
+    documents: &[super::indexer::document::Document],
+) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
+    let identities = documents
+        .iter()
+        .map(|document| {
+            (
+                document.path.to_string_lossy().into_owned(),
+                document.metadata.id.clone(),
+            )
+        })
+        .collect();
+    let contents = documents
+        .iter()
+        .map(|document| {
+            (
+                document.metadata.id.clone(),
+                format!(
+                    "{}\n{}",
+                    document.content,
+                    document.secret_content.join("\n")
+                ),
+            )
+        })
+        .collect();
+    (identities, contents)
+}
+
+fn fixture_fingerprint(
+    source: &str,
+    corpus: &Path,
+    documents: &[super::indexer::document::Document],
+) -> Result<String> {
+    let mut hash = Sha256::new();
+    hash.update(source.as_bytes());
+    for document in documents {
+        hash.update(
+            document
+                .path
+                .strip_prefix(corpus)?
+                .to_string_lossy()
+                .as_bytes(),
+        );
+        hash.update(document.content_hash.as_bytes());
+    }
+    Ok(hex::encode(hash.finalize()))
+}
+
 pub async fn run(suite_path: &Path, requested_report_path: Option<&Path>) -> Result<()> {
     if let Some(path) = requested_report_path {
         ensure!(!path.exists(), "Report path must be a new file");
@@ -353,36 +400,9 @@ pub async fn run(suite_path: &Path, requested_report_path: Option<&Path>) -> Res
         .context("Suite needs a parent directory")?
         .join("corpus");
     let (documents, _) = scanner::scan_directory_with_stats(&corpus)?;
-    let identities = documents
-        .iter()
-        .map(|d| (d.path.to_string_lossy().into_owned(), d.metadata.id.clone()))
-        .collect::<BTreeMap<_, _>>();
-    validate(
-        &suite,
-        &identities,
-        &documents
-            .iter()
-            .map(|d| {
-                (
-                    d.metadata.id.clone(),
-                    format!("{}\n{}", d.content, d.secret_content.join("\n")),
-                )
-            })
-            .collect::<BTreeMap<_, _>>(),
-    )?;
-    let mut hash = Sha256::new();
-    hash.update(source.as_bytes());
-    for document in &documents {
-        hash.update(
-            document
-                .path
-                .strip_prefix(&corpus)?
-                .to_string_lossy()
-                .as_bytes(),
-        );
-        hash.update(document.content_hash.as_bytes());
-    }
-    let fingerprint = hex::encode(hash.finalize());
+    let (identities, contents) = fixture_registry(&documents);
+    validate(&suite, &identities, &contents)?;
+    let fingerprint = fixture_fingerprint(&source, &corpus, &documents)?;
     let temporary = tempfile::tempdir()?;
     let database = IndexerDb::open(&format!(
         "sqlite://{}",
