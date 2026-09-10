@@ -18,7 +18,7 @@ expected_total = 6
 operation = "count"
 note_type = "character"
 [cases.plan.filters]
-role = "npc"
+conditions = [{ field = "role", operator = "equals", value = "npc" }]
 
 [[cases]]
 id = "living-npcs"
@@ -28,8 +28,7 @@ expected_total = 2
 operation = "count"
 note_type = "character"
 [cases.plan.filters]
-role = "npc"
-life_status = "alive"
+conditions = [{ field = "role", operator = "equals", value = "npc" }, { field = "life_status", operator = "equals", value = "alive" }]
 
 [[cases]]
 id = "list-living-npcs"
@@ -40,8 +39,7 @@ expected_ids = ["ada", "bela"]
 operation = "list"
 note_type = "character"
 [cases.plan.filters]
-role = "npc"
-life_status = "alive"
+conditions = [{ field = "role", operator = "equals", value = "npc" }, { field = "life_status", operator = "equals", value = "alive" }]
 
 [[cases]]
 id = "missing-pcs"
@@ -51,8 +49,7 @@ expected_total = 1
 operation = "count"
 note_type = "character"
 [cases.plan.filters]
-role = "pc"
-life_status = "missing"
+conditions = [{ field = "role", operator = "equals", value = "pc" }, { field = "life_status", operator = "equals", value = "missing" }]
 
 [[cases]]
 id = "unknown-npcs"
@@ -63,8 +60,7 @@ expected_ids = ["eren"]
 operation = "list"
 note_type = "character"
 [cases.plan.filters]
-role = "npc"
-life_status = "unknown"
+conditions = [{ field = "role", operator = "equals", value = "npc" }, { field = "life_status", operator = "equals", value = "unknown" }]
 
 [[cases]]
 id = "dead-pcs"
@@ -74,8 +70,7 @@ expected_total = 0
 operation = "count"
 note_type = "character"
 [cases.plan.filters]
-role = "pc"
-life_status = "dead"
+conditions = [{ field = "role", operator = "equals", value = "pc" }, { field = "life_status", operator = "equals", value = "dead" }]
 
 [[cases]]
 id = "former-pcs"
@@ -86,7 +81,7 @@ expected_ids = ["hana"]
 operation = "list"
 note_type = "character"
 [cases.plan.filters]
-role = "ex-pc"
+conditions = [{ field = "role", operator = "equals", value = "ex-pc" }]
 
 [[cases]]
 id = "living-characters"
@@ -96,7 +91,7 @@ expected_total = 5
 operation = "count"
 note_type = "character"
 [cases.plan.filters]
-life_status = "alive"
+conditions = [{ field = "life_status", operator = "equals", value = "alive" }]
 
 [[cases]]
 id = "organisations"
@@ -156,8 +151,7 @@ expected_ids = ["ada", "bela", "corin"]
 operation = "list"
 note_type = "character"
 [cases.plan.filters]
-role = "npc"
-conditions = [{ field = "appearances", operator = "contains", value = "[[Blueskies]]" }]
+conditions = [{ field = "role", operator = "equals", value = "npc" }, { field = "appearances", operator = "contains", value = "[[Blueskies]]" }]
 
 [[cases]]
 id = "affiliation-membership"
@@ -250,8 +244,7 @@ expected_ids = ["garr", "jora"]
 operation = "list"
 note_type = "character"
 [cases.plan.filters]
-role = "pc"
-conditions = [{ field = "played_by", operator = "equals", value = "Rowan" }]
+conditions = [{ field = "role", operator = "equals", value = "pc" }, { field = "played_by", operator = "equals", value = "Rowan" }]
 
 [[cases]]
 id = "deity-type"
@@ -394,8 +387,7 @@ expected_ids = ["ada"]
 operation = "list"
 note_type = "character"
 [cases.plan.filters]
-role = "npc"
-conditions = [{ field = "location", operator = "equals", value = "[[Northmere]]" }]
+conditions = [{ field = "role", operator = "equals", value = "npc" }, { field = "location", operator = "equals", value = "[[Northmere]]" }]
 
 [[cases]]
 id = "cities"

@@ -1121,13 +1121,13 @@ mod tests {
         db.replace_note("Ada.md", "hash", &[], &[], &metadata)
             .await?;
         chronicle.db = Some(db);
-        *llm.plan_output.lock().map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"count","note_type":"character","filters":{"role":"pc","life_status":"dead"}}"#.into();
+        *llm.plan_output.lock().map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"pc"},{"field":"life_status","operator":"equals","value":"dead"}]}}"#.into();
         let answer = chronicle.ask("How many dead PCs?").await?;
-        assert!(answer.starts_with("0 canon PCs recorded"));
+        assert!(answer.starts_with("0 canon characters recorded"));
         *llm.plan_output
             .lock()
             .map_err(|_| anyhow!("plan poisoned"))? =
-            r#"{"operation":"list","note_type":"character","filters":{"role":"npc"}}"#.into();
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#.into();
         let answer = chronicle.ask("List NPCs").await?;
         assert!(answer.contains("Ada [ada]"));
         assert!(
@@ -1171,11 +1171,11 @@ mod tests {
         *llm
             .repair_plan_output
             .lock()
-            .map_err(|_| anyhow!("repair plan poisoned"))? = Some(r#"{"operation":"list","note_type":"character","filters":{"role":"pc","conditions":[{"field":"played_by","operator":"equals","value":"Rowan"}]}}"#.into());
+            .map_err(|_| anyhow!("repair plan poisoned"))? = Some(r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"pc"},{"field":"played_by","operator":"equals","value":"Rowan"}]}}"#.into());
 
         let answer = chronicle.ask("List all PCs played by Rowan.").await?;
 
-        assert!(answer.starts_with("2 canon PCs recorded"));
+        assert!(answer.starts_with("2 canon characters recorded"));
         assert!(answer.contains("Garr [garr]"));
         assert!(answer.contains("Jora [jora]"));
         let repair_requests = llm

@@ -23,18 +23,10 @@ impl IndexerDb {
         }
         self.resolve_string_or_wikilinks(&mut plan).await?;
         let (note_type, filters) = plan.selection().context("Plan is not a structured query")?;
-        let role = filters
-            .role
-            .map(crate::chronicle::query::plan::CharacterRole::as_str);
-        let status = filters
-            .life_status
-            .map(crate::chronicle::query::plan::CharacterStatus::as_str);
         let mut count = structured_query(
             "SELECT COUNT(DISTINCT m.note_id) FROM note_metadata m",
             note_type,
             filters,
-            role,
-            status,
             access,
         )?;
         let total: i64 = count.build_query_scalar().fetch_one(&self.pool).await?;
@@ -44,8 +36,6 @@ impl IndexerDb {
                 "SELECT m.note_id, MIN(d.path) AS path FROM note_metadata m JOIN documents d ON d.id = m.document_id",
                 note_type,
                 filters,
-                role,
-                status,
                 access,
             )?;
             query
@@ -157,8 +147,6 @@ fn structured_query<'a>(
     select: &str,
     note_type: &'a str,
     filters: &'a crate::chronicle::query::plan::Filters,
-    role: Option<&'static str>,
-    status: Option<&'static str>,
     access: AccessScope,
 ) -> Result<QueryBuilder<'a, Sqlite>> {
     use crate::chronicle::query::plan::ConditionOperator;
@@ -169,12 +157,6 @@ fn structured_query<'a>(
         .push_bind(note_type);
     if access == AccessScope::Player {
         query.push(" AND m.visibility != 'secret'");
-    }
-    if let Some(role) = role {
-        query.push(" AND m.role = ").push_bind(role);
-    }
-    if let Some(status) = status {
-        query.push(" AND m.life_status = ").push_bind(status);
     }
     for condition in &filters.conditions {
         match condition.operator {

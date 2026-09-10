@@ -15,21 +15,15 @@ pub fn render(plan: &Plan, result: &StructuredResult, max_chars: usize) -> Strin
         .take(max_chars)
         .collect();
     }
-    let Some((note_type, filters)) = plan.selection() else {
+    let Some((note_type, _filters)) = plan.selection() else {
         return String::new();
     };
-    let noun = match (note_type, filters.role) {
-        ("character", Some(super::plan::CharacterRole::Npc)) => "NPCs".to_owned(),
-        ("character", Some(super::plan::CharacterRole::Pc)) => "PCs".to_owned(),
-        ("character", Some(super::plan::CharacterRole::ExPc)) => "former PCs".to_owned(),
-        ("deity", _) => "deity notes".to_owned(),
-        ("lore" | "metagame", _) => format!("{note_type} notes"),
+    let noun = match note_type {
+        "deity" => "deity notes".to_owned(),
+        "lore" | "metagame" => format!("{note_type} notes"),
         _ => format!("{note_type}s"),
     };
-    let qualification = filters.life_status.map_or_else(String::new, |status| {
-        format!(" with status recorded as {}", status.as_str())
-    });
-    let header = format!("{} canon {noun} recorded{qualification}.", result.total);
+    let header = format!("{} canon {noun} recorded.", result.total);
     if matches!(plan, Plan::Count { .. }) || result.total == 0 {
         return header.chars().take(max_chars).collect();
     }

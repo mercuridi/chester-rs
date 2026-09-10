@@ -288,13 +288,11 @@ async fn write_note_metadata(
     document_id: i64,
     metadata: &crate::chronicle::indexer::frontmatter::Metadata,
 ) -> Result<()> {
-    sqlx::query("INSERT OR REPLACE INTO note_metadata(document_id, note_id, note_type, status, visibility, aliases, tags, summary, created, updated, role, life_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    sqlx::query("INSERT OR REPLACE INTO note_metadata(document_id, note_id, note_type, status, visibility, aliases, tags, summary, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(document_id).bind(&metadata.id).bind(&metadata.note_type)
         .bind(&metadata.status).bind(&metadata.visibility)
         .bind(serde_json::to_string(&metadata.aliases)?).bind(serde_json::to_string(&metadata.tags)?)
         .bind(&metadata.summary).bind(&metadata.created).bind(&metadata.updated)
-        .bind(string_field(metadata, "role"))
-        .bind(string_field(metadata, "life_status"))
         .execute(&mut *connection).await?;
 
     Ok(())
@@ -449,10 +447,8 @@ async fn write_type_metadata(
                 .await?;
         }
         "character" => {
-            sqlx::query("INSERT INTO character_metadata(document_id, race, role, life_status, life_status_cause, life_status_since, location, birthplace, birth_year, nationality, played_by, pronouns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+            sqlx::query("INSERT INTO character_metadata(document_id, race, life_status_cause, life_status_since, location, birthplace, birth_year, nationality, played_by, pronouns) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(document_id).bind(string_field(metadata, "race"))
-                .bind(string_field(metadata, "role"))
-                .bind(string_field(metadata, "life_status"))
                 .bind(string_field(metadata, "life_status_cause")).bind(string_field(metadata, "life_status_since"))
                 .bind(string_field(metadata, "location")).bind(string_field(metadata, "birthplace")).bind(string_field(metadata, "birth_year"))
                 .bind(string_field(metadata, "nationality")).bind(string_field(metadata, "played_by"))

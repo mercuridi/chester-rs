@@ -19,48 +19,9 @@ pub const NOTE_TYPES: &[&str] = &[
     "template",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum CharacterRole {
-    Pc,
-    Npc,
-    ExPc,
-}
-impl CharacterRole {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Pc => "pc",
-            Self::Npc => "npc",
-            Self::ExPc => "ex-pc",
-        }
-    }
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CharacterStatus {
-    Alive,
-    Dead,
-    Missing,
-    Unknown,
-}
-impl CharacterStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Alive => "alive",
-            Self::Dead => "dead",
-            Self::Missing => "missing",
-            Self::Unknown => "unknown",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Filters {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role: Option<CharacterRole>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub life_status: Option<CharacterStatus>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
 }
@@ -110,11 +71,6 @@ impl Plan {
             ensure!(
                 NOTE_TYPES.contains(&note_type.as_str()) && note_type != "template",
                 "Unsupported note type"
-            );
-            ensure!(
-                note_type == "character"
-                    || (filters.role.is_none() && filters.life_status.is_none()),
-                "Character filters require character notes"
             );
             for condition in &filters.conditions {
                 validate_condition(note_type, condition)?;
@@ -223,14 +179,14 @@ mod tests {
     fn rejects_unknown_fields_operators_and_invalid_combinations() -> anyhow::Result<()> {
         for input in [
             r#"{"operation":"count","note_type":"character","filters":{"location":"Northmere"}}"#,
-            r#"{"operation":"count","note_type":"character","filters":{"role":"villain"}}"#,
+            r#"{"operation":"count","note_type":"character","filters":{"role":"npc"}}"#,
             r#"{"operation":"search","sql":"DELETE FROM notes"}"#,
         ] {
             assert!(serde_json::from_str::<Plan>(input).is_err());
         }
         for input in [
             r#"{"operation":"count","note_type":"city"}"#,
-            r#"{"operation":"count","note_type":"location","filters":{"role":"npc"}}"#,
+            r#"{"operation":"count","note_type":"location","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
         ] {
             assert!(serde_json::from_str::<Plan>(input).is_ok_and(|p| p.validate().is_err()));
         }
@@ -238,6 +194,14 @@ mod tests {
             r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
         )?;
         plan.validate()?;
+        let role = serde_json::from_str::<Plan>(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"},{"field":"life_status","operator":"equals","value":"alive"}]}}"#,
+        )?;
+        role.validate()?;
+        assert!(serde_json::from_str::<Plan>(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"villain"}]}}"#,
+        )
+        .is_ok_and(|plan| plan.validate().is_err()));
         assert!(serde_json::from_str::<Plan>(r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"equals","value":"[[Blueskies]]"}]}}"#)
             .is_ok_and(|plan| plan.validate().is_err()));
         let members = serde_json::from_str::<Plan>(

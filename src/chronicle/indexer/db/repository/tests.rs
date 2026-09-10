@@ -67,7 +67,7 @@ async fn structured_lists_are_capped_but_counts_are_distinct_and_complete() -> R
     db.replace_note("Duplicate.md", "hash", &[], &[], &metadata)
         .await?;
     let plan = crate::chronicle::query::planner::parse(
-        r#"{"operation":"list","note_type":"character","filters":{"role":"npc"}}"#,
+        r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
     )?;
     let result = db.execute_plan_for(&plan, AccessScope::Gm).await?;
     assert_eq!(result.total, 25);
@@ -464,7 +464,7 @@ async fn player_structured_queries_exclude_secret_notes() -> Result<()> {
             .await?;
     }
     let plan = crate::chronicle::query::planner::parse(
-        r#"{"operation":"count","note_type":"character","filters":{"role":"npc"}}"#,
+        r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
     )?;
     assert_eq!(
         db.execute_plan_for(&plan, AccessScope::Player).await?.total,

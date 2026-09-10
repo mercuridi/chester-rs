@@ -527,13 +527,13 @@ mod tests {
         assert!(initial_batches > 0);
         let docs = db.all_documents().await?;
         let (mut metadata, _) = super::super::frontmatter::parse(source)?.context("note")?;
-        // Simulate an existing index whose new metadata columns have not been populated.
+        // Simulate an existing index whose generic field row has not been populated.
         metadata.fields.remove("role");
         db.refresh_metadata(docs[0].id, &docs[0].content_hash, &metadata)
             .await?;
         assert_eq!(indexer.index().await?.unchanged, 1);
         let plan = crate::chronicle::query::planner::parse(
-            r#"{"operation":"count","note_type":"character","filters":{"role":"npc"}}"#,
+            r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
         )?;
         assert_eq!(db.execute_plan_for(&plan, AccessScope::Gm).await?.total, 1);
         std::fs::write(&path, source.replace("role: npc", "role: pc"))?;

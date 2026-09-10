@@ -37,12 +37,11 @@ CREATE TABLE IF NOT EXISTS note_metadata (
     document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE,
     note_id TEXT NOT NULL, note_type TEXT NOT NULL, status TEXT NOT NULL,
     visibility TEXT NOT NULL, aliases TEXT NOT NULL, tags TEXT NOT NULL,
-    summary TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL,
-    role TEXT, life_status TEXT
+    summary TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS adventure_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, adventure_status TEXT, start_date TEXT, end_date TEXT, system TEXT, part_of_adventure TEXT, level_range TEXT);
 CREATE TABLE IF NOT EXISTS aspect_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS character_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, race TEXT, role TEXT, life_status TEXT, life_status_cause TEXT, life_status_since TEXT, location TEXT, birthplace TEXT, birth_year TEXT, nationality TEXT, played_by TEXT, pronouns TEXT);
+CREATE TABLE IF NOT EXISTS character_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, race TEXT, life_status_cause TEXT, life_status_since TEXT, location TEXT, birthplace TEXT, birth_year TEXT, nationality TEXT, played_by TEXT, pronouns TEXT);
 CREATE TABLE IF NOT EXISTS deity_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, deity_type TEXT, domain TEXT, antidomain TEXT, alignment TEXT, form TEXT, crystal TEXT);
 CREATE TABLE IF NOT EXISTS event_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE, event_type TEXT, occurred TEXT, occurred_start TEXT, occurred_end TEXT, historicity TEXT, result TEXT);
 CREATE TABLE IF NOT EXISTS language_metadata (document_id INTEGER PRIMARY KEY REFERENCES documents(id) ON DELETE CASCADE);
@@ -73,7 +72,6 @@ CREATE TABLE IF NOT EXISTS document_pagerank (
     gm_rank INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS note_metadata_selection ON note_metadata(status, note_type, role, life_status);
 CREATE INDEX IF NOT EXISTS note_wikilinks_lookup ON note_wikilinks(field_name, value);
 CREATE INDEX IF NOT EXISTS note_string_lists_lookup ON note_string_lists(field_name, value);
 CREATE INDEX IF NOT EXISTS note_scalar_fields_lookup ON note_scalar_fields(field_name, value);
