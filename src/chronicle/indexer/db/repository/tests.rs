@@ -357,24 +357,24 @@ async fn rebuild_document_pagerank_separates_player_and_gm_graphs() -> Result<()
     )
     .fetch_all(&db.pool)
     .await?;
-    let score = |id: &str, column: &str| -> f64 {
+    let score = |id: &str, column: &str| -> Result<f64> {
         rows.iter()
             .find(|row| row.get::<String, _>("note_id") == id)
             .map(|row| row.get(column))
-            .expect("score row exists")
+            .context("score row exists")
     };
-    let rank = |id: &str, column: &str| -> i64 {
+    let rank = |id: &str, column: &str| -> Result<i64> {
         rows.iter()
             .find(|row| row.get::<String, _>("note_id") == id)
             .map(|row| row.get(column))
-            .expect("rank row exists")
+            .context("rank row exists")
     };
-    assert!(score("secret-source", "player_score").abs() < f64::EPSILON);
-    assert_eq!(rank("secret-source", "player_rank"), 0);
-    assert_eq!(rank("target", "player_rank"), 1);
-    assert_eq!(rank("target", "gm_rank"), 1);
-    assert!(score("target", "player_score") > score("player-source", "player_score"));
-    assert!(score("target", "gm_score") > score("secret-source", "gm_score"));
+    assert!(score("secret-source", "player_score")?.abs() < f64::EPSILON);
+    assert_eq!(rank("secret-source", "player_rank")?, 0);
+    assert_eq!(rank("target", "player_rank")?, 1);
+    assert_eq!(rank("target", "gm_rank")?, 1);
+    assert!(score("target", "player_score")? > score("player-source", "player_score")?);
+    assert!(score("target", "gm_score")? > score("secret-source", "gm_score")?);
     Ok(())
 }
 
