@@ -276,6 +276,7 @@ async fn main() {
     };
 
     let log_directory = project_root.join("logs/application");
+    #[allow(clippy::print_stderr)]
     let log_file = match create_log_file(&log_directory) {
         Ok(file) => file,
         Err(error) => {
