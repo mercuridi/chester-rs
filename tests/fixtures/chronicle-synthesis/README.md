@@ -16,6 +16,9 @@ Run the model-backed evaluation with:
 cargo run -- --chronicle-synthesis-eval tests/fixtures/chronicle-synthesis/suite.toml /tmp/chronicle-synthesis-report.json
 ```
 
+Without an explicit report path, the evaluator writes a timestamped
+`logs/evaluation/chronicle-synthesis-report-*.json` file in the repository.
+
 The evaluator runs the real planner and bounded map/reduce pipeline. Its rubric
 scoring is deterministic: required facts and expected gaps are whitespace- and
 case-insensitive containment checks, while prohibited claims are reported as

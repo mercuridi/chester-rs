@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::OpenOptions,
+    fs::{OpenOptions, create_dir_all},
     path::{Path, PathBuf},
 };
 
@@ -939,13 +939,24 @@ fn validate(suite: &Suite) -> Result<()> {
 fn create_report_file(requested: Option<&Path>) -> Result<(std::fs::File, PathBuf)> {
     let path = requested.map_or_else(
         || {
-            PathBuf::from(format!(
-                "chronicle-synthesis-report-{}.json",
-                Utc::now().format("%Y%m%d-%H%M%S")
-            ))
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("logs/evaluation")
+                .join(format!(
+                    "chronicle-synthesis-report-{}.json",
+                    Utc::now().format("%Y%m%d-%H%M%S")
+                ))
         },
         Path::to_path_buf,
     );
+    if requested.is_none() {
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("logs/evaluation");
+        create_dir_all(&directory).with_context(|| {
+            format!(
+                "Failed to create report directory at {}",
+                directory.display()
+            )
+        })?;
+    }
     ensure!(!path.exists(), "Report path must be a new file");
     Ok((
         OpenOptions::new()

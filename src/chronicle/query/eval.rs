@@ -14,7 +14,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
-    fs::{File, OpenOptions},
+    fs::{File, OpenOptions, create_dir_all},
     path::{Path, PathBuf},
 };
 
@@ -257,7 +257,13 @@ fn create_report_file(requested_path: Option<&Path>) -> Result<(File, PathBuf)> 
         return Ok((file, path.to_owned()));
     }
 
-    let directory = std::env::current_dir().context("Failed to determine report directory")?;
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("logs/evaluation");
+    create_dir_all(&directory).with_context(|| {
+        format!(
+            "Failed to create report directory at {}",
+            directory.display()
+        )
+    })?;
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
     let mut suffix = 0_u64;
     loop {

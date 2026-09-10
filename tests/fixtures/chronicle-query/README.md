@@ -17,8 +17,8 @@ From the repository root, run the deterministic executor evaluation with default
 cargo run -- --chronicle-query-eval
 ```
 
-This uses the fixture suite and creates a timestamped `chronicle-query-report-*.json`
-in the current directory. You can override either path:
+This uses the fixture suite and creates a timestamped
+`logs/evaluation/chronicle-query-report-*.json` in the repository. You can override either path:
 
 ```sh
 cargo run -- --chronicle-query-eval SUITE.toml REPORT.json

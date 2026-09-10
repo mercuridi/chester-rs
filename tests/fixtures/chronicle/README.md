@@ -11,8 +11,8 @@ From the repository root:
 cargo run -- --chronicle-eval
 ```
 
-The runner writes a new `chronicle-report-YYYYMMDD-HHMMSS.json` file in the
-current directory automatically. If a report already exists for that timestamp,
+The runner writes a new `logs/evaluation/chronicle-report-YYYYMMDD-HHMMSS.json` file in the
+repository automatically. If a report already exists for that timestamp,
 it adds a numeric suffix. The suite defaults to
 `tests/fixtures/chronicle/suite.toml`, but you can provide a different suite
 path followed by an explicit report path when needed; existing files are never
