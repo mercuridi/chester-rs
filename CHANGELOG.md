@@ -1,6 +1,24 @@
 # Changelog
 
-## [3.0.0] — 2026-09-08
+## [3.1.0] — 2026-09-10
+
+### Features
+
+- Alias resolver preprocessing step
+- Persist note graph edges into chronicle database
+- Implement pagerank computation and persist scores on graph rebuild
+- Pagerank is now considered as part of initial retrieval of notes
+
+
+### Bug Fixes
+
+- Add explicit exclusions configuration
+- Properly expose pagerank diagnostics
+- Evaluation tools output to a logs subfolder
+- Logfiles output to hard-saved file on disc as well
+- Anonymise leaked fixtures
+
+## [v3.0.0] — 2026-09-08
 
 ### Features
 
