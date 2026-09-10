@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 
 use anyhow::Result;
 
-use crate::chronicle::indexer::db::repository::SearchResult;
+use crate::chronicle::indexer::db::repository::facade::SearchResult;
 
 #[derive(Debug)]
 pub struct PromptAssembly {
@@ -150,7 +150,7 @@ where
 #[allow(clippy::unnecessary_wraps, clippy::unwrap_used)]
 mod tests {
     use super::{build_prompt, build_prompt_with_budget};
-    use crate::chronicle::indexer::db::repository::SearchResult;
+    use crate::chronicle::indexer::db::repository::facade::SearchResult;
 
     fn result(path: &str, heading: Option<&str>, text: &str) -> SearchResult {
         SearchResult {

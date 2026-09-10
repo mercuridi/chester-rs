@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use std::fmt::Write as _;
 
-use super::indexer::db::repository::SearchResult;
+use super::indexer::db::repository::facade::SearchResult;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceNote {

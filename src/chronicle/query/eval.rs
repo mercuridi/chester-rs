@@ -3,7 +3,7 @@ use super::{plan::Plan, planner};
 use crate::chronicle::{
     config::Config,
     indexer::{
-        db::repository::{IndexerDb, StructuredResult},
+        db::repository::facade::{IndexerDb, StructuredResult},
         scanner,
     },
     llm::Llm,

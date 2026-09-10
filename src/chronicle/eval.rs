@@ -1,6 +1,6 @@
 //! Retrieval evaluation only: no Discord connection, live database, or answer LLM.
 use super::indexer::{
-    db::repository::{AccessScope, IndexerDb, SearchResult},
+    db::repository::facade::{AccessScope, IndexerDb, SearchResult},
     embedder::Embedder,
     retriever::{RetrievalDiagnostics, SearchSettings, select_with_diagnostics},
     scanner,
@@ -452,7 +452,7 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn fixture_lexical_retrieval_and_annotations_work_without_a_model() -> Result<()> {
-        use super::super::indexer::db::repository::IndexedChunk;
+        use super::super::indexer::db::repository::facade::IndexedChunk;
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chronicle");
         let mut suite: Suite = toml::from_str(&std::fs::read_to_string(root.join("suite.toml"))?)?;
         let (documents, _) = scanner::scan_directory_with_stats(root.join("corpus"))?;

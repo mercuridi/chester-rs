@@ -21,7 +21,7 @@ use tracing::info;
 use crate::{
     chronicle::{
         config::Config,
-        indexer::{db::repository::IndexerDb, embedder::Embedder, service::Indexer},
+        indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,
         recording::recorder::{notify_recording_user, scan_incomplete_manifests},
         runtime::GpuRuntime,

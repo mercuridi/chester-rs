@@ -1,7 +1,7 @@
 //! Model-backed bounded-synthesis evaluation with deterministic rubric scoring.
 use super::{
     config::Config,
-    indexer::{db::repository::IndexerDb, embedder::Embedder, service::Indexer},
+    indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
     llm::{LanguageModel, Llm},
     query::{plan::Plan, planner},
     runtime::GpuRuntime,

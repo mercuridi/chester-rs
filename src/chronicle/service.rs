@@ -6,7 +6,7 @@ use tracing::{debug, info, instrument};
 use super::{
     config::SynthesisSettings,
     indexer::{
-        db::repository::{AccessScope, IndexerDb, SearchResult},
+        db::repository::facade::{AccessScope, IndexerDb, SearchResult},
         prompt,
         retriever::{
             CandidatePoolPolicy, FusionPolicy, RetrievalLimits, RetrievalOutcome, Retriever,
@@ -809,10 +809,10 @@ fn truncate_to_char_limit(answer: &str, max_length: usize) -> String {
 #[allow(clippy::type_complexity, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::{Chronicle, truncate_to_char_limit};
-    use crate::chronicle::indexer::db::repository::IndexerDb;
+    use crate::chronicle::indexer::db::repository::facade::IndexerDb;
     use crate::chronicle::{
         indexer::{
-            db::repository::SearchResult,
+            db::repository::facade::SearchResult,
             retriever::{RetrievalOutcome, RetrieverApi, SearchSettings},
         },
         llm::LanguageModel,
@@ -840,7 +840,7 @@ mod tests {
     struct FakeRetriever {
         outcome: FakeOutcome,
         calls: Mutex<Vec<(String, usize, usize, f32, f32, usize)>>,
-        accesses: Mutex<Vec<crate::chronicle::indexer::db::repository::AccessScope>>,
+        accesses: Mutex<Vec<crate::chronicle::indexer::db::repository::facade::AccessScope>>,
         loads: Mutex<usize>,
         unloads: Mutex<usize>,
     }
@@ -863,7 +863,7 @@ mod tests {
             &self,
             query: &str,
             settings: SearchSettings,
-            _access: crate::chronicle::indexer::db::repository::AccessScope,
+            _access: crate::chronicle::indexer::db::repository::facade::AccessScope,
         ) -> Result<RetrievalOutcome> {
             self.calls
                 .lock()
@@ -1339,7 +1339,7 @@ mod tests {
             chronicle
                 .ask_for(
                     "Summarise the history of Northmere.",
-                    crate::chronicle::indexer::db::repository::AccessScope::Gm,
+                    crate::chronicle::indexer::db::repository::facade::AccessScope::Gm,
                 )
                 .await?,
             "answer"
@@ -1350,7 +1350,7 @@ mod tests {
                 .lock()
                 .map_err(|_| anyhow!("accesses poisoned"))?
                 .as_slice(),
-            &[crate::chronicle::indexer::db::repository::AccessScope::Gm]
+            &[crate::chronicle::indexer::db::repository::facade::AccessScope::Gm]
         );
         Ok(())
     }
@@ -1610,7 +1610,7 @@ mod tests {
             chronicle
                 .ask_for(
                     "question",
-                    crate::chronicle::indexer::db::repository::AccessScope::Gm,
+                    crate::chronicle::indexer::db::repository::facade::AccessScope::Gm,
                 )
                 .await?,
             "answer"
@@ -1621,7 +1621,7 @@ mod tests {
                 .lock()
                 .map_err(|_| anyhow!("accesses poisoned"))?
                 .as_slice(),
-            &[crate::chronicle::indexer::db::repository::AccessScope::Gm]
+            &[crate::chronicle::indexer::db::repository::facade::AccessScope::Gm]
         );
         Ok(())
     }

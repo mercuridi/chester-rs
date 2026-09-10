@@ -9,7 +9,7 @@ use tracing::{debug, info, instrument, warn};
 
 use super::{
     chunker,
-    db::repository::{IndexedChunk, IndexerDb},
+    db::repository::facade::{IndexedChunk, IndexerDb},
     embedder::{Embedder, EmbeddingModel},
     link_resolver, scanner,
 };

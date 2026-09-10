@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, instrument};
 
 use super::{
-    db::repository::{AccessScope, IndexerDb, PageRankSignal, SearchResult},
+    db::repository::facade::{AccessScope, IndexerDb, PageRankSignal, SearchResult},
     embedder::Embedder,
 };
 

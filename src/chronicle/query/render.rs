@@ -1,5 +1,5 @@
 use super::plan::Plan;
-use crate::chronicle::indexer::db::repository::StructuredResult;
+use crate::chronicle::indexer::db::repository::facade::StructuredResult;
 
 pub const LIST_LIMIT: usize = 20;
 
@@ -62,7 +62,7 @@ fn list_text(header: &str, names: &[String], total: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chronicle::{indexer::db::repository::StructuredNote, query::plan::Filters};
+    use crate::chronicle::{indexer::db::repository::facade::StructuredNote, query::plan::Filters};
     #[test]
     fn lists_report_total_and_do_not_silently_truncate_names() {
         let plan = Plan::List {
