@@ -1580,21 +1580,21 @@ mod tests {
     #[tokio::test]
     async fn structured_conditions_query_scalar_and_wikilink_list_metadata() -> Result<()> {
         let (_directory, db) = test_database().await?;
-        let source = "---\nid: vex\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nlife_status: dead\nlife_status_cause: '[[Battle of Castle Vetra]]'\nappearances: ['[[Blueskies]]']\n---\n";
+        let source = "---\nid: vex\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nlife_status: dead\nlife_status_cause: '[[Great Dungeon Fight]]'\nappearances: ['[[Blueskies]]']\n---\n";
         let (metadata, _) =
             crate::chronicle::indexer::frontmatter::parse(source)?.context("note")?;
         db.replace_note("Vex.md", "hash", &[], &[], &metadata)
             .await?;
 
         let plan = crate::chronicle::query::planner::parse(
-            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"[[Battle of Castle Vetra]]"},{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"[[Great Dungeon Fight]]"},{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
         )?;
         let result = db.execute_plan(&plan).await?;
         assert_eq!(result.total, 1);
         assert_eq!(result.notes[0].id, "vex");
 
         let mut plain_target_plan = crate::chronicle::query::planner::parse(
-            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"Battle of Castle Vetra"}]}}"#,
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"Great Dungeon Fight"}]}}"#,
         )?;
         db.resolve_string_or_wikilinks(&mut plain_target_plan)
             .await?;
@@ -1605,7 +1605,7 @@ mod tests {
                 .1
                 .conditions[0]
                 .value,
-            "[[Battle of Castle Vetra]]"
+            "[[Great Dungeon Fight]]"
         );
         assert_eq!(db.execute_plan(&plain_target_plan).await?.total, 1);
 

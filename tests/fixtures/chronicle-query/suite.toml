@@ -171,18 +171,18 @@ conditions = [{ field = "affiliations", operator = "contains", value = "[[Ember 
 
 [[cases]]
 id = "event-death-cause"
-question = "List characters whose life status cause is the Battle of Castle Vetra."
+question = "List characters whose life status cause is the Great Dungeon Fight."
 expected_total = 1
 expected_ids = ["corin"]
 [cases.plan]
 operation = "list"
 note_type = "character"
 [cases.plan.filters]
-conditions = [{ field = "life_status_cause", operator = "equals", value = "[[Battle of Castle Vetra]]" }]
+conditions = [{ field = "life_status_cause", operator = "equals", value = "[[Great Dungeon Fight]]" }]
 
 [[cases]]
 id = "combined-generic-conditions"
-question = "List characters who appeared in Blueskies and whose life status cause is the Battle of Castle Vetra."
+question = "List characters who appeared in Blueskies and whose life status cause is the Great Dungeon Fight."
 expected_total = 1
 expected_ids = ["corin"]
 [cases.plan]
@@ -191,7 +191,7 @@ note_type = "character"
 [cases.plan.filters]
 conditions = [
   { field = "appearances", operator = "contains", value = "[[Blueskies]]" },
-  { field = "life_status_cause", operator = "equals", value = "[[Battle of Castle Vetra]]" },
+  { field = "life_status_cause", operator = "equals", value = "[[Great Dungeon Fight]]" },
 ]
 
 [[cases]]
