@@ -365,7 +365,7 @@ async fn run_evaluation_command() -> Result<bool> {
         let suite_path = arguments
             .get(1)
             .map_or(DEFAULT_CHRONICLE_SYNTHESIS_EVAL_SUITE, String::as_str);
-        chronicle::synthesis_eval::run(
+        chronicle::synthesis_eval::runner::run(
             std::path::Path::new(suite_path),
             arguments.get(2).map(std::path::Path::new),
         )
