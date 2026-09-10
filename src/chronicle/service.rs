@@ -6,7 +6,7 @@ use tracing::{debug, info, instrument};
 use super::{
     config::SynthesisSettings,
     indexer::{
-        db::repository::{AccessScope, IndexerDb},
+        db::repository::{AccessScope, IndexerDb, SearchResult},
         prompt,
         retriever::{
             CandidatePoolPolicy, FusionPolicy, RetrievalLimits, RetrievalOutcome, Retriever,
@@ -15,6 +15,7 @@ use super::{
     },
     llm::{LanguageModel, Llm},
     runtime::GpuRuntime,
+    synthesis::{self, EvidenceNote},
     transcription::service::TranscriptionService,
 };
 
@@ -54,6 +55,54 @@ pub struct SynthesisDiagnostics {
     pub prompt_token_counts: Vec<usize>,
     pub final_answer_length_retried: bool,
     pub final_answer_truncated: bool,
+}
+
+enum SynthesisRetrieval {
+    Evidence(Vec<SearchResult>),
+    ImmediateResponse(&'static str),
+}
+
+struct SynthesisEvidenceNotes {
+    notes: Vec<EvidenceNote>,
+    partial: bool,
+    reduction_depth: usize,
+}
+
+const PARTIAL_SYNTHESIS_PREFIX: &str =
+    "This is a partial synthesis based on the retrieved notes completed so far.\n\n";
+
+impl SynthesisDiagnostics {
+    fn from_results(results: &[SearchResult]) -> Self {
+        let mut chunks_per_document = BTreeMap::new();
+        for result in results {
+            *chunks_per_document
+                .entry(result.document_path.clone())
+                .or_insert(0) += 1;
+        }
+        Self {
+            retrieved_documents: results
+                .iter()
+                .enumerate()
+                .map(|(rank, result)| RetrievedDocumentDiagnostic {
+                    id: std::path::Path::new(&result.document_path)
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    rank: rank + 1,
+                    distance: result.distance,
+                })
+                .collect(),
+            accepted_result_count: results.len(),
+            omitted_result_count: 0,
+            chunks_per_document,
+            map_batch_count: 0,
+            reduction_pass_count: 0,
+            prompt_token_counts: Vec::new(),
+            final_answer_length_retried: false,
+            final_answer_truncated: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -357,90 +406,84 @@ impl Chronicle {
         Ok(format!("{prefix}{answer}"))
     }
 
-    #[allow(clippy::too_many_lines)]
     async fn answer_from_synthesis(&self, question: &str, access: AccessScope) -> Result<String> {
-        use super::{
-            indexer::retriever::{
-                CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
-            },
-            synthesis::{self, EvidenceNote},
+        let results = match self.retrieve_synthesis_evidence(question, access).await {
+            SynthesisRetrieval::Evidence(results) => results,
+            SynthesisRetrieval::ImmediateResponse(response) => return Ok(response.into()),
         };
+        let mut diagnostics = SynthesisDiagnostics::from_results(&results);
+        let evidence = self
+            .generate_evidence_notes(question, &results, &mut diagnostics)
+            .await?;
+        if evidence.notes.is_empty() {
+            return Ok(self.incomplete_synthesis_response());
+        }
+        let Some(evidence) = self
+            .reduce_evidence_notes_until_fit(question, evidence, &mut diagnostics)
+            .await?
+        else {
+            return Ok(self.incomplete_synthesis_response());
+        };
+        let answer = self
+            .generate_synthesis_answer(question, evidence, &mut diagnostics)
+            .await?;
+        self.record_synthesis_diagnostics(diagnostics)?;
+        Ok(answer)
+    }
 
-        let outcome = self
-            .retriever
-            .search(
-                question,
-                SearchSettings {
-                    limits: RetrievalLimits {
-                        limit: self.synthesis.retrieval_limit,
-                        candidate_limit: self.synthesis.candidate_limit,
-                    },
-                    candidate_pool: CandidatePoolPolicy {
-                        distance_threshold: self.retrieval_distance_threshold,
-                    },
-                    fusion: FusionPolicy {
-                        vector_rrf_weight: 1.0,
-                        lexical_rrf_weight: 1.0,
-                        pagerank_weight: self.pagerank_weight,
-                        rrf_rank_constant: 60.0,
-                    },
-                    selection: SelectionPolicy {
-                        near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
-                        max_chunks_per_document: self.synthesis.max_chunks_per_document,
-                    },
-                },
-                access,
-            )
-            .await;
-        let results = match outcome {
-            Ok(RetrievalOutcome::Results(results)) => results,
+    async fn retrieve_synthesis_evidence(
+        &self,
+        question: &str,
+        access: AccessScope,
+    ) -> SynthesisRetrieval {
+        let settings = SearchSettings {
+            limits: RetrievalLimits {
+                limit: self.synthesis.retrieval_limit,
+                candidate_limit: self.synthesis.candidate_limit,
+            },
+            candidate_pool: CandidatePoolPolicy {
+                distance_threshold: self.retrieval_distance_threshold,
+            },
+            fusion: FusionPolicy {
+                vector_rrf_weight: 1.0,
+                lexical_rrf_weight: 1.0,
+                pagerank_weight: self.pagerank_weight,
+                rrf_rank_constant: 60.0,
+            },
+            selection: SelectionPolicy {
+                near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
+                max_chunks_per_document: self.synthesis.max_chunks_per_document,
+            },
+        };
+        match self.retriever.search(question, settings, access).await {
+            Ok(RetrievalOutcome::Results(results)) => SynthesisRetrieval::Evidence(results),
             Ok(RetrievalOutcome::BadQuestion) => {
-                return Ok("Please provide a non-empty question.".into());
+                SynthesisRetrieval::ImmediateResponse("Please provide a non-empty question.")
             }
-            Ok(RetrievalOutcome::CorpusEmpty) => return Ok("Chronicle corpus is empty.".into()),
+            Ok(RetrievalOutcome::CorpusEmpty) => {
+                SynthesisRetrieval::ImmediateResponse("Chronicle corpus is empty.")
+            }
             Ok(RetrievalOutcome::NoResultMeetsThreshold) => {
-                return Ok("No relevant Chronicle context was found.".into());
+                SynthesisRetrieval::ImmediateResponse("No relevant Chronicle context was found.")
             }
             Err(error) => {
                 tracing::warn!(%error, "Chronicle synthesis retrieval failed");
-                return Ok("Chronicle retrieval failed.".into());
+                SynthesisRetrieval::ImmediateResponse("Chronicle retrieval failed.")
             }
-        };
+        }
+    }
 
+    async fn generate_evidence_notes(
+        &self,
+        question: &str,
+        results: &[SearchResult],
+        diagnostics: &mut SynthesisDiagnostics,
+    ) -> Result<SynthesisEvidenceNotes> {
         let token_budget = self
             .synthesis
             .batch_token_budget
             .min(self.llm.prompt_token_budget());
-        let mut diagnostics = SynthesisDiagnostics {
-            retrieved_documents: results
-                .iter()
-                .enumerate()
-                .map(|(rank, result)| RetrievedDocumentDiagnostic {
-                    id: std::path::Path::new(&result.document_path)
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    rank: rank + 1,
-                    distance: result.distance,
-                })
-                .collect(),
-            accepted_result_count: results.len(),
-            omitted_result_count: 0,
-            chunks_per_document: BTreeMap::new(),
-            map_batch_count: 0,
-            reduction_pass_count: 0,
-            prompt_token_counts: Vec::new(),
-            final_answer_length_retried: false,
-            final_answer_truncated: false,
-        };
-        for result in &results {
-            *diagnostics
-                .chunks_per_document
-                .entry(result.document_path.clone())
-                .or_insert(0) += 1;
-        }
-        let sources = synthesis::retrieved_evidence(&results);
+        let sources = synthesis::retrieved_evidence(results);
         let map_plan = synthesis::pack_batches(
             question,
             &sources,
@@ -486,43 +529,49 @@ impl Chronicle {
                 }
             }
         }
-        if notes.is_empty() {
-            return Ok(truncate_to_char_limit(
-                "Chronicle synthesis could not be completed from the retrieved notes.",
-                self.max_reply_length,
-            ));
-        }
         debug!(
             intermediate_note_count = notes.len(),
             partial, "Completed Chronicle synthesis map stage"
         );
+        Ok(SynthesisEvidenceNotes {
+            notes,
+            partial,
+            reduction_depth: 0,
+        })
+    }
 
-        let mut reduction_depth = 0usize;
+    async fn reduce_evidence_notes_until_fit(
+        &self,
+        question: &str,
+        mut evidence: SynthesisEvidenceNotes,
+        diagnostics: &mut SynthesisDiagnostics,
+    ) -> Result<Option<SynthesisEvidenceNotes>> {
+        let token_budget = self
+            .synthesis
+            .batch_token_budget
+            .min(self.llm.prompt_token_budget());
         while !synthesis::final_prompt_fits(
             question,
-            &notes,
-            partial,
+            &evidence.notes,
+            evidence.partial,
             self.llm.prompt_token_budget(),
             |prompt| self.llm.count_input_tokens(prompt),
         )? {
             let reduction_plan = synthesis::pack_batches(
                 question,
-                &notes,
+                &evidence.notes,
                 token_budget,
-                notes.len(),
+                evidence.notes.len(),
                 synthesis::reduce_prompt,
                 |prompt| self.llm.count_input_tokens(prompt),
             )?;
             diagnostics.reduction_pass_count += 1;
-            if reduction_plan.batches.len() >= notes.len() {
+            if reduction_plan.batches.len() >= evidence.notes.len() {
                 tracing::warn!(
-                    evidence_note_count = notes.len(),
+                    evidence_note_count = evidence.notes.len(),
                     "Chronicle synthesis reduction could not make progress"
                 );
-                return Ok(truncate_to_char_limit(
-                    "Chronicle synthesis could not be completed from the retrieved notes.",
-                    self.max_reply_length,
-                ));
+                return Ok(None);
             }
             let mut reduced = Vec::with_capacity(reduction_plan.batches.len());
             for batch in reduction_plan.batches {
@@ -531,7 +580,7 @@ impl Chronicle {
                 let prompt_tokens = self.llm.count_input_tokens(&prompt)?;
                 diagnostics.prompt_token_counts.push(prompt_tokens);
                 debug!(
-                    reduction_depth,
+                    reduction_depth = evidence.reduction_depth,
                     source_labels = ?source_labels,
                     source_note_count = batch.len(),
                     prompt_tokens,
@@ -543,51 +592,58 @@ impl Chronicle {
                         text,
                     }),
                     Err(error) => {
-                        tracing::warn!(%error, reduction_depth, completed_note_count = reduced.len(), "Chronicle synthesis reduction generation failed");
-                        partial = true;
+                        tracing::warn!(%error, reduction_depth = evidence.reduction_depth, completed_note_count = reduced.len(), "Chronicle synthesis reduction generation failed");
+                        evidence.partial = true;
                         break;
                     }
                 }
             }
             if reduced.is_empty() {
-                return Ok(truncate_to_char_limit(
-                    "Chronicle synthesis could not be completed from the retrieved notes.",
-                    self.max_reply_length,
-                ));
+                return Ok(None);
             }
-            notes = reduced;
-            reduction_depth += 1;
+            evidence.notes = reduced;
+            evidence.reduction_depth += 1;
             debug!(
-                reduction_depth,
-                intermediate_note_count = notes.len(),
-                partial,
+                reduction_depth = evidence.reduction_depth,
+                intermediate_note_count = evidence.notes.len(),
+                partial = evidence.partial,
                 "Completed Chronicle synthesis reduction pass"
             );
         }
-        let coverage_ledger = synthesis::CoverageLedger::new(notes, partial);
+        Ok(Some(evidence))
+    }
+
+    async fn generate_synthesis_answer(
+        &self,
+        question: &str,
+        evidence: SynthesisEvidenceNotes,
+        diagnostics: &mut SynthesisDiagnostics,
+    ) -> Result<String> {
+        let coverage_ledger = synthesis::CoverageLedger::new(evidence.notes, evidence.partial);
         debug!(
-            reduction_depth,
-            partial,
+            reduction_depth = evidence.reduction_depth,
+            partial = evidence.partial,
             coverage_ledger = %coverage_ledger.debug_artifact(),
             "Completed Chronicle synthesis coverage ledger"
         );
-        let final_prompt =
-            synthesis::final_prompt_with_partial_status(question, coverage_ledger.notes(), partial);
+        let final_prompt = synthesis::final_prompt_with_partial_status(
+            question,
+            coverage_ledger.notes(),
+            evidence.partial,
+        );
         let final_prompt_tokens = self.llm.count_input_tokens(&final_prompt)?;
         diagnostics.prompt_token_counts.push(final_prompt_tokens);
         debug!(
-            reduction_depth,
+            reduction_depth = evidence.reduction_depth,
             evidence_note_count = coverage_ledger.notes().len(),
             final_prompt_tokens,
             prompt_token_budget = self.llm.prompt_token_budget(),
-            partial,
+            partial = evidence.partial,
             "Built Chronicle synthesis answer prompt"
         );
-        let partial_prefix =
-            "This is a partial synthesis based on the retrieved notes completed so far.\n\n";
-        let answer_limit = if partial {
+        let answer_limit = if evidence.partial {
             self.max_reply_length
-                .saturating_sub(partial_prefix.chars().count())
+                .saturating_sub(PARTIAL_SYNTHESIS_PREFIX.chars().count())
         } else {
             self.max_reply_length
         };
@@ -595,15 +651,26 @@ impl Chronicle {
             self.generate_answer(&final_prompt, answer_limit).await?;
         diagnostics.final_answer_length_retried = retried;
         diagnostics.final_answer_truncated = truncated;
+        Ok(if evidence.partial {
+            format!("{PARTIAL_SYNTHESIS_PREFIX}{answer}")
+        } else {
+            answer
+        })
+    }
+
+    fn record_synthesis_diagnostics(&self, diagnostics: SynthesisDiagnostics) -> Result<()> {
         self.last_synthesis_diagnostics
             .lock()
             .map_err(|_| anyhow::anyhow!("synthesis diagnostics state is poisoned"))?
             .replace(diagnostics);
-        Ok(if partial {
-            format!("{partial_prefix}{answer}")
-        } else {
-            answer
-        })
+        Ok(())
+    }
+
+    fn incomplete_synthesis_response(&self) -> String {
+        truncate_to_char_limit(
+            "Chronicle synthesis could not be completed from the retrieved notes.",
+            self.max_reply_length,
+        )
     }
 
     async fn generate_answer(
