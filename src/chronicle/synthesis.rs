@@ -493,8 +493,10 @@ mod tests {
 
     #[test]
     fn topology_selection_measures_duplicates_caps_and_result_limits() {
-        use crate::chronicle::indexer::retriever::SearchSettings;
         use crate::chronicle::indexer::retriever::select_with_diagnostics;
+        use crate::chronicle::indexer::retriever::{
+            CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
+        };
 
         let result = |document_path: &str, chunk_index: i64, text: &str| SearchResult {
             document_path: document_path.into(),
@@ -521,12 +523,23 @@ mod tests {
             Vec::new(),
             candidates,
             SearchSettings {
-                limit: 4,
-                candidate_limit: 5,
-                distance_threshold: 0.8,
-                near_duplicate_threshold: 0.85,
-                max_chunks_per_document: 2,
-                pagerank_weight: 0.0,
+                limits: RetrievalLimits {
+                    limit: 4,
+                    candidate_limit: 5,
+                },
+                candidate_pool: CandidatePoolPolicy {
+                    distance_threshold: 0.8,
+                },
+                fusion: FusionPolicy {
+                    vector_rrf_weight: 1.0,
+                    lexical_rrf_weight: 1.0,
+                    pagerank_weight: 0.0,
+                    rrf_rank_constant: 60.0,
+                },
+                selection: SelectionPolicy {
+                    near_duplicate_threshold: 0.85,
+                    max_chunks_per_document: 2,
+                },
             },
         );
 

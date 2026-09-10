@@ -23,6 +23,12 @@ It does not load application configuration, connect to Discord, open live databa
 or load an answer LLM. The embedding model must be cached or downloadable.
 The temporary database is discarded after the run.
 
+The suite's `[retrieval]` settings are grouped by responsibility:
+`[retrieval.limits]` controls shortlist and context sizes,
+`[retrieval.candidate_pool]` controls raw eligibility,
+`[retrieval.fusion]` controls ranking weights, and
+`[retrieval.selection]` controls duplicate handling and document diversity.
+
 ## Reading the report
 
 The JSON report includes the model ID and resolved snapshot revision, a checksum

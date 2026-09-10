@@ -36,39 +36,91 @@ pub enum RetrievalOutcome {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SearchSettings {
+    pub limits: RetrievalLimits,
+    pub candidate_pool: CandidatePoolPolicy,
+    pub fusion: FusionPolicy,
+    pub selection: SelectionPolicy,
+}
+
+/// Operational limits: candidate retrieval work and final context size.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetrievalLimits {
     pub limit: usize,
     pub candidate_limit: usize,
+}
+
+/// Candidate-pool policy: determines which raw retrieval results reach fusion.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidatePoolPolicy {
     pub distance_threshold: f32,
-    pub near_duplicate_threshold: f32,
-    pub max_chunks_per_document: usize,
+}
+
+/// Ranking policy: determines how eligible candidates are fused before reranking and selection.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FusionPolicy {
+    #[serde(default = "default_rrf_weight")]
+    pub vector_rrf_weight: f64,
+    #[serde(default = "default_rrf_weight")]
+    pub lexical_rrf_weight: f64,
     #[serde(default = "default_pagerank_weight")]
     pub pagerank_weight: f64,
+    #[serde(default = "default_rrf_rank_constant")]
+    pub rrf_rank_constant: f64,
+}
+
+/// Context-selection policy: applies after fusion (and a future reranking stage).
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectionPolicy {
+    pub near_duplicate_threshold: f32,
+    pub max_chunks_per_document: usize,
 }
 
 const fn default_pagerank_weight() -> f64 {
     0.15
 }
 
+const fn default_rrf_weight() -> f64 {
+    1.0
+}
+
+const fn default_rrf_rank_constant() -> f64 {
+    60.0
+}
+
 impl SearchSettings {
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
-            self.limit > 0 && self.candidate_limit >= self.limit && self.candidate_limit <= 1000,
+            self.limits.limit > 0
+                && self.limits.candidate_limit >= self.limits.limit
+                && self.limits.candidate_limit <= 1000,
             "Invalid retrieval limits"
         );
         anyhow::ensure!(
-            self.distance_threshold.is_finite() && self.distance_threshold >= 0.0,
+            self.candidate_pool.distance_threshold.is_finite()
+                && self.candidate_pool.distance_threshold >= 0.0,
             "Invalid distance threshold"
         );
         anyhow::ensure!(
-            (0.0..=1.0).contains(&self.near_duplicate_threshold),
+            (0.0..=1.0).contains(&self.selection.near_duplicate_threshold),
             "Invalid duplicate threshold"
         );
         anyhow::ensure!(
-            self.max_chunks_per_document > 0,
+            self.selection.max_chunks_per_document > 0,
             "Document cap must be positive"
         );
         anyhow::ensure!(
-            self.pagerank_weight.is_finite() && (0.0..=1.0).contains(&self.pagerank_weight),
+            self.fusion.vector_rrf_weight.is_finite()
+                && self.fusion.vector_rrf_weight >= 0.0
+                && self.fusion.lexical_rrf_weight.is_finite()
+                && self.fusion.lexical_rrf_weight >= 0.0
+                && self.fusion.pagerank_weight.is_finite()
+                && (0.0..=1.0).contains(&self.fusion.pagerank_weight)
+                && self.fusion.rrf_rank_constant.is_finite()
+                && self.fusion.rrf_rank_constant >= 0.0,
             "Invalid PageRank weight"
         );
         Ok(())
@@ -117,9 +169,10 @@ pub fn select_with_diagnostics_and_pagerank(
     pagerank: &HashMap<String, PageRankSignal>,
 ) -> (Vec<SearchResult>, RetrievalDiagnostics) {
     let mut candidates = build_ranked_candidates(vector, lexical, pagerank);
-    filter_vector_candidates(&mut candidates, settings.distance_threshold);
-    score_fused_candidates(&mut candidates, settings.pagerank_weight);
-    let accepted = apply_selection_constraints(&mut candidates, settings);
+    filter_vector_candidates(&mut candidates, settings.candidate_pool);
+    score_fused_candidates(&mut candidates, settings.fusion);
+    let accepted =
+        apply_selection_constraints(&mut candidates, settings.limits.limit, settings.selection);
 
     (accepted, finalize_diagnostics(settings, candidates))
 }
@@ -215,32 +268,35 @@ fn build_ranked_candidates(
     candidates.into_values().collect()
 }
 
-fn filter_vector_candidates(candidates: &mut [RankedCandidate], distance_threshold: f32) {
+fn filter_vector_candidates(candidates: &mut [RankedCandidate], policy: CandidatePoolPolicy) {
     for candidate in candidates {
-        candidate.vector_passed_threshold =
-            candidate.vector_rank.is_some() && candidate.result.distance <= distance_threshold;
+        candidate.vector_passed_threshold = candidate.vector_rank.is_some()
+            && candidate.result.distance <= policy.distance_threshold;
         candidate.eligible = candidate.vector_passed_threshold || candidate.lexical_rank.is_some();
     }
 }
 
-fn score_fused_candidates(candidates: &mut [RankedCandidate], pagerank_weight: f64) {
+fn score_fused_candidates(candidates: &mut [RankedCandidate], policy: FusionPolicy) {
     for candidate in candidates.iter_mut().filter(|candidate| candidate.eligible) {
-        for rank in [
-            candidate
-                .vector_rank
-                .filter(|_| candidate.vector_passed_threshold),
-            candidate.lexical_rank,
-        ]
-        .into_iter()
-        .flatten()
-        {
+        for (rank, weight) in [
+            (
+                candidate
+                    .vector_rank
+                    .filter(|_| candidate.vector_passed_threshold),
+                policy.vector_rrf_weight,
+            ),
+            (candidate.lexical_rank, policy.lexical_rrf_weight),
+        ] {
+            let Some(rank) = rank else {
+                continue;
+            };
             #[allow(clippy::cast_precision_loss)]
-            let contribution = 1.0 / (60.0 + rank as f64);
+            let contribution = weight / (policy.rrf_rank_constant + rank as f64);
             candidate.rrf_score += contribution;
         }
         if let Some(rank) = candidate.pagerank_rank.filter(|rank| *rank > 0) {
             #[allow(clippy::cast_precision_loss)]
-            let contribution = pagerank_weight / (60.0 + rank as f64);
+            let contribution = policy.pagerank_weight / (policy.rrf_rank_constant + rank as f64);
             candidate.pagerank_contribution = contribution;
         }
         candidate.final_fusion_score =
@@ -264,27 +320,28 @@ fn score_fused_candidates(candidates: &mut [RankedCandidate], pagerank_weight: f
 
 fn apply_selection_constraints(
     candidates: &mut [RankedCandidate],
-    settings: SearchSettings,
+    result_limit: usize,
+    policy: SelectionPolicy,
 ) -> Vec<SearchResult> {
     let mut accepted = Vec::new();
     let mut exact_keys = HashSet::new();
     let mut counts = HashMap::new();
     for candidate in candidates.iter_mut().filter(|candidate| candidate.eligible) {
-        let decision = if accepted.len() >= settings.limit {
+        let decision = if accepted.len() >= result_limit {
             "result_limit"
         } else if !exact_keys.insert(canonical_text(&candidate.result.text)) {
             "exact_duplicate"
         } else if is_near_duplicate(
             &candidate.result,
             &accepted,
-            settings.near_duplicate_threshold,
+            policy.near_duplicate_threshold,
         ) {
             "near_duplicate"
         } else if counts
             .get(&candidate.result.document_path)
             .copied()
             .unwrap_or(0)
-            >= settings.max_chunks_per_document
+            >= policy.max_chunks_per_document
         {
             "document_cap"
         } else {
@@ -397,9 +454,9 @@ impl Retriever {
 
         let (vector, lexical) = tokio::try_join!(
             self.db
-                .search_similar_for(&embedding, settings.candidate_limit, access),
+                .search_similar_for(&embedding, settings.limits.candidate_limit, access),
             self.db
-                .search_lexical_for(query, settings.candidate_limit, access),
+                .search_lexical_for(query, settings.limits.candidate_limit, access),
         )?;
         let paths = vector
             .iter()
@@ -457,7 +514,15 @@ fn reciprocal_rank_fusion_with_pagerank(
         candidate.vector_passed_threshold = candidate.vector_rank.is_some();
         candidate.eligible = candidate.vector_passed_threshold || candidate.lexical_rank.is_some();
     }
-    score_fused_candidates(&mut candidates, pagerank_weight);
+    score_fused_candidates(
+        &mut candidates,
+        FusionPolicy {
+            vector_rrf_weight: 1.0,
+            lexical_rrf_weight: 1.0,
+            pagerank_weight,
+            rrf_rank_constant: 60.0,
+        },
+    );
     candidates
         .into_iter()
         .filter(|candidate| candidate.eligible)
@@ -476,12 +541,23 @@ fn deduplicate_and_diversify(
         Vec::new(),
         candidates,
         SearchSettings {
-            limit,
-            candidate_limit: 1000,
-            distance_threshold: 0.8,
-            near_duplicate_threshold,
-            max_chunks_per_document,
-            pagerank_weight: 0.0,
+            limits: RetrievalLimits {
+                limit,
+                candidate_limit: 1000,
+            },
+            candidate_pool: CandidatePoolPolicy {
+                distance_threshold: 0.8,
+            },
+            fusion: FusionPolicy {
+                vector_rrf_weight: 1.0,
+                lexical_rrf_weight: 1.0,
+                pagerank_weight: 0.0,
+                rrf_rank_constant: 60.0,
+            },
+            selection: SelectionPolicy {
+                near_duplicate_threshold,
+                max_chunks_per_document,
+            },
         },
     );
     let count = |reason| {
@@ -577,6 +653,33 @@ mod tests {
         }
     }
 
+    fn settings(
+        limit: usize,
+        candidate_limit: usize,
+        distance_threshold: f32,
+        near_duplicate_threshold: f32,
+        max_chunks_per_document: usize,
+        pagerank_weight: f64,
+    ) -> SearchSettings {
+        SearchSettings {
+            limits: RetrievalLimits {
+                limit,
+                candidate_limit,
+            },
+            candidate_pool: CandidatePoolPolicy { distance_threshold },
+            fusion: FusionPolicy {
+                vector_rrf_weight: 1.0,
+                lexical_rrf_weight: 1.0,
+                pagerank_weight,
+                rrf_rank_constant: 60.0,
+            },
+            selection: SelectionPolicy {
+                near_duplicate_threshold,
+                max_chunks_per_document,
+            },
+        }
+    }
+
     #[test]
     fn diagnostics_explain_each_selection_decision_without_passage_text() -> Result<()> {
         let mut rejected = result("threshold", 0, "private body text", false);
@@ -589,18 +692,8 @@ mod tests {
             result("d", 0, "another distinct passage", false),
             result("e", 0, "beyond result budget", false),
         ];
-        let (selected, report) = select_with_diagnostics(
-            vec![rejected],
-            lexical,
-            SearchSettings {
-                limit: 2,
-                candidate_limit: 10,
-                distance_threshold: 0.8,
-                near_duplicate_threshold: 0.75,
-                max_chunks_per_document: 1,
-                pagerank_weight: 0.0,
-            },
-        );
+        let (selected, report) =
+            select_with_diagnostics(vec![rejected], lexical, settings(2, 10, 0.8, 0.75, 1, 0.0));
         assert_eq!(selected.len(), 2);
         let reasons = report
             .candidates
@@ -628,14 +721,7 @@ mod tests {
         let (selected, report) = select_with_diagnostics(
             vec![candidate.clone()],
             vec![candidate],
-            SearchSettings {
-                limit: 1,
-                candidate_limit: 1,
-                distance_threshold: 0.8,
-                near_duplicate_threshold: 0.85,
-                max_chunks_per_document: 1,
-                pagerank_weight: 0.0,
-            },
+            settings(1, 1, 0.8, 0.85, 1, 0.0),
         );
         assert_eq!(selected.len(), 1);
         let candidate = &report.candidates[0];
@@ -676,14 +762,7 @@ mod tests {
                 rank: 1,
             },
         )]);
-        let settings = SearchSettings {
-            limit: 2,
-            candidate_limit: 2,
-            distance_threshold: 0.8,
-            near_duplicate_threshold: 0.85,
-            max_chunks_per_document: 1,
-            pagerank_weight: 0.15,
-        };
+        let settings = settings(2, 2, 0.8, 0.85, 1, 0.15);
         let (selected, diagnostics) =
             select_with_diagnostics_and_pagerank(Vec::new(), lexical, settings, &pagerank);
         assert_eq!(selected[0].document_path, "central");
@@ -710,14 +789,7 @@ mod tests {
             result("central", 0, "central", false),
             result("semantic", 0, "semantic", false),
         ];
-        let settings = SearchSettings {
-            limit: 2,
-            candidate_limit: 2,
-            distance_threshold: 0.8,
-            near_duplicate_threshold: 0.85,
-            max_chunks_per_document: 1,
-            pagerank_weight: 0.0,
-        };
+        let settings = settings(2, 2, 0.8, 0.85, 1, 0.0);
         let pagerank = HashMap::from([(
             "central".to_owned(),
             PageRankSignal {
@@ -768,14 +840,7 @@ mod tests {
                 },
             ),
         ]);
-        let settings = SearchSettings {
-            limit: 2,
-            candidate_limit: 2,
-            distance_threshold: 0.8,
-            near_duplicate_threshold: 0.85,
-            max_chunks_per_document: 1,
-            pagerank_weight: 0.15,
-        };
+        let settings = settings(2, 2, 0.8, 0.85, 1, 0.15);
 
         let (selected, diagnostics) = select_with_diagnostics_and_pagerank(
             vec![peripheral.clone()],

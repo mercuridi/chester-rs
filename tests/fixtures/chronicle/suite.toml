@@ -3,10 +3,17 @@ max_chunk_tokens = 160
 chunk_overlap_tokens = 0
 minimum_hybrid_recall = 0.8
 
-[retrieval]
+[retrieval.limits]
 limit = 3
 candidate_limit = 12
+
+[retrieval.candidate_pool]
 distance_threshold = 0.8
+
+[retrieval.fusion]
+pagerank_weight = 0.15
+
+[retrieval.selection]
 near_duplicate_threshold = 0.85
 max_chunks_per_document = 2
 

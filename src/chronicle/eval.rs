@@ -278,8 +278,8 @@ async fn evaluate_case(
         .pop()
         .context("Missing query embedding")?;
     let (vector, lexical) = tokio::try_join!(
-        database.search_similar_for(&embedding, settings.candidate_limit, case.access),
-        database.search_lexical_for(&case.question, settings.candidate_limit, case.access)
+        database.search_similar_for(&embedding, settings.limits.candidate_limit, case.access),
+        database.search_lexical_for(&case.question, settings.limits.candidate_limit, case.access)
     )?;
     let retrieval_ms = start.elapsed().as_millis();
     let mut modes = BTreeMap::new();

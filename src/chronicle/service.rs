@@ -8,7 +8,10 @@ use super::{
     indexer::{
         db::repository::{AccessScope, IndexerDb},
         prompt,
-        retriever::{RetrievalOutcome, Retriever, RetrieverApi},
+        retriever::{
+            CandidatePoolPolicy, FusionPolicy, RetrievalLimits, RetrievalOutcome, Retriever,
+            RetrieverApi, SearchSettings, SelectionPolicy,
+        },
     },
     llm::{LanguageModel, Llm},
     runtime::GpuRuntime,
@@ -277,13 +280,24 @@ impl Chronicle {
             .retriever
             .search(
                 question,
-                super::indexer::retriever::SearchSettings {
-                    limit: self.retrieval_limit,
-                    candidate_limit: self.retrieval_candidate_limit,
-                    distance_threshold: self.retrieval_distance_threshold,
-                    near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
-                    max_chunks_per_document: self.retrieval_max_chunks_per_document,
-                    pagerank_weight: self.pagerank_weight,
+                SearchSettings {
+                    limits: RetrievalLimits {
+                        limit: self.retrieval_limit,
+                        candidate_limit: self.retrieval_candidate_limit,
+                    },
+                    candidate_pool: CandidatePoolPolicy {
+                        distance_threshold: self.retrieval_distance_threshold,
+                    },
+                    fusion: FusionPolicy {
+                        vector_rrf_weight: 1.0,
+                        lexical_rrf_weight: 1.0,
+                        pagerank_weight: self.pagerank_weight,
+                        rrf_rank_constant: 60.0,
+                    },
+                    selection: SelectionPolicy {
+                        near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
+                        max_chunks_per_document: self.retrieval_max_chunks_per_document,
+                    },
                 },
                 access,
             )
@@ -346,7 +360,9 @@ impl Chronicle {
     #[allow(clippy::too_many_lines)]
     async fn answer_from_synthesis(&self, question: &str, access: AccessScope) -> Result<String> {
         use super::{
-            indexer::retriever::SearchSettings,
+            indexer::retriever::{
+                CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
+            },
             synthesis::{self, EvidenceNote},
         };
 
@@ -355,12 +371,23 @@ impl Chronicle {
             .search(
                 question,
                 SearchSettings {
-                    limit: self.synthesis.retrieval_limit,
-                    candidate_limit: self.synthesis.candidate_limit,
-                    distance_threshold: self.retrieval_distance_threshold,
-                    near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
-                    max_chunks_per_document: self.synthesis.max_chunks_per_document,
-                    pagerank_weight: self.pagerank_weight,
+                    limits: RetrievalLimits {
+                        limit: self.synthesis.retrieval_limit,
+                        candidate_limit: self.synthesis.candidate_limit,
+                    },
+                    candidate_pool: CandidatePoolPolicy {
+                        distance_threshold: self.retrieval_distance_threshold,
+                    },
+                    fusion: FusionPolicy {
+                        vector_rrf_weight: 1.0,
+                        lexical_rrf_weight: 1.0,
+                        pagerank_weight: self.pagerank_weight,
+                        rrf_rank_constant: 60.0,
+                    },
+                    selection: SelectionPolicy {
+                        near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
+                        max_chunks_per_document: self.synthesis.max_chunks_per_document,
+                    },
                 },
                 access,
             )
@@ -719,11 +746,11 @@ mod tests {
                 .map_err(|_| anyhow!("calls poisoned"))?
                 .push((
                     query.into(),
-                    settings.limit,
-                    settings.candidate_limit,
-                    settings.distance_threshold,
-                    settings.near_duplicate_threshold,
-                    settings.max_chunks_per_document,
+                    settings.limits.limit,
+                    settings.limits.candidate_limit,
+                    settings.candidate_pool.distance_threshold,
+                    settings.selection.near_duplicate_threshold,
+                    settings.selection.max_chunks_per_document,
                 ));
             self.accesses
                 .lock()
