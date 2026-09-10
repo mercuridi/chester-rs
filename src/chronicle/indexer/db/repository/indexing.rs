@@ -271,8 +271,19 @@ async fn insert_chunks(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
 async fn write_metadata(
+    connection: &mut sqlx::SqliteConnection,
+    document_id: i64,
+    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+) -> Result<()> {
+    write_note_metadata(connection, document_id, metadata).await?;
+    clear_metadata(connection, document_id).await?;
+    write_identifiers(connection, document_id, metadata).await?;
+    write_field_indexes(connection, document_id, metadata).await?;
+    write_type_metadata(connection, document_id, metadata).await
+}
+
+async fn write_note_metadata(
     connection: &mut sqlx::SqliteConnection,
     document_id: i64,
     metadata: &crate::chronicle::indexer::frontmatter::Metadata,
@@ -286,6 +297,10 @@ async fn write_metadata(
         .bind(string_field(metadata, "life_status"))
         .execute(&mut *connection).await?;
 
+    Ok(())
+}
+
+async fn clear_metadata(connection: &mut sqlx::SqliteConnection, document_id: i64) -> Result<()> {
     for table in [
         "adventure_metadata",
         "aspect_metadata",
@@ -323,6 +338,14 @@ async fn write_metadata(
         .execute(&mut *connection)
         .await?;
 
+    Ok(())
+}
+
+async fn write_identifiers(
+    connection: &mut sqlx::SqliteConnection,
+    document_id: i64,
+    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+) -> Result<()> {
     let path: String = sqlx::query_scalar("SELECT path FROM documents WHERE id = ?")
         .bind(document_id)
         .fetch_one(&mut *connection)
@@ -354,6 +377,14 @@ async fn write_metadata(
             .await?;
     }
 
+    Ok(())
+}
+
+async fn write_field_indexes(
+    connection: &mut sqlx::SqliteConnection,
+    document_id: i64,
+    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+) -> Result<()> {
     for (field_name, value) in &metadata.fields {
         match value {
             crate::chronicle::indexer::frontmatter::MetadataValue::WikilinkList(values) => {
@@ -394,6 +425,15 @@ async fn write_metadata(
         }
     }
 
+    Ok(())
+}
+
+// This is intentionally explicit: it is the schema-to-table persistence map.
+async fn write_type_metadata(
+    connection: &mut sqlx::SqliteConnection,
+    document_id: i64,
+    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+) -> Result<()> {
     match metadata.note_type.as_str() {
         "adventure" => {
             sqlx::query("INSERT INTO adventure_metadata(document_id, adventure_status, start_date, end_date, system, part_of_adventure, level_range) VALUES (?, ?, ?, ?, ?, ?, ?)")
