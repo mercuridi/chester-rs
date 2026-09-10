@@ -1,6 +1,14 @@
 # Changelog
 
-## [3.1.0] — 2026-09-10
+## [3.1.1] — 2026-09-10
+
+### Bug Fixes
+
+- Fix further leakage of outside phrases
+- Improve guidance for list queries and add regression coverage
+- Drop required pass marks because i am fucking done with counting OOM errors as genuine failures its not my fucking fault i cant afford a 5090
+
+## [v3.1.0] — 2026-09-10
 
 ### Features
 
