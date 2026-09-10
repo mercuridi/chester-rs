@@ -97,7 +97,6 @@ impl IndexerDb {
         .await
     }
 
-    #[allow(clippy::too_many_lines)]
     pub async fn replace_note(
         &self,
         path: &str,
@@ -116,108 +115,9 @@ impl IndexerDb {
 
         let mut tx = self.pool.begin().await?;
 
-        let indexed_at = Utc::now().to_rfc3339();
-
-        let document_id: i64 = sqlx::query_scalar(
-            r"
-            INSERT INTO documents (
-                path,
-                content_hash,
-                indexed_at
-            )
-            VALUES (?, ?, ?)
-            ON CONFLICT(path) DO UPDATE SET
-                content_hash = excluded.content_hash,
-                indexed_at = excluded.indexed_at
-            RETURNING id
-            ",
-        )
-        .bind(path)
-        .bind(content_hash)
-        .bind(indexed_at)
-        .fetch_one(&mut *tx)
-        .await
-        .context("Failed to upsert indexed document")?;
-
-        sqlx::query(
-            r"
-            DELETE FROM chunk_embeddings_player
-            WHERE rowid IN (
-                SELECT id
-                FROM chunks
-                WHERE document_id = ?
-            )
-            ",
-        )
-        .bind(document_id)
-        .execute(&mut *tx)
-        .await
-        .context("Failed to delete existing player chunk embeddings")?;
-
-        sqlx::query(
-            r"
-            DELETE FROM chunk_embeddings_secret
-            WHERE rowid IN (
-                SELECT id FROM chunks WHERE document_id = ?
-            )
-            ",
-        )
-        .bind(document_id)
-        .execute(&mut *tx)
-        .await
-        .context("Failed to delete existing secret chunk embeddings")?;
-
-        sqlx::query("DELETE FROM chunks WHERE document_id = ?")
-            .bind(document_id)
-            .execute(&mut *tx)
-            .await
-            .context("Failed to delete existing chunks")?;
-
-        for (chunk, embedding) in chunks.iter().zip(embeddings) {
-            let chunk_id: i64 = sqlx::query_scalar(
-                r"
-                INSERT INTO chunks (
-                    document_id,
-                    chunk_index,
-                    heading,
-                    text,
-                    visibility,
-                    overlaps_previous
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                RETURNING id
-                ",
-            )
-            .bind(document_id)
-            .bind(chunk.chunk_index)
-            .bind(&chunk.heading)
-            .bind(&chunk.text)
-            .bind(chunk.visibility.as_str())
-            .bind(chunk.overlaps_previous)
-            .fetch_one(&mut *tx)
-            .await
-            .context("Failed to insert chunk")?;
-
-            let embedding_json =
-                serde_json::to_string(embedding).context("Failed to serialise embedding")?;
-
-            let embedding_table = match chunk.visibility {
-                crate::chronicle::indexer::document::ChunkVisibility::Player => {
-                    "chunk_embeddings_player"
-                }
-                crate::chronicle::indexer::document::ChunkVisibility::Secret => {
-                    "chunk_embeddings_secret"
-                }
-            };
-            sqlx::query(&format!(
-                "INSERT INTO {embedding_table} (rowid, embedding) VALUES (?, ?)"
-            ))
-            .bind(chunk_id)
-            .bind(embedding_json)
-            .execute(&mut *tx)
-            .await
-            .context("Failed to insert chunk embedding")?;
-        }
+        let document_id = upsert_document(&mut tx, path, content_hash).await?;
+        delete_document_chunks(&mut tx, document_id).await?;
+        insert_chunks(&mut tx, document_id, chunks, embeddings).await?;
 
         write_metadata(&mut tx, document_id, metadata).await?;
 
@@ -263,6 +163,114 @@ impl IndexerDb {
             }))
     }
 }
+
+async fn upsert_document(
+    connection: &mut sqlx::SqliteConnection,
+    path: &str,
+    content_hash: &str,
+) -> Result<i64> {
+    sqlx::query_scalar(
+        r"
+        INSERT INTO documents (path, content_hash, indexed_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(path) DO UPDATE SET
+            content_hash = excluded.content_hash,
+            indexed_at = excluded.indexed_at
+        RETURNING id
+        ",
+    )
+    .bind(path)
+    .bind(content_hash)
+    .bind(Utc::now().to_rfc3339())
+    .fetch_one(&mut *connection)
+    .await
+    .context("Failed to upsert indexed document")
+}
+
+async fn delete_document_chunks(
+    connection: &mut sqlx::SqliteConnection,
+    document_id: i64,
+) -> Result<()> {
+    sqlx::query(
+        r"
+        DELETE FROM chunk_embeddings_player
+        WHERE rowid IN (SELECT id FROM chunks WHERE document_id = ?)
+        ",
+    )
+    .bind(document_id)
+    .execute(&mut *connection)
+    .await
+    .context("Failed to delete existing player chunk embeddings")?;
+
+    sqlx::query(
+        r"
+        DELETE FROM chunk_embeddings_secret
+        WHERE rowid IN (SELECT id FROM chunks WHERE document_id = ?)
+        ",
+    )
+    .bind(document_id)
+    .execute(&mut *connection)
+    .await
+    .context("Failed to delete existing secret chunk embeddings")?;
+
+    sqlx::query("DELETE FROM chunks WHERE document_id = ?")
+        .bind(document_id)
+        .execute(&mut *connection)
+        .await
+        .context("Failed to delete existing chunks")?;
+
+    Ok(())
+}
+
+async fn insert_chunks(
+    connection: &mut sqlx::SqliteConnection,
+    document_id: i64,
+    chunks: &[IndexedChunk],
+    embeddings: &[Vec<f32>],
+) -> Result<()> {
+    for (chunk, embedding) in chunks.iter().zip(embeddings) {
+        let chunk_id: i64 = sqlx::query_scalar(
+            r"
+            INSERT INTO chunks (
+                document_id, chunk_index, heading, text, visibility, overlaps_previous
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            RETURNING id
+            ",
+        )
+        .bind(document_id)
+        .bind(chunk.chunk_index)
+        .bind(&chunk.heading)
+        .bind(&chunk.text)
+        .bind(chunk.visibility.as_str())
+        .bind(chunk.overlaps_previous)
+        .fetch_one(&mut *connection)
+        .await
+        .context("Failed to insert chunk")?;
+
+        let embedding_json =
+            serde_json::to_string(embedding).context("Failed to serialise embedding")?;
+        let embedding_table = match chunk.visibility {
+            crate::chronicle::indexer::document::ChunkVisibility::Player => {
+                "chunk_embeddings_player"
+            }
+            crate::chronicle::indexer::document::ChunkVisibility::Secret => {
+                "chunk_embeddings_secret"
+            }
+        };
+        sqlx::query(&format!(
+            "INSERT INTO {embedding_table} (rowid, embedding) VALUES (?, ?)"
+        ))
+        .bind(chunk_id)
+        .bind(embedding_json)
+        .execute(&mut *connection)
+        .await
+        .context("Failed to insert chunk embedding")?;
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 async fn write_metadata(
     connection: &mut sqlx::SqliteConnection,
