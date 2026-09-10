@@ -195,6 +195,42 @@ conditions = [
 ]
 
 [[cases]]
+id = "appearance-membership-paraphrase"
+question = "Name the characters that appeared in Blueskies."
+expected_total = 3
+expected_ids = ["ada", "bela", "corin"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+conditions = [{ field = "appearances", operator = "contains", value = "[[Blueskies]]" }]
+
+[[cases]]
+id = "event-death-cause-paraphrase"
+question = "Identify characters with the Great Dungeon Fight recorded as their life status cause."
+expected_total = 1
+expected_ids = ["corin"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+conditions = [{ field = "life_status_cause", operator = "equals", value = "[[Great Dungeon Fight]]" }]
+
+[[cases]]
+id = "combined-generic-conditions-paraphrase"
+question = "Which characters both appeared in Blueskies and have the Great Dungeon Fight as their life status cause?"
+expected_total = 1
+expected_ids = ["corin"]
+[cases.plan]
+operation = "list"
+note_type = "character"
+[cases.plan.filters]
+conditions = [
+  { field = "appearances", operator = "contains", value = "[[Blueskies]]" },
+  { field = "life_status_cause", operator = "equals", value = "[[Great Dungeon Fight]]" },
+]
+
+[[cases]]
 id = "plain-string-equality"
 question = "List characters whose life status has been recorded since 1608."
 expected_total = 1
