@@ -9,7 +9,7 @@ use tracing::{debug, info, instrument, warn};
 
 use super::{
     chunker,
-    db::repository::facade::{IndexedChunk, IndexerDb},
+    db::repository::facade::{AccessScope, IndexedChunk, IndexerDb},
     embedder::{Embedder, EmbeddingModel},
     link_resolver, scanner,
 };
@@ -532,15 +532,19 @@ mod tests {
         let plan = crate::chronicle::query::planner::parse(
             r#"{"operation":"count","note_type":"character","filters":{"role":"npc"}}"#,
         )?;
-        assert_eq!(db.execute_plan(&plan).await?.total, 1);
+        assert_eq!(db.execute_plan_for(&plan, AccessScope::Gm).await?.total, 1);
         std::fs::write(&path, source.replace("role: npc", "role: pc"))?;
         assert_eq!(indexer.index().await?.unchanged, 1);
-        assert_eq!(db.execute_plan(&plan).await?.total, 0);
+        assert_eq!(db.execute_plan_for(&plan, AccessScope::Gm).await?.total, 0);
         assert_eq!(batches.load(Ordering::SeqCst), initial_batches);
         std::fs::write(&path, source.replace("status: canon", "status: draft"))?;
         assert_eq!(indexer.index().await?.removed, 1);
         assert!(!db.has_chunks().await?);
-        assert!(db.search_lexical("garden", 10).await?.is_empty());
+        assert!(
+            db.search_lexical_for("garden", 10, AccessScope::Gm)
+                .await?
+                .is_empty()
+        );
         Ok(())
     }
 

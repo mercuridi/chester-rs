@@ -5,14 +5,6 @@ use sqlx::Row;
 use super::facade::{AccessScope, IndexerDb, SearchResult};
 
 impl IndexerDb {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "unscoped compatibility helper for tests")
-    )]
-    pub async fn search_lexical(&self, query: &str, limit: usize) -> Result<Vec<SearchResult>> {
-        self.search_lexical_for(query, limit, AccessScope::Gm).await
-    }
-
     pub async fn search_lexical_for(
         &self,
         query: &str,
@@ -46,19 +38,6 @@ impl IndexerDb {
                 distance: f32::INFINITY,
             })
             .collect())
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "unscoped compatibility helper for tests")
-    )]
-    pub async fn search_similar(
-        &self,
-        embedding: &[f32],
-        limit: usize,
-    ) -> Result<Vec<SearchResult>> {
-        self.search_similar_for(embedding, limit, AccessScope::Gm)
-            .await
     }
 
     pub async fn search_similar_for(

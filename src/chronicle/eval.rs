@@ -516,9 +516,16 @@ mod tests {
                 )
                 .await?;
         }
-        let result = database.search_lexical("Silver Beacon", 3).await?;
+        let result = database
+            .search_lexical_for("Silver Beacon", 3, AccessScope::Gm)
+            .await?;
         assert_eq!(identities[&result[0].document_path], "moonspire");
-        assert!(database.search_lexical("VIOLETXYZZY", 3).await?.is_empty());
+        assert!(
+            database
+                .search_lexical_for("VIOLETXYZZY", 3, AccessScope::Gm)
+                .await?
+                .is_empty()
+        );
         let player_results = database
             .search_lexical_for("glass-comet password", 3, AccessScope::Player)
             .await?;

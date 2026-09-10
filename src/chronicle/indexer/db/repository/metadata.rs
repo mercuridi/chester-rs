@@ -5,13 +5,6 @@ use sqlx::{QueryBuilder, Row, Sqlite};
 use super::facade::{AccessScope, IndexerDb, StructuredNote, StructuredResult};
 
 impl IndexerDb {
-    pub async fn execute_plan(
-        &self,
-        plan: &crate::chronicle::query::plan::Plan,
-    ) -> Result<StructuredResult> {
-        self.execute_plan_for(plan, AccessScope::Gm).await
-    }
-
     pub async fn execute_plan_for(
         &self,
         plan: &crate::chronicle::query::plan::Plan,

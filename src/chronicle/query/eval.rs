@@ -3,7 +3,7 @@ use super::{plan::Plan, planner};
 use crate::chronicle::{
     config::Config,
     indexer::{
-        db::repository::facade::{IndexerDb, StructuredResult},
+        db::repository::facade::{AccessScope, IndexerDb, StructuredResult},
         scanner,
     },
     llm::Llm,
@@ -169,7 +169,7 @@ async fn evaluate(
     runtime: &GpuRuntime,
 ) -> Result<CaseReport> {
     let result = if case.plan.is_structured() {
-        Some(db.execute_plan(&case.plan).await?)
+        Some(db.execute_plan_for(&case.plan, AccessScope::Gm).await?)
     } else {
         None
     };

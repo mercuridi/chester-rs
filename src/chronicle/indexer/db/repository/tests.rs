@@ -69,7 +69,7 @@ async fn structured_lists_are_capped_but_counts_are_distinct_and_complete() -> R
     let plan = crate::chronicle::query::planner::parse(
         r#"{"operation":"list","note_type":"character","filters":{"role":"npc"}}"#,
     )?;
-    let result = db.execute_plan(&plan).await?;
+    let result = db.execute_plan_for(&plan, AccessScope::Gm).await?;
     assert_eq!(result.total, 25);
     assert_eq!(result.notes.len(), 20);
     assert_eq!(result.notes[0].id, "id-00");
@@ -389,7 +389,7 @@ async fn structured_conditions_query_scalar_and_wikilink_list_metadata() -> Resu
     let plan = crate::chronicle::query::planner::parse(
         r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"[[Great Dungeon Fight]]"},{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
     )?;
-    let result = db.execute_plan(&plan).await?;
+    let result = db.execute_plan_for(&plan, AccessScope::Gm).await?;
     assert_eq!(result.total, 1);
     assert_eq!(result.notes[0].id, "vex");
 
@@ -407,7 +407,12 @@ async fn structured_conditions_query_scalar_and_wikilink_list_metadata() -> Resu
             .value,
         "[[Great Dungeon Fight]]"
     );
-    assert_eq!(db.execute_plan(&plain_target_plan).await?.total, 1);
+    assert_eq!(
+        db.execute_plan_for(&plain_target_plan, AccessScope::Gm)
+            .await?
+            .total,
+        1
+    );
 
     let mut literal_plan = crate::chronicle::query::planner::parse(
         r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"old age"}]}}"#,
@@ -437,7 +442,11 @@ async fn count_members_resolves_note_identifiers_and_deduplicates_values() -> Re
         let plan = crate::chronicle::query::planner::parse(&format!(
             r#"{{"operation":"count_members","note_type":"character","subject":"{subject}","field":"enemies"}}"#,
         ))?;
-        assert_eq!(db.execute_plan(&plan).await?.total, 2, "{subject}");
+        assert_eq!(
+            db.execute_plan_for(&plan, AccessScope::Gm).await?.total,
+            2,
+            "{subject}"
+        );
     }
     Ok(())
 }
@@ -527,9 +536,26 @@ async fn lexical_index_tracks_replacements_deletions_and_reopen() -> Result<()> 
             &[embedding(0.0), embedding(1.0)],
         )
         .await?;
-    assert_eq!(database.search_lexical("First", 10).await?.len(), 1);
-    assert_eq!(database.search_lexical("Introduction", 10).await?.len(), 2);
-    assert!(database.search_lexical("\" * : ()", 10).await?.is_empty());
+    assert_eq!(
+        database
+            .search_lexical_for("First", 10, AccessScope::Gm)
+            .await?
+            .len(),
+        1
+    );
+    assert_eq!(
+        database
+            .search_lexical_for("Introduction", 10, AccessScope::Gm)
+            .await?
+            .len(),
+        2
+    );
+    assert!(
+        database
+            .search_lexical_for("\" * : ()", 10, AccessScope::Gm)
+            .await?
+            .is_empty()
+    );
     let replacement = vec![IndexedChunk {
         text: "Moonspire sanctuary".into(),
         ..chunks().remove(0)
@@ -537,10 +563,15 @@ async fn lexical_index_tracks_replacements_deletions_and_reopen() -> Result<()> 
     database
         .replace_document("guide.md", "b", &replacement, &[embedding(0.0)])
         .await?;
-    assert!(database.search_lexical("First", 10).await?.is_empty());
+    assert!(
+        database
+            .search_lexical_for("First", 10, AccessScope::Gm)
+            .await?
+            .is_empty()
+    );
     assert_eq!(
         database
-            .search_lexical("Where is Moonspire?", 10)
+            .search_lexical_for("Where is Moonspire?", 10, AccessScope::Gm)
             .await?
             .len(),
         1
@@ -550,9 +581,20 @@ async fn lexical_index_tracks_replacements_deletions_and_reopen() -> Result<()> 
         directory.path().join("chronicle.db").display()
     ))
     .await?;
-    assert_eq!(reopened.search_lexical("Moonspire", 10).await?.len(), 1);
+    assert_eq!(
+        reopened
+            .search_lexical_for("Moonspire", 10, AccessScope::Gm)
+            .await?
+            .len(),
+        1
+    );
     database.delete_document(id).await?;
-    assert!(reopened.search_lexical("Moonspire", 10).await?.is_empty());
+    assert!(
+        reopened
+            .search_lexical_for("Moonspire", 10, AccessScope::Gm)
+            .await?
+            .is_empty()
+    );
     Ok(())
 }
 
@@ -706,10 +748,15 @@ async fn delete_document_removes_chunks_embeddings_and_corpus_state() -> anyhow:
 async fn search_rejects_wrong_dimension_and_short_circuits_zero_limit() -> anyhow::Result<()> {
     let (_directory, database) = test_database().await?;
 
-    assert!(database.search_similar(&[0.0], 1).await.is_err());
     assert!(
         database
-            .search_similar(&embedding(0.0), 0)
+            .search_similar_for(&[0.0], 1, AccessScope::Gm)
+            .await
+            .is_err()
+    );
+    assert!(
+        database
+            .search_similar_for(&embedding(0.0), 0, AccessScope::Gm)
             .await?
             .is_empty()
     );
