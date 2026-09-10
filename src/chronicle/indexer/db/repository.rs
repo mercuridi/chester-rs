@@ -1591,7 +1591,7 @@ mod tests {
         )?;
         let result = db.execute_plan(&plan).await?;
         assert_eq!(result.total, 1);
-        assert_eq!(result.notes[0].id, "Vex");
+        assert_eq!(result.notes[0].id, "vex");
 
         let mut plain_target_plan = crate::chronicle::query::planner::parse(
             r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"Battle of Castle Vetra"}]}}"#,
