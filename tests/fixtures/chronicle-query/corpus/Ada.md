@@ -9,7 +9,7 @@ aliases: []
 summary: ""
 role: npc
 life_status: alive
-appearances: ["[[Riftweavers]]"]
+appearances: ["[[Blueskies]]"]
 affiliations: ["[[Ember Guild]]"]
 enemies: ["[[Bela]]", "[[Corin]]"]
 location: "[[Northmere]]"

@@ -1580,18 +1580,18 @@ mod tests {
     #[tokio::test]
     async fn structured_conditions_query_scalar_and_wikilink_list_metadata() -> Result<()> {
         let (_directory, db) = test_database().await?;
-        let source = "---\nid: tamsin\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nlife_status: dead\nlife_status_cause: '[[Battle of Castle Vetra]]'\nappearances: ['[[Riftweavers]]']\n---\n";
+        let source = "---\nid: vex\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nlife_status: dead\nlife_status_cause: '[[Battle of Castle Vetra]]'\nappearances: ['[[Blueskies]]']\n---\n";
         let (metadata, _) =
             crate::chronicle::indexer::frontmatter::parse(source)?.context("note")?;
-        db.replace_note("Tamsin.md", "hash", &[], &[], &metadata)
+        db.replace_note("Vex.md", "hash", &[], &[], &metadata)
             .await?;
 
         let plan = crate::chronicle::query::planner::parse(
-            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"[[Battle of Castle Vetra]]"},{"field":"appearances","operator":"contains","value":"[[Riftweavers]]"}]}}"#,
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"[[Battle of Castle Vetra]]"},{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
         )?;
         let result = db.execute_plan(&plan).await?;
         assert_eq!(result.total, 1);
-        assert_eq!(result.notes[0].id, "tamsin");
+        assert_eq!(result.notes[0].id, "Vex");
 
         let mut plain_target_plan = crate::chronicle::query::planner::parse(
             r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"Battle of Castle Vetra"}]}}"#,

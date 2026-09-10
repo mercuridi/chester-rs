@@ -235,10 +235,10 @@ mod tests {
             assert!(serde_json::from_str::<Plan>(input).is_ok_and(|p| p.validate().is_err()));
         }
         let plan = serde_json::from_str::<Plan>(
-            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"contains","value":"[[Riftweavers]]"}]}}"#,
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
         )?;
         plan.validate()?;
-        assert!(serde_json::from_str::<Plan>(r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"equals","value":"[[Riftweavers]]"}]}}"#)
+        assert!(serde_json::from_str::<Plan>(r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"equals","value":"[[Blueskies]]"}]}}"#)
             .is_ok_and(|plan| plan.validate().is_err()));
         let members = serde_json::from_str::<Plan>(
             r#"{"operation":"count_members","note_type":"character","subject":"[[Ada]]","field":"enemies"}"#,

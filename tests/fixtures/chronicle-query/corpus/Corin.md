@@ -11,7 +11,7 @@ role: npc
 life_status: dead
 life_status_cause: "[[Battle of Castle Vetra]]"
 life_status_since: "1608"
-appearances: ["[[Riftweavers]]"]
+appearances: ["[[Blueskies]]"]
 ---
 # Corin
 

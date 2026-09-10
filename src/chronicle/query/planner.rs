@@ -12,7 +12,7 @@ The indexed corpus contains canon notes only. Supported operations:
 {"operation":"unsupported"}
 {"operation":"clarify"}
 Allowed note_type values: adventure, aspect, character, deity, event, language, location, lore, metagame, monster, object, organisation, race. Template notes are excluded from the index; counts or lists of templates are unsupported.
-Character shortcut filters are role = pc|npc|ex-pc and life_status = alive|dead|missing|unknown. For every other declared metadata field, use ONLY filters.conditions; never put a generic field directly inside filters. Conditions are ANDed. `equals` is for scalar fields; `contains` is for list fields. For example, appearances uses {"conditions":[{"field":"appearances","operator":"contains","value":"[[Riftweavers]]"}]}; played_by uses {"conditions":[{"field":"played_by","operator":"equals","value":"Rowan"}]}; and two restrictions use one conditions array with two objects. The current declared fields and their note-type applicability are appended below this instruction; use those exact names and do not prefer one declared field over another. Wikilink fields require an exact Obsidian wikilink value such as [[Target]]. Omit filters not requested; never add a filter based on a stereotype or implication. NPC means non-player character; PC means player character; ex-PC means former player character. Living means alive. 'Unknown status' means explicitly unknown, not omitted metadata. Use singular note_type values; organizations maps to organisation.
+Character shortcut filters are role = pc|npc|ex-pc and life_status = alive|dead|missing|unknown. For every other declared metadata field, use ONLY filters.conditions; never put a generic field directly inside filters. Conditions are ANDed. `equals` is for scalar fields; `contains` is for list fields. For example, appearances uses {"conditions":[{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}; played_by uses {"conditions":[{"field":"played_by","operator":"equals","value":"Rowan"}]}; and two restrictions use one conditions array with two objects. The current declared fields and their note-type applicability are appended below this instruction; use those exact names and do not prefer one declared field over another. Wikilink fields require an exact Obsidian wikilink value such as [[Target]]. Omit filters not requested; never add a filter based on a stereotype or implication. NPC means non-player character; PC means player character; ex-PC means former player character. Living means alive. 'Unknown status' means explicitly unknown, not omitted metadata. Use singular note_type values; organizations maps to organisation.
 Choose count only when the question asks how many, a number, or a total of matching recorded notes. Choose list when it asks to list, name, or identify who/what the matching notes are. For example: 'List former player characters.' = {"operation":"list","note_type":"character","filters":{"role":"ex-pc"}}; 'List NPCs explicitly recorded with unknown life status.' = {"operation":"list","note_type":"character","filters":{"role":"npc","life_status":"unknown"}}. Do not add role:npc to 'characters' unless NPC is explicitly stated.
 Use count_members only when the question asks how many distinct values a named recorded note has in one declared list field. It requires the named subject as an exact wikilink and the declared field name. 'How many enemies does Ada have?' = {"operation":"count_members","note_type":"character","subject":"[[Ada]]","field":"enemies"}. Never use count_members to count matching notes.
 Count/list are ONLY for counts or names of recorded notes matching the declared schema. Never drop a restriction to make a question supported. Use exactly {"operation":"unsupported"} for unsupported operators, values, fields, negation words such as not/no/without, OR words such as or/either, historical state, non-canon notes, missing-field tests, or population totals. 'List locations' is list location with empty filters. 'List characters who are not dead.' is unsupported because negation is unavailable. 'List PCs or former PCs.' is unsupported because OR is unavailable.
@@ -246,10 +246,10 @@ mod tests {
     #[test]
     fn canonicalizes_declared_flat_filters_only() -> Result<()> {
         let actual = parse(
-            r#"{"operation":"list","note_type":"character","filters":{"role":"npc","appearances":"[[Riftweavers]]","played_by":"Rowan"}}"#,
+            r#"{"operation":"list","note_type":"character","filters":{"role":"npc","appearances":"[[Blueskies]]","played_by":"Rowan"}}"#,
         )?;
         let expected = parse(
-            r#"{"operation":"list","note_type":"character","filters":{"role":"npc","conditions":[{"field":"appearances","operator":"contains","value":"[[Riftweavers]]"},{"field":"played_by","operator":"equals","value":"Rowan"}]}}"#,
+            r#"{"operation":"list","note_type":"character","filters":{"role":"npc","conditions":[{"field":"appearances","operator":"contains","value":"[[Blueskies]]"},{"field":"played_by","operator":"equals","value":"Rowan"}]}}"#,
         )?;
         assert_eq!(actual, expected);
         assert!(parse(
@@ -266,10 +266,10 @@ mod tests {
     #[test]
     fn canonicalizes_only_required_wikilink_fields() -> Result<()> {
         let actual = parse(
-            r#"{"operation":"list","note_type":"character","filters":{"appearances":"Riftweavers","conditions":[{"field":"location","operator":"equals","value":"Northmere"},{"field":"life_status_cause","operator":"equals","value":"old age"}]}}"#,
+            r#"{"operation":"list","note_type":"character","filters":{"appearances":"Blueskies","conditions":[{"field":"location","operator":"equals","value":"Northmere"},{"field":"life_status_cause","operator":"equals","value":"old age"}]}}"#,
         )?;
         let expected = parse(
-            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"location","operator":"equals","value":"[[Northmere]]"},{"field":"life_status_cause","operator":"equals","value":"old age"},{"field":"appearances","operator":"contains","value":"[[Riftweavers]]"}]}}"#,
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"location","operator":"equals","value":"[[Northmere]]"},{"field":"life_status_cause","operator":"equals","value":"old age"},{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
         )?;
         assert_eq!(actual, expected);
         Ok(())
