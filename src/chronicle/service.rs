@@ -112,6 +112,32 @@ enum RetrievalMode {
     PlanningFailure,
 }
 
+/// A validated answer path. Route selection is complete before route execution begins, keeping
+/// structured-query, retrieval, and synthesis policies from leaking into one another.
+enum AnswerRoute {
+    Structured(Plan),
+    Retrieval(RetrievalMode),
+    Synthesis,
+    Clarification,
+    EmptyQuestion,
+}
+
+/// The common boundary returned by every answer route. More route-neutral response metadata can
+/// be added here without changing `ask_for` or the individual route contracts.
+struct AnswerOutcome {
+    reply: String,
+}
+
+impl AnswerOutcome {
+    fn new(reply: String) -> Self {
+        Self { reply }
+    }
+
+    fn bounded(reply: &str, max_reply_length: usize) -> Self {
+        Self::new(reply.chars().take(max_reply_length).collect())
+    }
+}
+
 impl RetrievalMode {
     fn prefix(self) -> &'static str {
         match self {
@@ -225,93 +251,118 @@ impl Chronicle {
         let _lifecycle = self.lifecycle.lock().await;
         let _gpu_lease = self.runtime.acquire_inference()?;
 
-        let reply = if question.trim().is_empty() {
-            "Please provide a non-empty question.".into()
-        } else {
-            let plan = match self.llm.generate_plan(question).await {
-                Ok(response) => match planner::parse_for_question(question, &response) {
-                    Ok(plan) => Some(plan),
-                    Err(error) => {
-                        debug!(%error, planner_response = %response, "Chronicle query planner response rejected");
-                        debug!("Retrying Chronicle query planner with correction request");
-                        match self
-                            .llm
-                            .repair_plan(question, &response, &error.to_string())
-                            .await
-                        {
-                            Ok(retry_response) => {
-                                match planner::parse_for_question(question, &retry_response) {
-                                    Ok(plan) => {
-                                        debug!(?plan, "Chronicle query planner retry accepted");
-                                        Some(plan)
-                                    }
-                                    Err(retry_error) => {
-                                        debug!(%retry_error, planner_response = %retry_response, "Chronicle query planner retry response rejected");
-                                        tracing::warn!(%retry_error, "Query planning failed after retry; using non-exhaustive retrieval");
-                                        None
-                                    }
-                                }
-                            }
-                            Err(retry_error) => {
-                                tracing::warn!(%retry_error, initial_error = %error, "Query planning retry failed; using non-exhaustive retrieval");
-                                None
-                            }
-                        }
-                    }
-                },
-                Err(error) => {
-                    tracing::warn!(%error, "Query planning failed; using non-exhaustive retrieval");
-                    None
-                }
-            };
-            if let Some(mut plan) = plan {
-                if plan.selection().is_some() {
-                    self.db
-                        .as_ref()
-                        .context("Structured datastore unavailable")?
-                        .resolve_string_or_wikilinks(&mut plan)
-                        .await?;
-                }
-                debug!(route = ?plan, "Validated Chronicle query plan");
-                match &plan {
-                    Plan::Count { .. } | Plan::List { .. } | Plan::CountMembers { .. } => {
-                        let result = self
-                            .db
-                            .as_ref()
-                            .context("Structured datastore unavailable")?
-                            .execute_plan_for(&plan, access)
-                            .await?;
-                        render::render(&plan, &result, self.max_reply_length)
-                    }
-                    Plan::Clarify {} => "Please name what you want counted or listed, and any character role or status filters."
-                        .chars()
-                        .take(self.max_reply_length)
-                        .collect(),
-                    Plan::Search {} => {
-                        self.answer_from_retrieval(question, RetrievalMode::Ordinary, access)
-                            .await?
-                    }
-                    Plan::Synthesis {} => self.answer_from_synthesis(question, access).await?,
-                    Plan::Unsupported {} => {
-                        self.answer_from_retrieval(
-                            question,
-                            RetrievalMode::UnsupportedStructuredQuery,
-                            access,
-                        )
-                        .await?
-                    }
-                }
-            } else {
-                self.answer_from_retrieval(question, RetrievalMode::PlanningFailure, access)
-                    .await?
-            }
-        };
-        debug!(reply = %reply, "Chronicle final reply");
+        let route = self.select_answer_route(question).await?;
+        let outcome = self.execute_answer_route(question, access, route).await?;
+        debug!(reply = %outcome.reply, "Chronicle final reply");
         info!(
-            reply_len = reply.chars().count(),
+            reply_len = outcome.reply.chars().count(),
             "Completed Chronicle question"
         );
-        Ok(reply)
+        Ok(outcome.reply)
+    }
+
+    async fn select_answer_route(&self, question: &str) -> Result<AnswerRoute> {
+        if question.trim().is_empty() {
+            return Ok(AnswerRoute::EmptyQuestion);
+        }
+        let plan = match self.llm.generate_plan(question).await {
+            Ok(response) => match planner::parse_for_question(question, &response) {
+                Ok(plan) => Some(plan),
+                Err(error) => {
+                    debug!(%error, planner_response = %response, "Chronicle query planner response rejected");
+                    debug!("Retrying Chronicle query planner with correction request");
+                    match self
+                        .llm
+                        .repair_plan(question, &response, &error.to_string())
+                        .await
+                    {
+                        Ok(retry_response) => {
+                            match planner::parse_for_question(question, &retry_response) {
+                                Ok(plan) => {
+                                    debug!(?plan, "Chronicle query planner retry accepted");
+                                    Some(plan)
+                                }
+                                Err(retry_error) => {
+                                    debug!(%retry_error, planner_response = %retry_response, "Chronicle query planner retry response rejected");
+                                    tracing::warn!(%retry_error, "Query planning failed after retry; using non-exhaustive retrieval");
+                                    None
+                                }
+                            }
+                        }
+                        Err(retry_error) => {
+                            tracing::warn!(%retry_error, initial_error = %error, "Query planning retry failed; using non-exhaustive retrieval");
+                            None
+                        }
+                    }
+                }
+            },
+            Err(error) => {
+                tracing::warn!(%error, "Query planning failed; using non-exhaustive retrieval");
+                None
+            }
+        };
+        let Some(mut plan) = plan else {
+            return Ok(AnswerRoute::Retrieval(RetrievalMode::PlanningFailure));
+        };
+        if plan.selection().is_some() {
+            self.db
+                .as_ref()
+                .context("Structured datastore unavailable")?
+                .resolve_string_or_wikilinks(&mut plan)
+                .await?;
+        }
+        debug!(route = ?plan, "Validated Chronicle query plan");
+        Ok(match plan {
+            Plan::Count { .. } | Plan::List { .. } | Plan::CountMembers { .. } => {
+                AnswerRoute::Structured(plan)
+            }
+            Plan::Clarify {} => AnswerRoute::Clarification,
+            Plan::Search {} => AnswerRoute::Retrieval(RetrievalMode::Ordinary),
+            Plan::Synthesis {} => AnswerRoute::Synthesis,
+            Plan::Unsupported {} => {
+                AnswerRoute::Retrieval(RetrievalMode::UnsupportedStructuredQuery)
+            }
+        })
+    }
+
+    async fn execute_answer_route(
+        &self,
+        question: &str,
+        access: AccessScope,
+        route: AnswerRoute,
+    ) -> Result<AnswerOutcome> {
+        match route {
+            AnswerRoute::Structured(plan) => self.answer_from_structured_plan(&plan, access).await,
+            AnswerRoute::Retrieval(mode) => {
+                self.answer_from_retrieval(question, mode, access).await
+            }
+            AnswerRoute::Synthesis => self.answer_from_synthesis(question, access).await,
+            AnswerRoute::Clarification => Ok(AnswerOutcome::bounded(
+                "Please name what you want counted or listed, and any character role or status filters.",
+                self.max_reply_length,
+            )),
+            AnswerRoute::EmptyQuestion => Ok(AnswerOutcome::new(
+                "Please provide a non-empty question.".into(),
+            )),
+        }
+    }
+
+    async fn answer_from_structured_plan(
+        &self,
+        plan: &Plan,
+        access: AccessScope,
+    ) -> Result<AnswerOutcome> {
+        let result = self
+            .db
+            .as_ref()
+            .context("Structured datastore unavailable")?
+            .execute_plan_for(plan, access)
+            .await?;
+        Ok(AnswerOutcome::new(render::render(
+            plan,
+            &result,
+            self.max_reply_length,
+        )))
     }
 
     async fn answer_from_retrieval(
@@ -319,11 +370,11 @@ impl Chronicle {
         question: &str,
         mode: RetrievalMode,
         access: AccessScope,
-    ) -> Result<String> {
+    ) -> Result<AnswerOutcome> {
         let prefix = mode.prefix();
         let answer_limit = self.max_reply_length.saturating_sub(prefix.chars().count());
         if answer_limit == 0 {
-            return Ok(prefix.chars().take(self.max_reply_length).collect());
+            return Ok(AnswerOutcome::bounded(prefix, self.max_reply_length));
         }
         let outcome = match self
             .retriever
@@ -355,32 +406,32 @@ impl Chronicle {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::warn!(%error, "Chronicle retrieval failed");
-                return Ok(truncate_to_char_limit(
+                return Ok(AnswerOutcome::new(truncate_to_char_limit(
                     &format!("{prefix}Chronicle retrieval failed."),
                     self.max_reply_length,
-                ));
+                )));
             }
         };
 
         let results = match outcome {
             RetrievalOutcome::Results(results) => results,
             RetrievalOutcome::BadQuestion => {
-                return Ok(truncate_to_char_limit(
+                return Ok(AnswerOutcome::new(truncate_to_char_limit(
                     &format!("{prefix}Please provide a non-empty question."),
                     self.max_reply_length,
-                ));
+                )));
             }
             RetrievalOutcome::CorpusEmpty => {
-                return Ok(truncate_to_char_limit(
+                return Ok(AnswerOutcome::new(truncate_to_char_limit(
                     &format!("{prefix}Chronicle corpus is empty."),
                     self.max_reply_length,
-                ));
+                )));
             }
             RetrievalOutcome::NoResultMeetsThreshold => {
-                return Ok(truncate_to_char_limit(
+                return Ok(AnswerOutcome::new(truncate_to_char_limit(
                     &format!("{prefix}No relevant Chronicle context was found."),
                     self.max_reply_length,
-                ));
+                )));
             }
         };
 
@@ -403,32 +454,38 @@ impl Chronicle {
         );
 
         let (answer, _, _) = self.generate_answer(&prompt, answer_limit).await?;
-        Ok(format!("{prefix}{answer}"))
+        Ok(AnswerOutcome::new(format!("{prefix}{answer}")))
     }
 
-    async fn answer_from_synthesis(&self, question: &str, access: AccessScope) -> Result<String> {
+    async fn answer_from_synthesis(
+        &self,
+        question: &str,
+        access: AccessScope,
+    ) -> Result<AnswerOutcome> {
         let results = match self.retrieve_synthesis_evidence(question, access).await {
             SynthesisRetrieval::Evidence(results) => results,
-            SynthesisRetrieval::ImmediateResponse(response) => return Ok(response.into()),
+            SynthesisRetrieval::ImmediateResponse(response) => {
+                return Ok(AnswerOutcome::new(response.into()));
+            }
         };
         let mut diagnostics = SynthesisDiagnostics::from_results(&results);
         let evidence = self
             .generate_evidence_notes(question, &results, &mut diagnostics)
             .await?;
         if evidence.notes.is_empty() {
-            return Ok(self.incomplete_synthesis_response());
+            return Ok(AnswerOutcome::new(self.incomplete_synthesis_response()));
         }
         let Some(evidence) = self
             .reduce_evidence_notes_until_fit(question, evidence, &mut diagnostics)
             .await?
         else {
-            return Ok(self.incomplete_synthesis_response());
+            return Ok(AnswerOutcome::new(self.incomplete_synthesis_response()));
         };
         let answer = self
             .generate_synthesis_answer(question, evidence, &mut diagnostics)
             .await?;
         self.record_synthesis_diagnostics(diagnostics)?;
-        Ok(answer)
+        Ok(AnswerOutcome::new(answer))
     }
 
     async fn retrieve_synthesis_evidence(
