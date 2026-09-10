@@ -1,23 +1,27 @@
-use super::query::{plan::Plan, planner, render};
+use super::{
+    answer_routing::{self, AnswerRoute, RetrievalMode},
+    lifecycle,
+    retrieval_answer::{self, RetrievalAnswerSettings},
+    synthesis_pipeline::{self, EvidenceRetrieval},
+};
 use anyhow::{Context, Result};
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
-use super::{
+use super::super::{
     config::SynthesisSettings,
     indexer::{
         db::repository::facade::{AccessScope, IndexerDb, SearchResult},
-        prompt,
-        retriever::{
-            CandidatePoolPolicy, FusionPolicy, RetrievalLimits, RetrievalOutcome, Retriever,
-            RetrieverApi, SearchSettings, SelectionPolicy,
-        },
+        retriever::{Retriever, RetrieverApi},
     },
     llm::{LanguageModel, Llm},
+    query::{plan::Plan, render},
     runtime::GpuRuntime,
     synthesis::{self, EvidenceNote},
     transcription::service::TranscriptionService,
 };
+
+pub use super::synthesis_pipeline::SynthesisDiagnostics;
 
 pub struct Chronicle {
     retriever: Arc<dyn RetrieverApi>,
@@ -37,31 +41,6 @@ pub struct Chronicle {
     last_synthesis_diagnostics: std::sync::Mutex<Option<SynthesisDiagnostics>>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct RetrievedDocumentDiagnostic {
-    pub id: String,
-    pub rank: usize,
-    pub distance: f32,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SynthesisDiagnostics {
-    pub retrieved_documents: Vec<RetrievedDocumentDiagnostic>,
-    pub accepted_result_count: usize,
-    pub omitted_result_count: usize,
-    pub chunks_per_document: BTreeMap<String, usize>,
-    pub map_batch_count: usize,
-    pub reduction_pass_count: usize,
-    pub prompt_token_counts: Vec<usize>,
-    pub final_answer_length_retried: bool,
-    pub final_answer_truncated: bool,
-}
-
-enum SynthesisRetrieval {
-    Evidence(Vec<SearchResult>),
-    ImmediateResponse(&'static str),
-}
-
 struct SynthesisEvidenceNotes {
     notes: Vec<EvidenceNote>,
     partial: bool,
@@ -70,57 +49,6 @@ struct SynthesisEvidenceNotes {
 
 const PARTIAL_SYNTHESIS_PREFIX: &str =
     "This is a partial synthesis based on the retrieved notes completed so far.\n\n";
-
-impl SynthesisDiagnostics {
-    fn from_results(results: &[SearchResult]) -> Self {
-        let mut chunks_per_document = BTreeMap::new();
-        for result in results {
-            *chunks_per_document
-                .entry(result.document_path.clone())
-                .or_insert(0) += 1;
-        }
-        Self {
-            retrieved_documents: results
-                .iter()
-                .enumerate()
-                .map(|(rank, result)| RetrievedDocumentDiagnostic {
-                    id: std::path::Path::new(&result.document_path)
-                        .file_stem()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    rank: rank + 1,
-                    distance: result.distance,
-                })
-                .collect(),
-            accepted_result_count: results.len(),
-            omitted_result_count: 0,
-            chunks_per_document,
-            map_batch_count: 0,
-            reduction_pass_count: 0,
-            prompt_token_counts: Vec::new(),
-            final_answer_length_retried: false,
-            final_answer_truncated: false,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum RetrievalMode {
-    Ordinary,
-    UnsupportedStructuredQuery,
-    PlanningFailure,
-}
-
-/// A validated answer path. Route selection is complete before route execution begins, keeping
-/// structured-query, retrieval, and synthesis policies from leaking into one another.
-enum AnswerRoute {
-    Structured(Plan),
-    Retrieval(RetrievalMode),
-    Synthesis,
-    Clarification,
-    EmptyQuestion,
-}
 
 /// The common boundary returned by every answer route. More route-neutral response metadata can
 /// be added here without changing `ask_for` or the individual route contracts.
@@ -135,32 +63,6 @@ impl AnswerOutcome {
 
     fn bounded(reply: &str, max_reply_length: usize) -> Self {
         Self::new(reply.chars().take(max_reply_length).collect())
-    }
-}
-
-impl RetrievalMode {
-    fn prefix(self) -> &'static str {
-        match self {
-            Self::Ordinary => "",
-            Self::UnsupportedStructuredQuery => {
-                "An exhaustive count or list is unavailable for this question. "
-            }
-            Self::PlanningFailure => {
-                "I couldn't validate a structured plan for this request, so this is a best-effort answer from retrieved notes. "
-            }
-        }
-    }
-
-    fn retrieval_question(self, question: &str) -> String {
-        match self {
-            Self::Ordinary => question.to_owned(),
-            Self::UnsupportedStructuredQuery => format!(
-                "{question}\n\nThis query cannot be executed as a structured count or list. Describe only documented examples from the retrieved passages. Do not infer an exhaustive total or claim this is a complete list."
-            ),
-            Self::PlanningFailure => format!(
-                "{question}\n\nThe structured query planner did not produce a valid plan. Describe only documented examples from the retrieved passages. Do not infer an exhaustive total or claim this is a complete list."
-            ),
-        }
     }
 }
 
@@ -262,67 +164,7 @@ impl Chronicle {
     }
 
     async fn select_answer_route(&self, question: &str) -> Result<AnswerRoute> {
-        if question.trim().is_empty() {
-            return Ok(AnswerRoute::EmptyQuestion);
-        }
-        let plan = match self.llm.generate_plan(question).await {
-            Ok(response) => match planner::parse_for_question(question, &response) {
-                Ok(plan) => Some(plan),
-                Err(error) => {
-                    debug!(%error, planner_response = %response, "Chronicle query planner response rejected");
-                    debug!("Retrying Chronicle query planner with correction request");
-                    match self
-                        .llm
-                        .repair_plan(question, &response, &error.to_string())
-                        .await
-                    {
-                        Ok(retry_response) => {
-                            match planner::parse_for_question(question, &retry_response) {
-                                Ok(plan) => {
-                                    debug!(?plan, "Chronicle query planner retry accepted");
-                                    Some(plan)
-                                }
-                                Err(retry_error) => {
-                                    debug!(%retry_error, planner_response = %retry_response, "Chronicle query planner retry response rejected");
-                                    tracing::warn!(%retry_error, "Query planning failed after retry; using non-exhaustive retrieval");
-                                    None
-                                }
-                            }
-                        }
-                        Err(retry_error) => {
-                            tracing::warn!(%retry_error, initial_error = %error, "Query planning retry failed; using non-exhaustive retrieval");
-                            None
-                        }
-                    }
-                }
-            },
-            Err(error) => {
-                tracing::warn!(%error, "Query planning failed; using non-exhaustive retrieval");
-                None
-            }
-        };
-        let Some(mut plan) = plan else {
-            return Ok(AnswerRoute::Retrieval(RetrievalMode::PlanningFailure));
-        };
-        if plan.selection().is_some() {
-            self.db
-                .as_ref()
-                .context("Structured datastore unavailable")?
-                .resolve_string_or_wikilinks(&mut plan)
-                .await?;
-        }
-        debug!(route = ?plan, "Validated Chronicle query plan");
-        Ok(match plan {
-            Plan::Count { .. } | Plan::List { .. } | Plan::CountMembers { .. } => {
-                AnswerRoute::Structured(plan)
-            }
-            Plan::Clarify {} => AnswerRoute::Clarification,
-            Plan::Search {} => AnswerRoute::Retrieval(RetrievalMode::Ordinary),
-            Plan::Synthesis {} => AnswerRoute::Synthesis,
-            Plan::Unsupported {} => {
-                AnswerRoute::Retrieval(RetrievalMode::UnsupportedStructuredQuery)
-            }
-        })
+        answer_routing::select_answer_route(self.llm.as_ref(), self.db.as_ref(), question).await
     }
 
     async fn execute_answer_route(
@@ -371,90 +213,25 @@ impl Chronicle {
         mode: RetrievalMode,
         access: AccessScope,
     ) -> Result<AnswerOutcome> {
-        let prefix = mode.prefix();
-        let answer_limit = self.max_reply_length.saturating_sub(prefix.chars().count());
-        if answer_limit == 0 {
-            return Ok(AnswerOutcome::bounded(prefix, self.max_reply_length));
-        }
-        let outcome = match self
-            .retriever
-            .search(
-                question,
-                SearchSettings {
-                    limits: RetrievalLimits {
-                        limit: self.retrieval_limit,
-                        candidate_limit: self.retrieval_candidate_limit,
-                    },
-                    candidate_pool: CandidatePoolPolicy {
-                        distance_threshold: self.retrieval_distance_threshold,
-                    },
-                    fusion: FusionPolicy {
-                        vector_rrf_weight: 1.0,
-                        lexical_rrf_weight: 1.0,
-                        pagerank_weight: self.pagerank_weight,
-                        rrf_rank_constant: 60.0,
-                    },
-                    selection: SelectionPolicy {
-                        near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
-                        max_chunks_per_document: self.retrieval_max_chunks_per_document,
-                    },
-                },
-                access,
-            )
-            .await
-        {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                tracing::warn!(%error, "Chronicle retrieval failed");
-                return Ok(AnswerOutcome::new(truncate_to_char_limit(
-                    &format!("{prefix}Chronicle retrieval failed."),
-                    self.max_reply_length,
-                )));
-            }
+        let settings = RetrievalAnswerSettings {
+            limit: self.retrieval_limit,
+            candidate_limit: self.retrieval_candidate_limit,
+            distance_threshold: self.retrieval_distance_threshold,
+            near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
+            max_chunks_per_document: self.retrieval_max_chunks_per_document,
+            pagerank_weight: self.pagerank_weight,
+            max_reply_length: self.max_reply_length,
         };
-
-        let results = match outcome {
-            RetrievalOutcome::Results(results) => results,
-            RetrievalOutcome::BadQuestion => {
-                return Ok(AnswerOutcome::new(truncate_to_char_limit(
-                    &format!("{prefix}Please provide a non-empty question."),
-                    self.max_reply_length,
-                )));
-            }
-            RetrievalOutcome::CorpusEmpty => {
-                return Ok(AnswerOutcome::new(truncate_to_char_limit(
-                    &format!("{prefix}Chronicle corpus is empty."),
-                    self.max_reply_length,
-                )));
-            }
-            RetrievalOutcome::NoResultMeetsThreshold => {
-                return Ok(AnswerOutcome::new(truncate_to_char_limit(
-                    &format!("{prefix}No relevant Chronicle context was found."),
-                    self.max_reply_length,
-                )));
-            }
-        };
-
-        let retrieval_question = mode.retrieval_question(question);
-        let assembly = prompt::build_prompt_with_budget(
-            &retrieval_question,
-            &results,
-            self.llm.prompt_token_budget(),
-            |candidate| self.llm.count_input_tokens(candidate),
-        )?;
-        let prompt = assembly.prompt;
-        debug!(
-            result_count = results.len(),
-            selected_result_count = assembly.selected_results,
-            omitted_result_count = assembly.omitted_results,
-            prompt_tokens = assembly.prompt_tokens,
-            truncated_result = assembly.truncated_result,
-            prompt_len = prompt.len(),
-            "Built Chronicle prompt"
-        );
-
-        let (answer, _, _) = self.generate_answer(&prompt, answer_limit).await?;
-        Ok(AnswerOutcome::new(format!("{prefix}{answer}")))
+        retrieval_answer::answer_from_retrieval(
+            self.retriever.as_ref(),
+            self.llm.as_ref(),
+            &settings,
+            question,
+            mode,
+            access,
+        )
+        .await
+        .map(AnswerOutcome::new)
     }
 
     async fn answer_from_synthesis(
@@ -462,9 +239,19 @@ impl Chronicle {
         question: &str,
         access: AccessScope,
     ) -> Result<AnswerOutcome> {
-        let results = match self.retrieve_synthesis_evidence(question, access).await {
-            SynthesisRetrieval::Evidence(results) => results,
-            SynthesisRetrieval::ImmediateResponse(response) => {
+        let results = match synthesis_pipeline::retrieve_evidence(
+            self.retriever.as_ref(),
+            &self.synthesis,
+            self.retrieval_distance_threshold,
+            self.retrieval_near_duplicate_threshold,
+            self.pagerank_weight,
+            question,
+            access,
+        )
+        .await
+        {
+            EvidenceRetrieval::Evidence(results) => results,
+            EvidenceRetrieval::ImmediateResponse(response) => {
                 return Ok(AnswerOutcome::new(response.into()));
             }
         };
@@ -486,48 +273,6 @@ impl Chronicle {
             .await?;
         self.record_synthesis_diagnostics(diagnostics)?;
         Ok(AnswerOutcome::new(answer))
-    }
-
-    async fn retrieve_synthesis_evidence(
-        &self,
-        question: &str,
-        access: AccessScope,
-    ) -> SynthesisRetrieval {
-        let settings = SearchSettings {
-            limits: RetrievalLimits {
-                limit: self.synthesis.retrieval_limit,
-                candidate_limit: self.synthesis.candidate_limit,
-            },
-            candidate_pool: CandidatePoolPolicy {
-                distance_threshold: self.retrieval_distance_threshold,
-            },
-            fusion: FusionPolicy {
-                vector_rrf_weight: 1.0,
-                lexical_rrf_weight: 1.0,
-                pagerank_weight: self.pagerank_weight,
-                rrf_rank_constant: 60.0,
-            },
-            selection: SelectionPolicy {
-                near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
-                max_chunks_per_document: self.synthesis.max_chunks_per_document,
-            },
-        };
-        match self.retriever.search(question, settings, access).await {
-            Ok(RetrievalOutcome::Results(results)) => SynthesisRetrieval::Evidence(results),
-            Ok(RetrievalOutcome::BadQuestion) => {
-                SynthesisRetrieval::ImmediateResponse("Please provide a non-empty question.")
-            }
-            Ok(RetrievalOutcome::CorpusEmpty) => {
-                SynthesisRetrieval::ImmediateResponse("Chronicle corpus is empty.")
-            }
-            Ok(RetrievalOutcome::NoResultMeetsThreshold) => {
-                SynthesisRetrieval::ImmediateResponse("No relevant Chronicle context was found.")
-            }
-            Err(error) => {
-                tracing::warn!(%error, "Chronicle synthesis retrieval failed");
-                SynthesisRetrieval::ImmediateResponse("Chronicle retrieval failed.")
-            }
-        }
     }
 
     async fn generate_evidence_notes(
@@ -705,7 +450,8 @@ impl Chronicle {
             self.max_reply_length
         };
         let (answer, retried, truncated) =
-            self.generate_answer(&final_prompt, answer_limit).await?;
+            retrieval_answer::generate_answer(self.llm.as_ref(), &final_prompt, answer_limit)
+                .await?;
         diagnostics.final_answer_length_retried = retried;
         diagnostics.final_answer_truncated = truncated;
         Ok(if evidence.partial {
@@ -724,72 +470,22 @@ impl Chronicle {
     }
 
     fn incomplete_synthesis_response(&self) -> String {
-        truncate_to_char_limit(
+        retrieval_answer::truncate_to_char_limit(
             "Chronicle synthesis could not be completed from the retrieved notes.",
             self.max_reply_length,
         )
     }
 
-    async fn generate_answer(
-        &self,
-        prompt: &str,
-        answer_limit: usize,
-    ) -> Result<(String, bool, bool)> {
-        let mut answer = self.llm.generate(prompt).await?;
-        let mut retried = false;
-        let mut truncated = false;
-
-        if answer.chars().count() > answer_limit {
-            debug!(
-                answer_len = answer.chars().count(),
-                max_reply_length = answer_limit,
-                "LLM answer exceeded configured length; requesting a shorter answer"
-            );
-            let retry_prompt = format!(
-                "{prompt}\n\nThe draft answer below is too long. Rewrite it to fit within {answer_limit} characters. Preserve the most important information, and output only the shorter answer.\n\nDraft answer:\n{answer}"
-            );
-            answer = self.llm.generate(&retry_prompt).await?;
-            retried = true;
-        }
-
-        if answer.chars().count() > answer_limit {
-            tracing::warn!(
-                answer_len = answer.chars().count(),
-                max_reply_length = answer_limit,
-                "LLM answer remained over length after retry; truncating"
-            );
-            answer = truncate_to_char_limit(&answer, answer_limit);
-            truncated = true;
-        }
-        Ok((answer, retried, truncated))
-    }
-
     #[instrument(skip(self))]
     pub async fn start_llm(&self) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
-        info!("Starting Chronicle models");
-
-        self.retriever.load_embedder().await?;
-
-        if let Err(error) = self.llm.load().await {
-            tracing::warn!(%error, "Chronicle LLM failed to load; releasing embedder");
-            self.retriever.unload_embedder()?;
-            return Err(error);
-        }
-
-        info!("Chronicle models ready");
-        Ok(())
+        lifecycle::start(self.retriever.as_ref(), self.llm.as_ref()).await
     }
 
     #[instrument(skip(self))]
     pub async fn stop_llm(&self) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
-        info!("Stopping Chronicle models");
-
-        self.llm.unload().await?;
-        self.retriever.unload_embedder()?;
-        info!("Chronicle models stopped");
-        Ok(())
+        lifecycle::stop(self.retriever.as_ref(), self.llm.as_ref()).await
     }
 
     pub fn is_llm_loaded(&self) -> Result<bool> {
@@ -801,14 +497,11 @@ impl Chronicle {
     }
 }
 
-fn truncate_to_char_limit(answer: &str, max_length: usize) -> String {
-    answer.chars().take(max_length).collect()
-}
-
 #[cfg(test)]
 #[allow(clippy::type_complexity, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::{Chronicle, truncate_to_char_limit};
+    use super::super::retrieval_answer::truncate_to_char_limit;
+    use super::Chronicle;
     use crate::chronicle::indexer::db::repository::facade::IndexerDb;
     use crate::chronicle::{
         indexer::{
@@ -1502,7 +1195,7 @@ mod tests {
                 question,
                 &[1, 2, 3, 4]
                     .into_iter()
-                    .map(|index| super::super::synthesis::EvidenceNote {
+                    .map(|index| super::super::super::synthesis::EvidenceNote {
                         source_labels: vec![format!("S{index}")],
                         text: format!("m{index}"),
                     })
@@ -1587,7 +1280,7 @@ mod tests {
                 question,
                 &[1, 2, 3, 4, 5, 6, 7, 8]
                     .into_iter()
-                    .map(|index| super::super::synthesis::EvidenceNote {
+                    .map(|index| super::super::super::synthesis::EvidenceNote {
                         source_labels: vec![format!("S{index}")],
                         text: format!("m{index}"),
                     })

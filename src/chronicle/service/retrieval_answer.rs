@@ -1,0 +1,158 @@
+use anyhow::Result;
+use tracing::debug;
+
+use super::super::{
+    indexer::{
+        db::repository::facade::AccessScope,
+        prompt,
+        retriever::{
+            CandidatePoolPolicy, FusionPolicy, RetrievalLimits, RetrievalOutcome, RetrieverApi,
+            SearchSettings, SelectionPolicy,
+        },
+    },
+    llm::LanguageModel,
+};
+use super::answer_routing::RetrievalMode;
+
+pub(in crate::chronicle::service) struct RetrievalAnswerSettings {
+    pub(in crate::chronicle::service) limit: usize,
+    pub(in crate::chronicle::service) candidate_limit: usize,
+    pub(in crate::chronicle::service) distance_threshold: f32,
+    pub(in crate::chronicle::service) near_duplicate_threshold: f32,
+    pub(in crate::chronicle::service) max_chunks_per_document: usize,
+    pub(in crate::chronicle::service) pagerank_weight: f64,
+    pub(in crate::chronicle::service) max_reply_length: usize,
+}
+
+pub(in crate::chronicle::service) async fn answer_from_retrieval(
+    retriever: &dyn RetrieverApi,
+    llm: &dyn LanguageModel,
+    settings: &RetrievalAnswerSettings,
+    question: &str,
+    mode: RetrievalMode,
+    access: AccessScope,
+) -> Result<String> {
+    let prefix = mode.prefix();
+    let answer_limit = settings
+        .max_reply_length
+        .saturating_sub(prefix.chars().count());
+    if answer_limit == 0 {
+        return Ok(truncate_to_char_limit(prefix, settings.max_reply_length));
+    }
+    let outcome = match retriever
+        .search(
+            question,
+            SearchSettings {
+                limits: RetrievalLimits {
+                    limit: settings.limit,
+                    candidate_limit: settings.candidate_limit,
+                },
+                candidate_pool: CandidatePoolPolicy {
+                    distance_threshold: settings.distance_threshold,
+                },
+                fusion: FusionPolicy {
+                    vector_rrf_weight: 1.0,
+                    lexical_rrf_weight: 1.0,
+                    pagerank_weight: settings.pagerank_weight,
+                    rrf_rank_constant: 60.0,
+                },
+                selection: SelectionPolicy {
+                    near_duplicate_threshold: settings.near_duplicate_threshold,
+                    max_chunks_per_document: settings.max_chunks_per_document,
+                },
+            },
+            access,
+        )
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            tracing::warn!(%error, "Chronicle retrieval failed");
+            return Ok(truncate_to_char_limit(
+                &format!("{prefix}Chronicle retrieval failed."),
+                settings.max_reply_length,
+            ));
+        }
+    };
+
+    let results = match outcome {
+        RetrievalOutcome::Results(results) => results,
+        RetrievalOutcome::BadQuestion => {
+            return Ok(truncate_to_char_limit(
+                &format!("{prefix}Please provide a non-empty question."),
+                settings.max_reply_length,
+            ));
+        }
+        RetrievalOutcome::CorpusEmpty => {
+            return Ok(truncate_to_char_limit(
+                &format!("{prefix}Chronicle corpus is empty."),
+                settings.max_reply_length,
+            ));
+        }
+        RetrievalOutcome::NoResultMeetsThreshold => {
+            return Ok(truncate_to_char_limit(
+                &format!("{prefix}No relevant Chronicle context was found."),
+                settings.max_reply_length,
+            ));
+        }
+    };
+
+    let retrieval_question = mode.retrieval_question(question);
+    let assembly = prompt::build_prompt_with_budget(
+        &retrieval_question,
+        &results,
+        llm.prompt_token_budget(),
+        |candidate| llm.count_input_tokens(candidate),
+    )?;
+    let prompt = assembly.prompt;
+    debug!(
+        result_count = results.len(),
+        selected_result_count = assembly.selected_results,
+        omitted_result_count = assembly.omitted_results,
+        prompt_tokens = assembly.prompt_tokens,
+        truncated_result = assembly.truncated_result,
+        prompt_len = prompt.len(),
+        "Built Chronicle prompt"
+    );
+    let (answer, _, _) = generate_answer(llm, &prompt, answer_limit).await?;
+    Ok(format!("{prefix}{answer}"))
+}
+
+pub(in crate::chronicle::service) async fn generate_answer(
+    llm: &dyn LanguageModel,
+    prompt: &str,
+    answer_limit: usize,
+) -> Result<(String, bool, bool)> {
+    let mut answer = llm.generate(prompt).await?;
+    let mut retried = false;
+    let mut truncated = false;
+    if answer.chars().count() > answer_limit {
+        debug!(
+            answer_len = answer.chars().count(),
+            max_reply_length = answer_limit,
+            "LLM answer exceeded configured length; requesting a shorter answer"
+        );
+        let retry_prompt = format!(
+            "{prompt}\n\nThe draft answer below is too long. Rewrite it to fit within {answer_limit} characters. Preserve the most important information, and output only the shorter answer.\n\nDraft answer:\n{answer}"
+        );
+        answer = llm.generate(&retry_prompt).await?;
+        retried = true;
+    }
+    if answer.chars().count() > answer_limit {
+        tracing::warn!(
+            answer_len = answer.chars().count(),
+            max_reply_length = answer_limit,
+            "LLM answer remained over length after retry; truncating"
+        );
+        answer = truncate_to_char_limit(&answer, answer_limit);
+        truncated = true;
+    }
+    Ok((answer, retried, truncated))
+}
+
+pub(in crate::chronicle::service) fn truncate_to_char_limit(
+    answer: &str,
+    max_length: usize,
+) -> String {
+    answer.chars().take(max_length).collect()
+}
