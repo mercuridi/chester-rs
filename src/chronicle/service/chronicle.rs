@@ -40,7 +40,11 @@ pub struct Chronicle {
 
 #[async_trait::async_trait]
 pub trait StructuredStore: Send + Sync {
-    async fn resolve_string_or_wikilinks(&self, plan: &mut StructuredPlan) -> Result<()>;
+    async fn resolve_string_or_wikilinks(
+        &self,
+        plan: &mut StructuredPlan,
+        access: AccessScope,
+    ) -> Result<()>;
 
     async fn execute_plan(
         &self,
@@ -51,8 +55,12 @@ pub trait StructuredStore: Send + Sync {
 
 #[async_trait::async_trait]
 impl StructuredStore for IndexerDb {
-    async fn resolve_string_or_wikilinks(&self, plan: &mut StructuredPlan) -> Result<()> {
-        self.resolve_string_or_wikilinks(plan).await
+    async fn resolve_string_or_wikilinks(
+        &self,
+        plan: &mut StructuredPlan,
+        access: AccessScope,
+    ) -> Result<()> {
+        self.resolve_string_or_wikilinks(plan, access).await
     }
 
     async fn execute_plan(
@@ -170,7 +178,7 @@ impl Chronicle {
         info!("Starting Chronicle question");
         let _lifecycle = self.lifecycle.lock().await;
 
-        let selection = self.select_answer_route(question).await?;
+        let selection = self.select_answer_route(question, access).await?;
         let effective_route = Self::effective_route(&selection.route);
         let outcome = self
             .execute_answer_route(question, access, selection.route)
@@ -189,11 +197,16 @@ impl Chronicle {
         })
     }
 
-    async fn select_answer_route(&self, question: &str) -> Result<answer_routing::RouteSelection> {
+    async fn select_answer_route(
+        &self,
+        question: &str,
+        access: AccessScope,
+    ) -> Result<answer_routing::RouteSelection> {
         answer_routing::select_answer_route(
             self.llm.as_ref(),
             self.structured_store.as_ref(),
             question,
+            access,
         )
         .await
     }
@@ -601,8 +614,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StructuredStore for FakeStructuredStore {
-        async fn resolve_string_or_wikilinks(&self, plan: &mut StructuredPlan) -> Result<()> {
-            self.database()?.resolve_string_or_wikilinks(plan).await
+        async fn resolve_string_or_wikilinks(
+            &self,
+            plan: &mut StructuredPlan,
+            access: AccessScope,
+        ) -> Result<()> {
+            self.database()?
+                .resolve_string_or_wikilinks(plan, access)
+                .await
         }
 
         async fn execute_plan(

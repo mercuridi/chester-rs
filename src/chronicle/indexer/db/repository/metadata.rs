@@ -99,12 +99,13 @@ impl IndexerDb {
     }
 
     /// Resolves a plain `StringOrWikilink` condition only when the exact
-    /// bracketed candidate is already present in indexed metadata. Literal
-    /// values remain untouched, so this cannot turn arbitrary prose into a
-    /// link query.
+    /// bracketed candidate is already present in the requested field and
+    /// accessible canon corpus. Literal values remain untouched, so this
+    /// cannot turn arbitrary prose into a link query.
     pub async fn resolve_string_or_wikilinks(
         &self,
         plan: &mut crate::chronicle::query::plan::StructuredPlan,
+        access: AccessScope,
     ) -> Result<()> {
         let (note_type, filters) = match plan.as_plan_mut() {
             crate::chronicle::query::plan::Plan::Count { note_type, filters }
@@ -127,11 +128,30 @@ impl IndexerDb {
                 continue;
             }
             let candidate = format!("[[{}]]", condition.value.trim());
-            let exists: i64 = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM note_scalar_fields WHERE value = ? UNION ALL SELECT 1 FROM note_wikilinks WHERE value = ?)",
-            )
+            let visibility = if access == AccessScope::Player {
+                " AND m.visibility != 'secret'"
+            } else {
+                ""
+            };
+            let exists: i64 = sqlx::query_scalar(&format!(
+                "SELECT EXISTS( \
+                        SELECT 1 FROM note_scalar_fields s \
+                        JOIN note_metadata m ON m.document_id = s.document_id \
+                        WHERE s.field_name = ? AND s.value = ? \
+                          AND m.note_type = ? AND m.status = 'canon'{visibility} \
+                        UNION ALL \
+                        SELECT 1 FROM note_wikilinks w \
+                        JOIN note_metadata m ON m.document_id = w.document_id \
+                        WHERE w.field_name = ? AND w.value = ? \
+                          AND m.note_type = ? AND m.status = 'canon'{visibility} \
+                    )"
+            ))
+            .bind(&condition.field)
             .bind(&candidate)
+            .bind(note_type)
+            .bind(&condition.field)
             .bind(&candidate)
+            .bind(note_type)
             .fetch_one(&self.pool)
             .await?;
             if exists != 0 {

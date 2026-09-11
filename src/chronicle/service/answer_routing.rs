@@ -3,6 +3,7 @@ use std::time::Instant;
 use tracing::{debug, info};
 
 use super::super::{
+    indexer::db::repository::facade::AccessScope,
     llm::LanguageModel,
     query::{
         classifier,
@@ -106,6 +107,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
     llm: &dyn LanguageModel,
     structured_store: &dyn StructuredStore,
     question: &str,
+    access: AccessScope,
 ) -> Result<RouteSelection> {
     let selection_started = Instant::now();
     if question.trim().is_empty() {
@@ -267,7 +269,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
     };
     if plan.selection().is_some() {
         structured_store
-            .resolve_string_or_wikilinks(&mut plan)
+            .resolve_string_or_wikilinks(&mut plan, access)
             .await?;
     }
     debug!(route = ?plan, "Validated Chronicle query plan");

@@ -402,7 +402,7 @@ async fn structured_conditions_query_scalar_and_wikilink_list_metadata() -> Resu
             r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"Great Dungeon Fight"}]}}"#,
         )?,
     )?;
-    db.resolve_string_or_wikilinks(&mut plain_target_plan)
+    db.resolve_string_or_wikilinks(&mut plain_target_plan, AccessScope::Gm)
         .await?;
     assert_eq!(
         plain_target_plan
@@ -425,7 +425,8 @@ async fn structured_conditions_query_scalar_and_wikilink_list_metadata() -> Resu
             r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"old age"}]}}"#,
         )?,
     )?;
-    db.resolve_string_or_wikilinks(&mut literal_plan).await?;
+    db.resolve_string_or_wikilinks(&mut literal_plan, AccessScope::Gm)
+        .await?;
     assert_eq!(
         literal_plan
             .selection()
@@ -435,6 +436,82 @@ async fn structured_conditions_query_scalar_and_wikilink_list_metadata() -> Resu
             .value,
         "old age"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn string_or_wikilink_resolution_respects_field_type_and_access_scope() -> Result<()> {
+    let (_directory, db) = test_database().await?;
+    for (path, source) in [
+        (
+            "field-context.md",
+            "---\nid: field-context\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nlocation: '[[Field Candidate]]'\n---\n",
+        ),
+        (
+            "type-context.md",
+            "---\nid: type-context\ntype: deity\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\ndomain: '[[Type Candidate]]'\n---\n",
+        ),
+        (
+            "access-context.md",
+            "---\nid: access-context\ntype: character\nstatus: canon\nvisibility: secret\ncreated: 2026-09-07\nupdated: 2026-09-07\nlife_status_cause: '[[Hidden Candidate]]'\n---\n",
+        ),
+    ] {
+        let (metadata, _) =
+            crate::chronicle::indexer::frontmatter::parse(source)?.context("note")?;
+        db.replace_note(path, "hash", &[], &[], &metadata).await?;
+    }
+
+    let make_plan = |value: &str| -> Result<crate::chronicle::query::plan::StructuredPlan> {
+        crate::chronicle::query::plan::StructuredPlan::try_from(
+            crate::chronicle::query::planner::parse(&format!(
+                r#"{{"operation":"list","note_type":"character","filters":{{"conditions":[{{"field":"life_status_cause","operator":"equals","value":"{value}"}}]}}}}"#
+            ))?,
+        )
+    };
+
+    let mut field_plan = make_plan("Field Candidate")?;
+    db.resolve_string_or_wikilinks(&mut field_plan, AccessScope::Gm)
+        .await?;
+    let field_value = &field_plan
+        .selection()
+        .context("field-context plan has no selection")?
+        .1
+        .conditions[0]
+        .value;
+    assert_eq!(field_value, "Field Candidate");
+
+    let mut type_plan = make_plan("Type Candidate")?;
+    db.resolve_string_or_wikilinks(&mut type_plan, AccessScope::Gm)
+        .await?;
+    let type_value = &type_plan
+        .selection()
+        .context("type-context plan has no selection")?
+        .1
+        .conditions[0]
+        .value;
+    assert_eq!(type_value, "Type Candidate");
+
+    let mut player_plan = make_plan("Hidden Candidate")?;
+    db.resolve_string_or_wikilinks(&mut player_plan, AccessScope::Player)
+        .await?;
+    let player_value = &player_plan
+        .selection()
+        .context("player-context plan has no selection")?
+        .1
+        .conditions[0]
+        .value;
+    assert_eq!(player_value, "Hidden Candidate");
+
+    let mut gm_plan = make_plan("Hidden Candidate")?;
+    db.resolve_string_or_wikilinks(&mut gm_plan, AccessScope::Gm)
+        .await?;
+    let gm_value = &gm_plan
+        .selection()
+        .context("GM-context plan has no selection")?
+        .1
+        .conditions[0]
+        .value;
+    assert_eq!(gm_value, "[[Hidden Candidate]]");
     Ok(())
 }
 

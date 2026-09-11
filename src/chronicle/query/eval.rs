@@ -276,7 +276,10 @@ async fn evaluate_structured_route(
 }
 
 async fn accept_structured_plan(report: &mut CaseReport, db: &IndexerDb, mut plan: StructuredPlan) {
-    if let Err(error) = db.resolve_string_or_wikilinks(&mut plan).await {
+    if let Err(error) = db
+        .resolve_string_or_wikilinks(&mut plan, AccessScope::Gm)
+        .await
+    {
         report.link_resolution_error = Some(format!("{error:#}"));
         report.end_to_end_correct = Some(false);
         return;
