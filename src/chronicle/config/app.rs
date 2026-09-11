@@ -12,8 +12,14 @@ use super::{
 pub struct Config {
     pub database: DatabaseConfig,
     pub chronicle: ChronicleConfig,
+    pub logging: LoggingConfig,
     pub paths: AppPaths,
     discord: DiscordConfig,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LoggingConfig {
+    pub content: bool,
 }
 
 impl Config {
@@ -42,12 +48,14 @@ impl Config {
     pub(crate) fn new(
         database: DatabaseConfig,
         chronicle: ChronicleConfig,
+        logging: LoggingConfig,
         paths: AppPaths,
         discord: DiscordConfig,
     ) -> Self {
         Self {
             database,
             chronicle,
+            logging,
             paths,
             discord,
         }

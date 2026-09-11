@@ -2,6 +2,7 @@ mod chronicle;
 mod database;
 mod discord;
 mod jester;
+mod logging;
 mod shutdown;
 mod utils;
 
@@ -35,8 +36,6 @@ use crate::{
     },
 };
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
-use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -305,8 +304,8 @@ fn main() {
     let logging = LoggingSettings::load(&paths.env_path);
 
     #[allow(clippy::print_stderr)]
-    let log_file = match create_log_file(&paths.log_dir, logging.log_level) {
-        Ok(file) => file,
+    let log_writer = match logging::build_writer(&paths.log_dir, logging.log_level) {
+        Ok(writer) => writer,
         Err(error) => {
             eprintln!("Failed to initialize logfile: {error:#}");
             std::process::exit(1);
@@ -315,7 +314,7 @@ fn main() {
     let terminal_layer = tracing_subscriber::fmt::layer();
     let file_layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
-        .with_writer(log_file);
+        .with_writer(log_writer.writer());
 
     #[allow(clippy::print_stderr)]
     if let Err(error) = tracing_subscriber::registry()
@@ -332,6 +331,8 @@ fn main() {
         tracing::warn!(?error, "Invalid RUST_LOG filter; using the default filter");
     }
 
+    let _log_guard = log_writer;
+
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -347,34 +348,6 @@ fn main() {
         tracing::error!("Chester failed to start: {error:#}");
         tracing::debug!(error = ?error, "Startup error chain");
         std::process::exit(1);
-    }
-}
-
-fn create_log_file(directory: &Path, log_level: &str) -> Result<std::fs::File> {
-    fs::create_dir_all(directory).with_context(|| {
-        format!(
-            "Failed to create logfile directory at {}",
-            directory.display()
-        )
-    })?;
-    let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
-    let version = env!("CARGO_PKG_VERSION");
-    let mut suffix = 0_u64;
-    loop {
-        let filename = if suffix == 0 {
-            format!("chester-{timestamp}-{log_level}-v{version}.log")
-        } else {
-            format!("chester-{timestamp}-{log_level}-v{version}-{suffix}.log")
-        };
-        let path = directory.join(filename);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => return Ok(file),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => suffix += 1,
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("Failed to create logfile at {}", path.display()));
-            }
-        }
     }
 }
 

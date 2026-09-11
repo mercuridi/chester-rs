@@ -4,6 +4,10 @@
 jester = "sqlite://data/jester.sqlite3"
 chronicle = "sqlite://data/chronicle.sqlite3"
 
+[logging]
+# Protected Chronicle questions and answers are excluded unless explicitly enabled.
+content = false
+
 [chronicle.indexing]
 corpus_dir = "corpus"
 excluded_note_ids = []

@@ -110,7 +110,7 @@ cp chronicle.config.example.toml .chronicle/config.toml
 ```
 
 The example configuration is enough for a basic deployment. It is strict: the
-top-level `database`, `chronicle`, and `discord` sections, and every nested
+top-level `database`, `logging`, `chronicle`, and `discord` sections, and every nested
 section shown below, are required. Unknown keys are rejected. Paths are relative
 to the runtime root:
 
@@ -121,6 +121,10 @@ to the runtime root:
 [database]
 jester = "sqlite://data/jester.sqlite3"
 chronicle = "sqlite://data/chronicle.sqlite3"
+
+[logging]
+# Protected Chronicle questions and answers are excluded unless explicitly enabled.
+content = false
 
 [chronicle.indexing]
 corpus_dir = "corpus"
@@ -251,9 +255,14 @@ RUST_LOG=warn cargo run --release
 ```
 
 Chester writes logs to both the terminal and a timestamped logfile under
-`logs/application/`. Filenames include the selected log level and application
-version, for example `chester-20260910-143015-info-v3.0.0.log`. The logfile uses
-the same `RUST_LOG` filtering as terminal output.
+`logs/application/`. Logfiles rotate daily and are retained for 14 days, with a
+maximum of 20 files. File writes use a bounded asynchronous queue; when full,
+the oldest queued record is discarded. The logfile uses the same `RUST_LOG`
+filtering as terminal output.
+
+Chronicle questions and answers are excluded from both sinks by default. Set
+`[logging].content = true` in `.chronicle/config.toml` only when protected
+content logging is explicitly required.
 
 At startup the bot opens the two SQLite databases, indexes `corpus/`, verifies `yt-dlp` and `ffmpeg`, synchronizes missing music, and then connects to Discord. A failure in any of those stages prevents login.
 

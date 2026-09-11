@@ -118,7 +118,10 @@ pub(in crate::chronicle::service) async fn select_answer_route(
         return Ok(RouteSelection::predetermined(AnswerRoute::EmptyQuestion));
     }
     if planner::is_definitely_unsupported_structured_request(question) {
-        debug!(%question, "Skipping query planner for a definitely unsupported structured request");
+        debug!(
+            question_len = question.chars().count(),
+            "Skipping query planner for a definitely unsupported structured request"
+        );
         emit_route_selection(
             RouteOperation::Unsupported,
             "routed",
@@ -132,11 +135,15 @@ pub(in crate::chronicle::service) async fn select_answer_route(
     let classifier_started = Instant::now();
     let (response, operation) = match llm.classify_route(question).await {
         Ok(response) => {
-            debug!(%question, classifier_response = %response, "Route classifier response received");
+            debug!(
+                question_len = question.chars().count(),
+                classifier_response_len = response.chars().count(),
+                "Route classifier response received"
+            );
             match classifier::parse(&response) {
                 Ok(operation) => (response, operation),
                 Err(error) => {
-                    debug!(%question, classifier_response = %response, %error, "Route classification response rejected");
+                    debug!(question_len = question.chars().count(), classifier_response_len = response.chars().count(), %error, "Route classification response rejected");
                     tracing::warn!(%error, "Route classification failed; using non-exhaustive retrieval");
                     emit_route_selection(
                         RouteOperation::Search,
@@ -153,7 +160,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
             }
         }
         Err(error) => {
-            debug!(%question, %error, "Route classification request failed");
+            debug!(question_len = question.chars().count(), %error, "Route classification request failed");
             tracing::warn!(%error, "Route classification failed; using non-exhaustive retrieval");
             emit_route_selection(
                 RouteOperation::Search,
@@ -168,7 +175,11 @@ pub(in crate::chronicle::service) async fn select_answer_route(
             ));
         }
     };
-    debug!(%question, ?operation, "Route classification accepted");
+    debug!(
+        question_len = question.chars().count(),
+        ?operation,
+        "Route classification accepted"
+    );
     match operation {
         RouteOperation::Search => {
             emit_route_selection(operation, "routed", "classifier", classifier_started);
@@ -218,7 +229,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
                 Some(plan)
             }
             Err(error) => {
-                debug!(%question, %error, planner_response = %response, ?operation, "Chronicle structured query response rejected");
+                debug!(question_len = question.chars().count(), response_len = response.chars().count(), %error, ?operation, "Chronicle structured query response rejected");
                 emit_route_selection(
                     operation,
                     "validation_failure",
@@ -226,7 +237,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
                     generator_started,
                 );
                 debug!(
-                    %question,
+                    question_len = question.chars().count(),
                     ?operation,
                     "Retrying Chronicle structured query with correction request"
                 );
@@ -238,7 +249,10 @@ pub(in crate::chronicle::service) async fn select_answer_route(
                     Ok(retry_response) => {
                         match parse_structured_plan(question, &retry_response, operation) {
                             Ok(plan) => {
-                                debug!(%question, ?plan, "Chronicle structured query retry accepted");
+                                debug!(
+                                    question_len = question.chars().count(),
+                                    "Chronicle structured query retry accepted"
+                                );
                                 emit_route_selection(
                                     operation,
                                     "repaired",
@@ -248,7 +262,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
                                 Some(plan)
                             }
                             Err(retry_error) => {
-                                debug!(%question, %retry_error, planner_response = %retry_response, "Chronicle structured query retry response rejected");
+                                debug!(question_len = question.chars().count(), retry_response_len = retry_response.chars().count(), %retry_error, "Chronicle structured query retry response rejected");
                                 tracing::warn!(%retry_error, "Structured query planning failed after retry; using non-exhaustive retrieval");
                                 emit_route_selection(
                                     operation,
@@ -261,7 +275,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
                         }
                     }
                     Err(retry_error) => {
-                        debug!(%question, %retry_error, initial_error = %error, "Structured query planning retry request failed");
+                        debug!(question_len = question.chars().count(), %retry_error, initial_error = %error, "Structured query planning retry request failed");
                         tracing::warn!(%retry_error, initial_error = %error, "Structured query planning retry failed; using non-exhaustive retrieval");
                         emit_route_selection(
                             operation,
@@ -275,7 +289,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
             }
         },
         Err(error) => {
-            debug!(%question, %error, ?operation, "Structured query generation request failed");
+            debug!(question_len = question.chars().count(), %error, ?operation, "Structured query generation request failed");
             tracing::warn!(%error, ?operation, "Structured query planning failed; using non-exhaustive retrieval");
             emit_route_selection(
                 operation,

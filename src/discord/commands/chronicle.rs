@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use chrono::Local;
 use serenity::model::id::{GuildId, UserId};
@@ -464,7 +467,10 @@ pub async fn ask(
     #[description = "Question to ask Chronicle"] question: String,
 ) -> Result<(), Error> {
     ctx.data().ensure_running()?;
-    info!(user = %ctx.author().id, question = %question, "Chronicle ask command requested");
+    let started = Instant::now();
+    let user = ctx.author().id;
+    let guild = ctx.guild_id();
+    info!(%user, ?guild, question_len = question.chars().count(), "Chronicle ask command requested");
     ctx.defer().await?;
 
     let access = if ctx.data().config.is_chronicle_gm(ctx.author().id) {
@@ -472,10 +478,25 @@ pub async fn ask(
     } else {
         crate::chronicle::indexer::db::repository::facade::AccessScope::Player
     };
-    let answer = ctx.data().chronicle.ask_for(&question, access).await?;
-    info!(user = %ctx.author().id, reply = %answer, "Chronicle ask command returned reply");
+    let access_scope = if access.is_gm() { "gm" } else { "player" };
+    let answer = match ctx
+        .data()
+        .chronicle
+        .ask_for_with_metadata(&question, access)
+        .await
+    {
+        Ok(answer) => answer,
+        Err(error) => {
+            tracing::error!(%user, ?guild, access = access_scope, elapsed_ms = started.elapsed().as_millis() as u64, %error, "Chronicle ask failed");
+            return Err(error.into());
+        }
+    };
+    info!(%user, ?guild, access = access_scope, route = ?answer.effective_route, elapsed_ms = started.elapsed().as_millis() as u64, reply_len = answer.reply.chars().count(), "Chronicle ask command returned reply");
+    if ctx.data().config.logging.content {
+        info!(%user, ?guild, question = %question, reply = %answer.reply, "Chronicle ask content");
+    }
 
-    ctx.say(answer).await?;
+    ctx.say(answer.reply).await?;
 
     Ok(())
 }

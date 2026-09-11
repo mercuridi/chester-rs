@@ -154,7 +154,7 @@ impl Chronicle {
             .await
     }
 
-    async fn ask_for_with_metadata(
+    pub(crate) async fn ask_for_with_metadata(
         &self,
         question: &str,
         access: AccessScope,
@@ -167,7 +167,6 @@ impl Chronicle {
         let outcome = self
             .execute_answer_route(question, access, selection.route)
             .await?;
-        debug!(reply = %outcome.reply, "Chronicle final reply");
         info!(
             reply_len = outcome.reply.chars().count(),
             "Completed Chronicle question"

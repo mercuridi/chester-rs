@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use super::{
-    app::Config,
+    app::{Config, LoggingConfig},
     chronicle::ChronicleConfig,
     database::{DatabaseConfig, FileDatabaseConfig},
     discord::DiscordConfig,
@@ -17,6 +17,14 @@ struct FileConfig {
     database: FileDatabaseConfig,
     chronicle: super::chronicle::FileChronicleConfig,
     discord: super::discord::FileDiscordConfig,
+    logging: FileLoggingConfig,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileLoggingConfig {
+    #[serde(default)]
+    content: bool,
 }
 
 pub(crate) fn load(paths: AppPaths) -> Result<Config> {
@@ -32,6 +40,9 @@ pub(crate) fn load(paths: AppPaths) -> Result<Config> {
     Ok(Config::new(
         DatabaseConfig::from_file(&file.database, &paths.runtime_root)?,
         ChronicleConfig::from_file(file.chronicle, &paths.runtime_root)?,
+        LoggingConfig {
+            content: file.logging.content,
+        },
         paths,
         discord,
     ))

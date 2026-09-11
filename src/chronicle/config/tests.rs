@@ -14,6 +14,9 @@ const CONFIG: &str = r#"
 jester = "sqlite://data/jester.sqlite3"
 chronicle = "sqlite://data/chronicle.sqlite3?mode=rwc"
 
+[logging]
+content = false
+
 [chronicle.indexing]
 corpus_dir = "corpus"
 excluded_note_ids = []
