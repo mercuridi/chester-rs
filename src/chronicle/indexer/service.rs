@@ -33,18 +33,14 @@ struct PreparedDocument {
 }
 
 impl PreparedDocument {
-    fn prepare(
+    fn chunks(
         document: &Document,
-        embedder: &dyn EmbeddingModel,
+        tokenizer: &tokenizers::Tokenizer,
         max_chunk_tokens: usize,
         chunk_overlap_tokens: usize,
-    ) -> Result<Self> {
-        let mut chunks = chunker::chunk::chunk(
-            document,
-            embedder.chunking_tokenizer(),
-            max_chunk_tokens,
-            chunk_overlap_tokens,
-        )?;
+    ) -> Result<Vec<Chunk>> {
+        let mut chunks =
+            chunker::chunk::chunk(document, tokenizer, max_chunk_tokens, chunk_overlap_tokens)?;
         let primary_visibility = if document.metadata.visibility == "secret" {
             ChunkVisibility::Secret
         } else {
@@ -60,7 +56,7 @@ impl PreparedDocument {
             let offset = chunks.len();
             let mut secret_chunks = chunker::chunk::chunk(
                 &secret_document,
-                embedder.chunking_tokenizer(),
+                tokenizer,
                 max_chunk_tokens,
                 chunk_overlap_tokens,
             )?;
@@ -70,6 +66,21 @@ impl PreparedDocument {
             }
             chunks.extend(secret_chunks);
         }
+        Ok(chunks)
+    }
+
+    fn prepare(
+        document: &Document,
+        embedder: &dyn EmbeddingModel,
+        max_chunk_tokens: usize,
+        chunk_overlap_tokens: usize,
+    ) -> Result<Self> {
+        let chunks = Self::chunks(
+            document,
+            embedder.chunking_tokenizer(),
+            max_chunk_tokens,
+            chunk_overlap_tokens,
+        )?;
         let chunks = chunks
             .into_iter()
             .map(|chunk| {
@@ -217,7 +228,7 @@ impl Indexer {
                 let unchanged = if indexed.content_hash == fingerprint {
                     true
                 } else {
-                    let chunks = chunker::chunk::chunk(
+                    let chunks = PreparedDocument::chunks(
                         &document,
                         self.embedder.chunking_tokenizer(),
                         self.max_chunk_tokens,
@@ -458,7 +469,7 @@ fn index_fingerprint(
     chunk_overlap_tokens: usize,
 ) -> String {
     format!(
-        "{}:chunker-v9-clean-frontmatter:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
+        "{}:chunker-v10-clean-frontmatter:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
         document.content_hash
     )
 }
@@ -557,6 +568,103 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn visibility_transitions_reindex_all_chunks_and_vectors() -> Result<()> {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokenizers::{models::wordlevel::WordLevel, pre_tokenizers::whitespace::Whitespace};
+
+        let temp = tempfile::tempdir()?;
+        let corpus = temp.path().join("corpus");
+        std::fs::create_dir(&corpus)?;
+        let path = corpus.join("Visibility.md");
+        let model = WordLevel::builder()
+            .vocab([("[UNK]".into(), 0)].into_iter().collect())
+            .unk_token("[UNK]".into())
+            .build()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut tokenizer = tokenizers::Tokenizer::new(model);
+        tokenizer.with_pre_tokenizer(Some(Whitespace {}));
+        let batches = Arc::new(AtomicUsize::new(0));
+        let db = IndexerDb::open(&format!(
+            "sqlite://{}",
+            temp.path().join("test.sqlite3").display()
+        ))
+        .await?;
+        let indexer = Indexer::with_embedding_model(
+            corpus,
+            db.clone(),
+            Box::new(CountingEmbedder {
+                tokenizer,
+                batches: batches.clone(),
+            }),
+            128,
+            0,
+        );
+
+        let source = |visibility: &str, callout: bool| {
+            let secret = if callout {
+                "\n> [!secret] Hidden\n> secrettoken\n"
+            } else {
+                ""
+            };
+            format!(
+                "---\nid: visibility\ntype: lore\nstatus: canon\nvisibility: {visibility}\ncreated: 2026-09-07\nupdated: 2026-09-07\n---\npublictoken{secret}"
+            )
+        };
+
+        let transitions = [
+            ("player", false, "secret", false),
+            ("secret", false, "player", false),
+            ("player", false, "mixed", true),
+            ("mixed", true, "player", false),
+            ("player", false, "mixed", true),
+            ("mixed", true, "secret", false),
+        ];
+        std::fs::write(&path, source("player", false))?;
+        indexer.index().await?;
+
+        for (from_visibility, _from_callout, to_visibility, to_callout) in transitions {
+            std::fs::write(&path, source(to_visibility, to_callout))?;
+            let stats = indexer.index().await?;
+            assert_eq!(stats.updated, 1, "{from_visibility} -> {to_visibility}");
+            assert_eq!(stats.unchanged, 0, "{from_visibility} -> {to_visibility}");
+
+            let public_player_matches = db
+                .search_lexical_for("publictoken", 10, AccessScope::Player)
+                .await?;
+            assert_eq!(
+                public_player_matches.len(),
+                usize::from(to_visibility != "secret")
+            );
+            assert_eq!(
+                db.search_lexical_for("publictoken", 10, AccessScope::Gm)
+                    .await?
+                    .len(),
+                1
+            );
+            assert!(
+                db.search_lexical_for("secrettoken", 10, AccessScope::Player)
+                    .await?
+                    .is_empty(),
+                "player search leaked secrettoken during {from_visibility} -> {to_visibility}"
+            );
+            let secret_gm_matches = db
+                .search_lexical_for("secrettoken", 10, AccessScope::Gm)
+                .await?;
+            assert_eq!(
+                secret_gm_matches.len(),
+                usize::from(to_visibility == "mixed"),
+                "GM search did not find secrettoken during {from_visibility} -> {to_visibility}"
+            );
+        }
+
+        assert_eq!(batches.load(Ordering::SeqCst), 7);
+        Ok(())
+    }
+
     fn prepared_chunk(index: usize, text: &str, embedding: Option<Vec<f32>>) -> PreparedChunk {
         PreparedChunk {
             chunk: Chunk {
@@ -634,7 +742,7 @@ mod tests {
             content_hash: "hash".into(),
         };
         let baseline = index_fingerprint(&document, 100, 10);
-        assert!(baseline.starts_with("hash:chunker-v9-clean-frontmatter:"));
+        assert!(baseline.starts_with("hash:chunker-v10-clean-frontmatter:"));
         assert_ne!(baseline, index_fingerprint(&document, 101, 10));
         assert_ne!(baseline, index_fingerprint(&document, 100, 11));
 
