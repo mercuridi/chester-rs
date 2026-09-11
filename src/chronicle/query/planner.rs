@@ -1,4 +1,5 @@
 use super::plan::{Plan, StructuredOperation, StructuredPlan};
+use crate::chronicle::indexer::schema::{self, ValueType};
 use crate::chronicle::llm::LanguageModel;
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
@@ -33,30 +34,42 @@ pub fn structured_system_prompt(operation: StructuredOperation) -> String {
         }
     };
     format!(
-        "{STRUCTURED_SYSTEM}\n\nThe route classifier has already selected `{operation:?}`. Construct only that operation. {output_shape}\nDeclared universal fields: {}.\nDeclared type fields: {}.",
-        crate::chronicle::indexer::schema::UNIVERSAL_FIELD_DEFINITIONS
-            .iter()
-            .map(|field| field.name)
-            .collect::<Vec<_>>()
-            .join(", "),
-        crate::chronicle::indexer::schema::DOCUMENT_TYPE_DEFINITIONS
+        "{STRUCTURED_SYSTEM}\n\nThe route classifier has already selected `{operation:?}`. Construct only that operation. {output_shape}\nTyped universal fields: {}.\nTyped fields by note type: {}.",
+        typed_fields(schema::UNIVERSAL_FIELD_DEFINITIONS),
+        schema::DOCUMENT_TYPE_DEFINITIONS
             .iter()
             .filter(|definition| definition.name != "template")
             .map(|definition| {
-                format!(
-                    "{}: {}",
-                    definition.name,
-                    definition
-                        .fields
-                        .iter()
-                        .map(|field| field.name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )
+                format!("{}: {}", definition.name, typed_fields(definition.fields))
             })
             .collect::<Vec<_>>()
             .join("; "),
     )
+}
+
+fn typed_fields(fields: &[schema::FieldDefinition]) -> String {
+    fields
+        .iter()
+        .map(|field| format!("{}: {}", field.name, describe_value_type(field.value_type)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn describe_value_type(value_type: ValueType) -> String {
+    match value_type {
+        ValueType::String => "string".into(),
+        ValueType::StringList => "string list".into(),
+        ValueType::Boolean => "boolean".into(),
+        ValueType::Date => "date (YYYY-MM-DD)".into(),
+        ValueType::FantasyDate => "fantasy date".into(),
+        ValueType::Wikilink => "wikilink [[Target]]".into(),
+        ValueType::WikilinkList => "wikilink list (contains [[Target]])".into(),
+        ValueType::StringOrWikilink => "string or wikilink [[Target]]".into(),
+        ValueType::FixedEnum(vocabulary) => {
+            format!("enum [{}]", vocabulary.values.join(", "))
+        }
+        ValueType::ExtensibleVocabulary => "extensible vocabulary string".into(),
+    }
 }
 
 pub fn parse(response: &str) -> Result<Plan> {
@@ -434,6 +447,29 @@ mod tests {
         assert!(prompt.contains("List all PCs played by Rowan."));
         assert!(prompt.contains("Never replace an explicit role"));
         assert!(prompt.contains("universal note `status`"));
+    }
+
+    #[test]
+    fn structured_prompt_contains_typed_schema_for_every_supported_note_type() {
+        let prompt = structured_system_prompt(StructuredOperation::Count);
+        assert!(prompt.contains("Typed universal fields:"));
+        assert!(prompt.contains("status: enum [canon, draft, deprecated, speculative]"));
+        assert!(prompt.contains("visibility: enum [player, secret, mixed]"));
+        assert!(prompt.contains("character: "));
+        assert!(prompt.contains("role: enum [pc, npc, ex-pc]"));
+        assert!(prompt.contains("life_status: enum [alive, dead, missing, unknown]"));
+        assert!(prompt.contains("deity: "));
+        assert!(prompt.contains("deity_type: enum [Minor, Major, Forsaken]"));
+        assert!(prompt.contains("event: "));
+        assert!(prompt.contains("occurred: fantasy date"));
+        assert!(prompt.contains("location: "));
+        assert!(prompt.contains("political_affiliations: wikilink list"));
+        assert!(prompt.contains("organisation: "));
+        assert!(prompt.contains("patron_deities: wikilink list"));
+        assert!(prompt.contains("monster: "));
+        assert!(prompt.contains("sizes: string list"));
+        assert!(prompt.contains("race: "));
+        assert!(!prompt.contains("template: "));
     }
 
     #[test]
