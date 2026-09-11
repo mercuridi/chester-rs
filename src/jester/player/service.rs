@@ -12,7 +12,7 @@ use poise::serenity_prelude::{GuildId, UserId};
 use songbird::{
     Call, Event, EventContext, EventHandler, TrackEvent,
     driver::Bitrate,
-    input::{File as SongbirdFile, cached::Compressed},
+    input::{File as SongbirdFile, Input, cached::Compressed},
     tracks::TrackHandle,
 };
 use tokio::sync::Mutex;
@@ -30,6 +30,13 @@ struct ActivePlayback {
     handle: TrackHandle,
 }
 
+#[derive(Default)]
+struct GuildPlayerState {
+    queue: GuildQueue,
+    active: Option<ActivePlayback>,
+    call: Option<Arc<Mutex<Call>>>,
+}
+
 #[derive(Clone, Debug)]
 pub struct QueueSnapshot {
     pub current: Option<PlaybackItem>,
@@ -37,25 +44,100 @@ pub struct QueueSnapshot {
     pub repeat_mode: RepeatMode,
 }
 
-pub struct PlayerService {
-    queues: Mutex<HashMap<GuildId, GuildQueue>>,
-    handles: Mutex<HashMap<GuildId, ActivePlayback>>,
-    calls: Mutex<HashMap<GuildId, Arc<Mutex<Call>>>>,
-    operation_lock: Mutex<()>,
-    next_playback_id: AtomicU64,
+#[async_trait::async_trait]
+trait PlaybackAdapter: Send + Sync {
+    async fn start(
+        &self,
+        guild_id: GuildId,
+        call: Arc<Mutex<Call>>,
+        item: &PlaybackItem,
+        player: Weak<PlayerService>,
+        playback_id: u64,
+    ) -> Result<TrackHandle>;
+    fn stop(&self, guild_id: GuildId, handle: TrackHandle);
+    async fn toggle_pause(&self, handle: TrackHandle) -> Result<bool>;
+}
+
+struct SongbirdAdapter {
     audio_dir: PathBuf,
+}
+
+#[async_trait::async_trait]
+impl PlaybackAdapter for SongbirdAdapter {
+    async fn start(
+        &self,
+        guild_id: GuildId,
+        call: Arc<Mutex<Call>>,
+        item: &PlaybackItem,
+        player: Weak<PlayerService>,
+        playback_id: u64,
+    ) -> Result<TrackHandle> {
+        let path = self
+            .audio_dir
+            .join(format!("{}.mp3", item.track.id.as_str()));
+        let source =
+            Compressed::new(SongbirdFile::new(path).into(), Bitrate::Bits(128_000)).await?;
+        let _ = source.raw.spawn_loader();
+        let handle = call.lock().await.play_only_input(Input::from(source));
+        if let Err(error) = handle.add_event(
+            Event::Track(TrackEvent::End),
+            TrackEndHandler {
+                player,
+                guild_id,
+                playback_id,
+            },
+        ) {
+            if let Err(stop_error) = handle.stop() {
+                debug!(?guild_id, %stop_error, "Failed to clean up a track whose event registration failed");
+            }
+            return Err(error.into());
+        }
+        Ok(handle)
+    }
+
+    fn stop(&self, guild_id: GuildId, handle: TrackHandle) {
+        if let Err(error) = handle.stop() {
+            debug!(?guild_id, %error, "Track was already stopped");
+        }
+    }
+
+    async fn toggle_pause(&self, handle: TrackHandle) -> Result<bool> {
+        let state = handle.get_info().await?;
+        if state.playing == songbird::tracks::PlayMode::Play {
+            handle.pause()?;
+            Ok(false)
+        } else {
+            handle.play()?;
+            Ok(true)
+        }
+    }
+}
+
+pub struct PlayerService {
+    players: Mutex<HashMap<GuildId, Arc<Mutex<GuildPlayerState>>>>,
+    adapter: Arc<dyn PlaybackAdapter>,
+    next_playback_id: AtomicU64,
 }
 
 impl PlayerService {
     pub fn new(audio_dir: PathBuf) -> Self {
+        Self::with_adapter(Arc::new(SongbirdAdapter { audio_dir }))
+    }
+
+    fn with_adapter(adapter: Arc<dyn PlaybackAdapter>) -> Self {
         Self {
-            queues: Mutex::new(HashMap::new()),
-            handles: Mutex::new(HashMap::new()),
-            calls: Mutex::new(HashMap::new()),
-            operation_lock: Mutex::new(()),
+            players: Mutex::new(HashMap::new()),
+            adapter,
             next_playback_id: AtomicU64::new(1),
-            audio_dir,
         }
+    }
+
+    async fn player_state(&self, guild_id: GuildId) -> Arc<Mutex<GuildPlayerState>> {
+        let mut players = self.players.lock().await;
+        players
+            .entry(guild_id)
+            .or_insert_with(|| Arc::new(Mutex::new(GuildPlayerState::default())))
+            .clone()
     }
 
     pub async fn play_now(
@@ -64,17 +146,13 @@ impl PlayerService {
         call: Arc<Mutex<Call>>,
         track: TrackInfo,
     ) -> Result<()> {
-        let _operation = self.operation_lock.lock().await;
-        self.calls.lock().await.insert(guild_id, call.clone());
-        self.stop_active(guild_id).await;
-        let transition = self
-            .queues
-            .lock()
+        let state = self.player_state(guild_id).await;
+        let mut state = state.lock().await;
+        state.call = Some(call);
+        self.stop_active(guild_id, &mut state);
+        let transition = state.queue.play_now(track);
+        self.start_transition(guild_id, &mut state, transition)
             .await
-            .entry(guild_id)
-            .or_default()
-            .play_now(track);
-        self.start_transition(guild_id, call, transition).await
     }
 
     pub async fn enqueue(
@@ -85,68 +163,54 @@ impl PlayerService {
         requested_by: UserId,
         next: bool,
     ) -> Result<bool> {
-        let _operation = self.operation_lock.lock().await;
-        self.calls.lock().await.insert(guild_id, call.clone());
-        let transition = {
-            let mut queues = self.queues.lock().await;
-            let queue = queues.entry(guild_id).or_default();
-            if next {
-                queue.enqueue_next(track, Some(requested_by))
-            } else {
-                queue.enqueue(track, Some(requested_by))
-            }
+        let state = self.player_state(guild_id).await;
+        let mut state = state.lock().await;
+        state.call = Some(call);
+        let transition = if next {
+            state.queue.enqueue_next(track, Some(requested_by))
+        } else {
+            state.queue.enqueue(track, Some(requested_by))
         };
         let started = transition.current.is_some();
-        self.start_transition(guild_id, call, transition).await?;
+        self.start_transition(guild_id, &mut state, transition)
+            .await?;
         Ok(started)
     }
 
     pub async fn skip(self: &Arc<Self>, guild_id: GuildId) -> Result<TrackInfo> {
-        let _operation = self.operation_lock.lock().await;
-        let call = self
-            .calls
-            .lock()
-            .await
-            .get(&guild_id)
-            .cloned()
+        let state = self.player_state(guild_id).await;
+        let mut state = state.lock().await;
+        let call = state
+            .call
+            .clone()
             .ok_or_else(|| anyhow!("No track is currently playing."))?;
-        let transition = self
-            .queues
-            .lock()
-            .await
-            .entry(guild_id)
-            .or_default()
-            .skip()?;
+        let transition = state.queue.skip()?;
         let next = transition
             .current
             .as_ref()
             .ok_or_else(|| anyhow!("No queued track is available to skip to."))?
             .track
             .clone();
-        self.stop_active(guild_id).await;
-        self.start_transition(guild_id, call, transition).await?;
+        self.stop_active(guild_id, &mut state);
+        state.call = Some(call);
+        self.start_transition(guild_id, &mut state, transition)
+            .await?;
         Ok(next)
     }
 
     pub async fn queue_snapshot(&self, guild_id: GuildId) -> QueueSnapshot {
-        let queues = self.queues.lock().await;
-        let queue = queues.get(&guild_id);
+        let state = self.player_state(guild_id).await;
+        let state = state.lock().await;
         QueueSnapshot {
-            current: queue.and_then(|q| q.current().cloned()),
-            upcoming: queue
-                .map(|q| q.upcoming().iter().cloned().collect())
-                .unwrap_or_default(),
-            repeat_mode: queue.map(GuildQueue::repeat_mode).unwrap_or_default(),
+            current: state.queue.current().cloned(),
+            upcoming: state.queue.upcoming().iter().cloned().collect(),
+            repeat_mode: state.queue.repeat_mode(),
         }
     }
 
     pub async fn history(&self, guild_id: GuildId) -> Vec<HistoryEntry> {
-        self.queues
-            .lock()
-            .await
-            .get(&guild_id)
-            .map(|queue| queue.history().iter().cloned().collect())
-            .unwrap_or_default()
+        let state = self.player_state(guild_id).await;
+        state.lock().await.queue.history().iter().cloned().collect()
     }
 
     pub async fn remove_queue_entry(
@@ -154,63 +218,44 @@ impl PlayerService {
         guild_id: GuildId,
         position: usize,
     ) -> Result<TrackInfo> {
-        Ok(self
-            .queues
-            .lock()
-            .await
-            .entry(guild_id)
-            .or_default()
-            .remove(position)?
-            .track)
+        let state = self.player_state(guild_id).await;
+        Ok(state.lock().await.queue.remove(position)?.track)
     }
+
     pub async fn move_queue_entry(&self, guild_id: GuildId, from: usize, to: usize) -> Result<()> {
-        self.queues
-            .lock()
-            .await
-            .entry(guild_id)
-            .or_default()
-            .move_entry(from, to)?;
+        let state = self.player_state(guild_id).await;
+        state.lock().await.queue.move_entry(from, to)?;
         Ok(())
     }
+
     pub async fn clear_queue(&self, guild_id: GuildId) {
-        self.queues
-            .lock()
-            .await
-            .entry(guild_id)
-            .or_default()
-            .clear_upcoming();
+        let state = self.player_state(guild_id).await;
+        state.lock().await.queue.clear_upcoming();
     }
+
     pub async fn shuffle_queue(&self, guild_id: GuildId) {
         use rand::seq::SliceRandom;
-        self.queues
+        let state = self.player_state(guild_id).await;
+        state
             .lock()
             .await
-            .entry(guild_id)
-            .or_default()
+            .queue
             .shuffle_with(|entries| entries.shuffle(&mut rand::rng()));
     }
+
     pub async fn set_repeat_mode(&self, guild_id: GuildId, mode: RepeatMode) {
-        self.queues
-            .lock()
-            .await
-            .entry(guild_id)
-            .or_default()
-            .set_repeat_mode(mode);
+        let state = self.player_state(guild_id).await;
+        state.lock().await.queue.set_repeat_mode(mode);
     }
 
     pub async fn pause(&self, guild_id: GuildId) -> Result<bool> {
-        let handles = self.handles.lock().await;
-        let active = handles
-            .get(&guild_id)
+        let state = self.player_state(guild_id).await;
+        let state = state.lock().await;
+        let active = state
+            .active
+            .as_ref()
             .ok_or_else(|| anyhow!("No track is currently playing."))?;
-        let state = active.handle.get_info().await?;
-        if state.playing == songbird::tracks::PlayMode::Play {
-            active.handle.pause()?;
-            Ok(false)
-        } else {
-            active.handle.play()?;
-            Ok(true)
-        }
+        self.adapter.toggle_pause(active.handle.clone()).await
     }
 
     pub async fn get_now_playing(&self, guild_id: GuildId) -> Option<TrackInfo> {
@@ -221,117 +266,87 @@ impl PlayerService {
     }
 
     pub async fn clear_now_playing(&self, guild_id: GuildId) {
-        let _operation = self.operation_lock.lock().await;
-        self.stop_active(guild_id).await;
-        self.calls.lock().await.remove(&guild_id);
-        self.queues.lock().await.remove(&guild_id);
+        let state = self.player_state(guild_id).await;
+        let mut state = state.lock().await;
+        self.stop_active(guild_id, &mut state);
+        state.call = None;
+        state.queue = GuildQueue::default();
     }
 
     pub async fn shutdown(&self) {
-        let _operation = self.operation_lock.lock().await;
-        let guilds: Vec<GuildId> = self.handles.lock().await.keys().copied().collect();
-        for guild_id in guilds {
-            self.stop_active(guild_id).await;
+        let states: Vec<_> = self
+            .players
+            .lock()
+            .await
+            .iter()
+            .map(|(guild_id, state)| (*guild_id, state.clone()))
+            .collect();
+        for (guild_id, state) in states {
+            let mut state = state.lock().await;
+            self.stop_active(guild_id, &mut state);
+            state.call = None;
+            state.queue = GuildQueue::default();
         }
-        self.handles.lock().await.clear();
-        self.calls.lock().await.clear();
-        self.queues.lock().await.clear();
     }
 
     async fn start_transition(
         self: &Arc<Self>,
         guild_id: GuildId,
-        call: Arc<Mutex<Call>>,
+        state: &mut GuildPlayerState,
         transition: QueueTransition,
     ) -> Result<()> {
         let mut next = transition.current;
         let mut first_error = None;
-
         while let Some(item) = next {
-            match self.start_item(guild_id, call.clone(), item).await {
-                Ok(()) => {
+            let playback_id = self.next_playback_id.fetch_add(1, Ordering::Relaxed);
+            let call = state
+                .call
+                .clone()
+                .ok_or_else(|| anyhow!("No voice call is available."))?;
+            match self
+                .adapter
+                .start(guild_id, call, &item, Arc::downgrade(self), playback_id)
+                .await
+            {
+                Ok(handle) => {
+                    state.active = Some(ActivePlayback {
+                        id: playback_id,
+                        handle,
+                    });
                     info!(?guild_id, "Started playback");
                     return first_error.map_or(Ok(()), Err);
                 }
                 Err(error) => {
                     error!(?guild_id, %error, "Failed to start playback item");
                     first_error.get_or_insert(error);
-                    next = self
-                        .queues
-                        .lock()
-                        .await
-                        .get_mut(&guild_id)
-                        .and_then(|queue| queue.fail_current().current);
+                    next = state.queue.fail_current().current;
                 }
             }
         }
-
         first_error.map_or(Ok(()), Err)
     }
 
-    async fn start_item(
-        self: &Arc<Self>,
-        guild_id: GuildId,
-        call: Arc<Mutex<Call>>,
-        item: PlaybackItem,
-    ) -> Result<()> {
-        let path = self
-            .audio_dir
-            .join(format!("{}.mp3", item.track.id.as_str()));
-        let source =
-            Compressed::new(SongbirdFile::new(path).into(), Bitrate::Bits(128_000)).await?;
-        let _ = source.raw.spawn_loader();
-        let playback_id = self.next_playback_id.fetch_add(1, Ordering::Relaxed);
-        let handle = call.lock().await.play_only_input(source.into());
-        if let Err(error) = handle.add_event(
-            Event::Track(TrackEvent::End),
-            TrackEndHandler {
-                player: Arc::downgrade(self),
-                guild_id,
-                playback_id,
-            },
-        ) {
-            if let Err(stop_error) = handle.stop() {
-                debug!(?guild_id, %stop_error, "Failed to clean up a track whose event registration failed");
-            }
-            return Err(error.into());
-        }
-        self.handles.lock().await.insert(
-            guild_id,
-            ActivePlayback {
-                id: playback_id,
-                handle,
-            },
-        );
-        Ok(())
-    }
-
-    async fn stop_active(&self, guild_id: GuildId) {
-        if let Some(active) = self.handles.lock().await.remove(&guild_id)
-            && let Err(error) = active.handle.stop()
-        {
-            debug!(?guild_id, %error, "Track was already stopped");
+    fn stop_active(&self, guild_id: GuildId, state: &mut GuildPlayerState) {
+        if let Some(active) = state.active.take() {
+            self.adapter.stop(guild_id, active.handle);
         }
     }
 
     async fn handle_track_end(self: &Arc<Self>, guild_id: GuildId, playback_id: u64) -> Result<()> {
-        let _operation = self.operation_lock.lock().await;
-        let is_current = self
-            .handles
-            .lock()
-            .await
-            .get(&guild_id)
-            .is_some_and(|active| active.id == playback_id);
-        if !is_current {
+        let state = self.player_state(guild_id).await;
+        let mut state = state.lock().await;
+        if state
+            .active
+            .as_ref()
+            .is_none_or(|active| active.id != playback_id)
+        {
             return Ok(());
         }
-        self.handles.lock().await.remove(&guild_id);
-        let transition = match self.queues.lock().await.get_mut(&guild_id) {
-            Some(queue) => queue.complete_current(),
-            None => return Ok(()),
-        };
-        if let Some(call) = self.calls.lock().await.get(&guild_id).cloned() {
-            self.start_transition(guild_id, call, transition).await?;
+        state.active = None;
+        let transition = state.queue.complete_current();
+        if state.call.is_some() {
+            self.start_transition(guild_id, &mut state, transition)
+                .await?;
         }
         Ok(())
     }
@@ -342,6 +357,7 @@ struct TrackEndHandler {
     guild_id: GuildId,
     playback_id: u64,
 }
+
 #[async_trait::async_trait]
 impl EventHandler for TrackEndHandler {
     async fn act(&self, _: &EventContext<'_>) -> Option<Event> {
@@ -358,11 +374,19 @@ impl EventHandler for TrackEndHandler {
 
 #[cfg(test)]
 mod tests {
-    use super::PlayerService;
+    use super::*;
     use crate::jester::track::types::{TrackInfo, VideoId};
+    use anyhow::anyhow;
     use poise::serenity_prelude::{GuildId, UserId};
     use songbird::Call;
-    use std::{path::PathBuf, sync::Arc};
+    use std::{
+        path::PathBuf,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
 
     fn track(id: &str) -> TrackInfo {
         TrackInfo {
@@ -372,7 +396,6 @@ mod tests {
             origin: None,
         }
     }
-
     fn call(guild_id: GuildId) -> Arc<tokio::sync::Mutex<Call>> {
         Arc::new(tokio::sync::Mutex::new(Call::standalone(
             guild_id,
@@ -380,30 +403,60 @@ mod tests {
         )))
     }
 
+    struct DelayedFailureAdapter {
+        slow_guild: GuildId,
+        fast_started: Arc<AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl super::PlaybackAdapter for DelayedFailureAdapter {
+        async fn start(
+            &self,
+            guild_id: GuildId,
+            _: Arc<Mutex<Call>>,
+            _: &super::PlaybackItem,
+            _: Weak<super::PlayerService>,
+            _: u64,
+        ) -> anyhow::Result<TrackHandle> {
+            if guild_id == self.slow_guild {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            } else {
+                self.fast_started.store(true, Ordering::Release);
+            }
+            Err(anyhow!("test startup failure"))
+        }
+
+        fn stop(&self, _: GuildId, _: TrackHandle) {}
+
+        async fn toggle_pause(&self, _: TrackHandle) -> anyhow::Result<bool> {
+            Err(anyhow!("no test playback"))
+        }
+    }
+
     #[tokio::test]
     async fn play_now_does_not_leave_a_missing_file_selected() {
         let player = Arc::new(PlayerService::new(PathBuf::from("/does/not/exist")));
         let guild_id = GuildId::new(1);
-
         assert!(
             player
                 .play_now(guild_id, call(guild_id), track("missing"))
                 .await
                 .is_err()
         );
-
-        let snapshot = player.queue_snapshot(guild_id).await;
-        assert!(snapshot.current.is_none());
-        assert!(player.history(guild_id).await.iter().any(|entry| {
-            entry.outcome == crate::jester::player::queue::HistoryOutcome::Failed
-        }));
+        assert!(player.queue_snapshot(guild_id).await.current.is_none());
+        assert!(
+            player
+                .history(guild_id)
+                .await
+                .iter()
+                .any(|entry| entry.outcome == crate::jester::player::queue::HistoryOutcome::Failed)
+        );
     }
 
     #[tokio::test]
     async fn enqueue_does_not_leave_a_missing_first_item_selected() {
         let player = Arc::new(PlayerService::new(PathBuf::from("/does/not/exist")));
         let guild_id = GuildId::new(2);
-
         assert!(
             player
                 .enqueue(
@@ -416,7 +469,35 @@ mod tests {
                 .await
                 .is_err()
         );
-
         assert!(player.queue_snapshot(guild_id).await.current.is_none());
+    }
+
+    #[tokio::test]
+    async fn startup_in_one_guild_does_not_block_another_guild() {
+        let slow_guild = GuildId::new(3);
+        let fast_guild = GuildId::new(4);
+        let fast_started = Arc::new(AtomicBool::new(false));
+        let player = Arc::new(PlayerService::with_adapter(Arc::new(
+            DelayedFailureAdapter {
+                slow_guild,
+                fast_started: fast_started.clone(),
+            },
+        )));
+        let slow_player = player.clone();
+        let slow = tokio::spawn(async move {
+            slow_player
+                .play_now(slow_guild, call(slow_guild), track("slow"))
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let fast = player
+            .play_now(fast_guild, call(fast_guild), track("fast"))
+            .await;
+
+        let slow = slow.await;
+        assert!(slow.is_ok_and(|result| result.is_err()));
+        assert!(fast.is_err());
+        assert!(fast_started.load(Ordering::Acquire));
+        assert!(player.queue_snapshot(fast_guild).await.current.is_none());
     }
 }
