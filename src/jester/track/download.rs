@@ -9,10 +9,7 @@ use std::{
 
 use crate::{
     discord::context::Error,
-    jester::db::{
-        metadata::MetadataKind,
-        repository::{get_or_insert_metadata_id, insert_new_track, lookup_track},
-    },
+    jester::db::repository::{insert_new_track_with_metadata, lookup_track},
     jester::track::{
         metadata::process_ytdlp_json_at,
         types::{TrackInfo, VideoId},
@@ -99,7 +96,7 @@ pub async fn download_track_with(
         "-o".into(),
         config
             .audio_dir
-            .join("%(id)s.%(ext)s")
+            .join(format!("{}.part.%(ext)s", video_id.as_str()))
             .to_string_lossy()
             .into_owned(),
         "--no-playlist".into(),
@@ -123,13 +120,31 @@ pub async fn download_track_with(
         .into());
     }
 
-    let slim = process_ytdlp_json_at(&config.audio_dir, video_id.as_str()).map_err(|e| {
-        format!(
-            "Failed to process metadata JSON for video ID `{}`: {}",
-            video_id.as_str(),
-            e
+    let staged_id = format!("{}.part", video_id.as_str());
+    let staged_audio = config.audio_dir.join(format!("{}.mp3", staged_id));
+    let final_audio = config.audio_dir.join(format!("{}.mp3", video_id.as_str()));
+
+    let slim = match process_ytdlp_json_at(&config.audio_dir, &staged_id) {
+        Ok(slim) => slim,
+        Err(error) => {
+            cleanup_staged_download(&config.audio_dir, &staged_id).await;
+            return Err(format!(
+                "Failed to process metadata JSON for video ID {}: {}",
+                video_id.as_str(),
+                error
+            )
+            .into());
+        }
+    };
+
+    if !tokio::fs::try_exists(&staged_audio).await.unwrap_or(false) {
+        cleanup_staged_download(&config.audio_dir, &staged_id).await;
+        return Err(format!(
+            "Downloaded audio file was not found for video ID {}",
+            video_id.as_str()
         )
-    })?;
+        .into());
+    }
 
     let title = track_title.unwrap_or_else(|| {
         slim.get("title")
@@ -142,11 +157,22 @@ pub async fn download_track_with(
 
     let origin = track_origin.unwrap_or_else(|| "No origin provided".to_string());
 
-    let artist_id = get_or_insert_metadata_id(db_pool, MetadataKind::Artist, &artist).await?;
+    if let Err(error) =
+        insert_new_track_with_metadata(db_pool, &video_id, &slim, &title, &artist, &origin).await
+    {
+        cleanup_staged_download(&config.audio_dir, &staged_id).await;
+        return Err(error);
+    }
 
-    let origin_id = get_or_insert_metadata_id(db_pool, MetadataKind::Origin, &origin).await?;
-
-    insert_new_track(db_pool, &video_id, &slim, &title, artist_id, origin_id).await?;
+    if let Err(error) = tokio::fs::rename(&staged_audio, &final_audio).await {
+        cleanup_staged_download(&config.audio_dir, &staged_id).await;
+        return Err(format!(
+            "Failed to finalize downloaded audio for video ID {}: {}",
+            video_id.as_str(),
+            error
+        )
+        .into());
+    }
 
     info!(track_id = %video_id.as_str(), %title, %artist, %origin, "Track downloaded and added to library");
 
@@ -158,10 +184,19 @@ pub async fn download_track_with(
     })
 }
 
+async fn cleanup_staged_download(audio_dir: &std::path::Path, staged_id: &str) {
+    let _ = tokio::fs::remove_file(audio_dir.join(format!("{}.mp3", staged_id))).await;
+    let _ = tokio::fs::remove_file(audio_dir.join(format!("{}.info.json", staged_id))).await;
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::jester::db::{
+        metadata::MetadataKind,
+        repository::{get_or_insert_metadata_id, insert_new_track},
+    };
     use std::{os::unix::process::ExitStatusExt, sync::Mutex};
     use tempfile::tempdir;
 
@@ -180,6 +215,14 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((program.into(), args.to_vec()));
+            if self.success
+                && let Some(output) = args
+                    .windows(2)
+                    .find(|pair| pair[0] == "-o")
+                    .map(|pair| pair[1].replace("%(ext)s", "mp3"))
+            {
+                std::fs::write(output, b"staged audio")?;
+            }
             Ok(Output {
                 status: std::process::ExitStatus::from_raw(if self.success { 0 } else { 1 << 8 }),
                 stdout: Vec::new(),
@@ -299,10 +342,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_metadata_cleans_staged_files_and_preserves_database() -> TestResult {
+        let (directory, pool) = test_pool().await?;
+        std::fs::write(
+            directory.path().join("dQw4w9WgXcQ.part.info.json"),
+            r#"{"id":"dQw4w9WgXcQ"}"#,
+        )?;
+        let executor = Arc::new(FakeExecutor {
+            success: true,
+            stderr: Vec::new(),
+            calls: Mutex::new(Vec::new()),
+        });
+
+        let error = download_track_with(
+            &pool,
+            "https://youtu.be/dQw4w9WgXcQ".into(),
+            Some("Failed Artist".into()),
+            Some("Failed Origin".into()),
+            None,
+            executor,
+            config(directory.path()),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to process metadata JSON")
+        );
+        assert!(
+            lookup_track(&pool, &VideoId::from("dQw4w9WgXcQ"))
+                .await?
+                .is_none()
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM artists WHERE artist = 'Failed Artist'",
+            )
+            .fetch_one(&pool)
+            .await?,
+            0
+        );
+        assert!(!directory.path().join("dQw4w9WgXcQ.part.mp3").exists());
+        assert!(!directory.path().join("dQw4w9WgXcQ.part.info.json").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn successful_download_persists_metadata_and_uses_expected_arguments() -> TestResult {
         let (directory, pool) = test_pool().await?;
         std::fs::write(
-            directory.path().join("dQw4w9WgXcQ.info.json"),
+            directory.path().join("dQw4w9WgXcQ.part.info.json"),
             r#"{"id":"dQw4w9WgXcQ","upload_date":"20260101","title":"Source title","channel":"Channel"}"#,
         )?;
         let executor = Arc::new(FakeExecutor {
@@ -325,7 +416,9 @@ mod tests {
         assert_eq!(track.title, "Source title");
         assert_eq!(track.artist, "Artist");
         assert_eq!(track.origin, "Origin");
-        assert!(!directory.path().join("dQw4w9WgXcQ.info.json").exists());
+        assert!(!directory.path().join("dQw4w9WgXcQ.part.info.json").exists());
+        assert!(directory.path().join("dQw4w9WgXcQ.mp3").exists());
+        assert!(!directory.path().join("dQw4w9WgXcQ.part.mp3").exists());
         {
             let calls = executor.calls.lock().unwrap();
             assert_eq!(calls[0].0, "test-yt-dlp");

@@ -11,10 +11,14 @@ impl MetadataKind {
         }
     }
 
-    pub fn insert_sql(&self) -> &'static str {
+    pub fn upsert_sql(&self) -> &'static str {
         match self {
-            MetadataKind::Artist => "INSERT INTO artists (artist) VALUES (?1)",
-            MetadataKind::Origin => "INSERT INTO origins (origin) VALUES (?1)",
+            MetadataKind::Artist => {
+                "INSERT INTO artists (artist) VALUES (?1) ON CONFLICT(artist) DO NOTHING"
+            }
+            MetadataKind::Origin => {
+                "INSERT INTO origins (origin) VALUES (?1) ON CONFLICT(origin) DO NOTHING"
+            }
         }
     }
 }
@@ -33,10 +37,10 @@ mod tests {
         for (kind, table, column) in cases {
             assert!(kind.select_sql().contains(table));
             assert!(kind.select_sql().contains(column));
-            assert!(kind.insert_sql().contains(table));
-            assert!(kind.insert_sql().contains(column));
+            assert!(kind.upsert_sql().contains(table));
+            assert!(kind.upsert_sql().contains(column));
             assert!(kind.select_sql().contains("?1"));
-            assert!(kind.insert_sql().contains("?1"));
+            assert!(kind.upsert_sql().contains("?1"));
         }
     }
 }

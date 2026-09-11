@@ -4,11 +4,9 @@ use crate::discord::autocomplete::{
     autocomplete_texture, autocomplete_track,
 };
 use crate::discord::context::{Error, PoiseContext};
-use crate::jester::db::metadata::MetadataKind;
 use crate::jester::db::repository::{
-    clear_track_taxonomy, get_or_insert_metadata_id, insert_track_environment, insert_track_label,
-    insert_track_texture, require_track, set_track_taxonomy, update_track_artist,
-    update_track_origin, update_track_title,
+    clear_track_taxonomy, insert_track_environment, insert_track_label, insert_track_texture,
+    require_track, set_track_taxonomy, update_track_metadata,
 };
 use crate::jester::db::taxonomy::{
     ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES, require_value,
@@ -204,7 +202,7 @@ pub async fn title(
     let track_id = VideoId::from(track);
     let info = require_track(db_pool, &track_id).await?;
 
-    update_track_title(db_pool, &info.id, &new_title).await?;
+    update_track_metadata(db_pool, &info.id, Some(&new_title), None, None).await?;
 
     ctx.say(format!(
         "Set new title `{}` for track `{}`",
@@ -227,9 +225,7 @@ pub async fn artist(
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
     let info = require_track(db_pool, &VideoId::from(track)).await?;
-    let artist_id = get_or_insert_metadata_id(db_pool, MetadataKind::Artist, &new_artist).await?;
-
-    update_track_artist(db_pool, &info.id, artist_id).await?;
+    update_track_metadata(db_pool, &info.id, None, Some(&new_artist), None).await?;
 
     ctx.say(format!(
         "Set new artist `{}` for track `{}`",
@@ -252,9 +248,7 @@ pub async fn origin(
 ) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
     let info = require_track(db_pool, &VideoId::from(track)).await?;
-    let origin_id = get_or_insert_metadata_id(db_pool, MetadataKind::Origin, &new_origin).await?;
-
-    update_track_origin(db_pool, &info.id, origin_id).await?;
+    update_track_metadata(db_pool, &info.id, None, None, Some(&new_origin)).await?;
 
     ctx.say(format!(
         "Set new origin `{}` for track `{}`",
@@ -292,21 +286,25 @@ pub async fn fix(
     let mut updated_fields: Vec<String> = Vec::new();
 
     if let Some(ref title) = new_title {
-        update_track_title(db_pool, &info.id, title).await?;
         updated_fields.push(format!("title → `{title}`"));
     }
 
     if let Some(ref artist) = new_artist {
-        let artist_id = get_or_insert_metadata_id(db_pool, MetadataKind::Artist, artist).await?;
-        update_track_artist(db_pool, &info.id, artist_id).await?;
         updated_fields.push(format!("artist → `{artist}`"));
     }
 
     if let Some(ref origin) = new_origin {
-        let origin_id = get_or_insert_metadata_id(db_pool, MetadataKind::Origin, origin).await?;
-        update_track_origin(db_pool, &info.id, origin_id).await?;
         updated_fields.push(format!("origin → `{origin}`"));
     }
+
+    update_track_metadata(
+        db_pool,
+        &info.id,
+        new_title.as_deref(),
+        new_artist.as_deref(),
+        new_origin.as_deref(),
+    )
+    .await?;
 
     ctx.say(format!(
         "Updated `{}`: {}",

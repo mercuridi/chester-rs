@@ -1,5 +1,5 @@
 use serde_json::Value;
-use sqlx::{Row, SqlitePool};
+use sqlx::{Row, SqliteConnection, SqlitePool};
 
 use crate::{
     discord::context::Error,
@@ -9,35 +9,44 @@ use crate::{
 
 const TAXONOMY_SUMMARY: &str = "TRIM(COALESCE(tracks.mood, '') || CASE WHEN tracks.intensity IS NULL THEN '' ELSE ', ' || tracks.intensity END || CASE WHEN tracks.function_tag IS NULL THEN '' ELSE ', ' || tracks.function_tag END || CASE WHEN EXISTS (SELECT 1 FROM track_environments WHERE track_id = tracks.id) THEN ', ' || (SELECT GROUP_CONCAT(environment, ', ') FROM track_environments WHERE track_id = tracks.id) ELSE '' END, ', ')";
 
+#[allow(dead_code)]
 pub async fn get_or_insert_metadata_id(
     db_pool: &SqlitePool,
     kind: MetadataKind,
     value: &str,
 ) -> Result<i64, Error> {
-    let select_sql = kind.select_sql();
-
-    if let Some(id) = sqlx::query_scalar::<_, i64>(select_sql)
+    sqlx::query(kind.upsert_sql())
         .bind(value)
-        .fetch_optional(db_pool)
+        .execute(db_pool)
         .await
-        .map_err(|e| format!("Database select failed: {e}"))?
-    {
-        Ok(id)
-    } else {
-        sqlx::query(kind.insert_sql())
-            .bind(value)
-            .execute(db_pool)
-            .await
-            .map_err(|e| format!("Database insert failed: {e}"))?;
+        .map_err(|e| format!("Database metadata upsert failed: {e}"))?;
 
-        Ok(sqlx::query_scalar::<_, i64>(select_sql)
-            .bind(value)
-            .fetch_one(db_pool)
-            .await
-            .map_err(|e| format!("Database fetch after insert failed: {e}"))?)
-    }
+    sqlx::query_scalar::<_, i64>(kind.select_sql())
+        .bind(value)
+        .fetch_one(db_pool)
+        .await
+        .map_err(|e| format!("Database metadata lookup failed: {e}").into())
 }
 
+async fn get_or_insert_metadata_id_on_connection(
+    connection: &mut SqliteConnection,
+    kind: MetadataKind,
+    value: &str,
+) -> Result<i64, Error> {
+    sqlx::query(kind.upsert_sql())
+        .bind(value)
+        .execute(&mut *connection)
+        .await
+        .map_err(|e| format!("Database metadata upsert failed: {e}"))?;
+
+    sqlx::query_scalar::<_, i64>(kind.select_sql())
+        .bind(value)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|e| format!("Database metadata lookup failed: {e}").into())
+}
+
+#[allow(dead_code)]
 pub async fn insert_new_track(
     db_pool: &SqlitePool,
     video_id: &VideoId,
@@ -73,6 +82,64 @@ pub async fn insert_new_track(
     .bind(origin_id)
     .execute(db_pool)
     .await?;
+
+    Ok(())
+}
+
+/// Persist a downloaded track and its metadata as one database operation.
+pub async fn insert_new_track_with_metadata(
+    db_pool: &SqlitePool,
+    video_id: &VideoId,
+    slim: &serde_json::Value,
+    title: &str,
+    artist: &str,
+    origin: &str,
+) -> Result<(), Error> {
+    let mut transaction = db_pool
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to begin track insert transaction: {e}"))?;
+
+    let artist_id =
+        get_or_insert_metadata_id_on_connection(&mut transaction, MetadataKind::Artist, artist)
+            .await?;
+    let origin_id =
+        get_or_insert_metadata_id_on_connection(&mut transaction, MetadataKind::Origin, origin)
+            .await?;
+
+    sqlx::query(
+        "INSERT INTO tracks (
+            id,
+            upload_date,
+            yt_title,
+            track_title,
+            artist_id,
+            origin_id
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    )
+    .bind(video_id.as_str())
+    .bind(
+        slim.get("upload_date")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown Date"),
+    )
+    .bind(
+        slim.get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Unknown Title"),
+    )
+    .bind(title)
+    .bind(artist_id)
+    .bind(origin_id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(|e| format!("Failed to insert track: {e}"))?;
+
+    transaction
+        .commit()
+        .await
+        .map_err(|e| format!("Failed to commit track insert transaction: {e}"))?;
 
     Ok(())
 }
@@ -345,11 +412,16 @@ pub async fn search_incomplete_tracks(
 }
 
 pub async fn clear_track_taxonomy(db_pool: &SqlitePool, track_id: &VideoId) -> Result<(), Error> {
+    let mut transaction = db_pool
+        .begin()
+        .await
+        .map_err(|e| format!("Failed to begin taxonomy reset transaction: {e}"))?;
+
     sqlx::query(
         "UPDATE tracks SET mood = NULL, intensity = NULL, function_tag = NULL WHERE id = ?1",
     )
     .bind(track_id.as_str())
-    .execute(db_pool)
+    .execute(&mut *transaction)
     .await
     .map_err(|e| {
         format!(
@@ -360,7 +432,7 @@ pub async fn clear_track_taxonomy(db_pool: &SqlitePool, track_id: &VideoId) -> R
     })?;
     sqlx::query("DELETE FROM track_textures WHERE track_id = ?1")
         .bind(track_id.as_str())
-        .execute(db_pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|e| {
             format!(
@@ -371,7 +443,7 @@ pub async fn clear_track_taxonomy(db_pool: &SqlitePool, track_id: &VideoId) -> R
         })?;
     sqlx::query("DELETE FROM track_environments WHERE track_id = ?1")
         .bind(track_id.as_str())
-        .execute(db_pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|e| {
             format!(
@@ -382,7 +454,7 @@ pub async fn clear_track_taxonomy(db_pool: &SqlitePool, track_id: &VideoId) -> R
         })?;
     sqlx::query("DELETE FROM track_labels WHERE track_id = ?1")
         .bind(track_id.as_str())
-        .execute(db_pool)
+        .execute(&mut *transaction)
         .await
         .map_err(|e| {
             format!(
@@ -391,6 +463,12 @@ pub async fn clear_track_taxonomy(db_pool: &SqlitePool, track_id: &VideoId) -> R
                 e
             )
         })?;
+
+    transaction
+        .commit()
+        .await
+        .map_err(|e| format!("Failed to commit taxonomy reset transaction: {e}"))?;
+
     Ok(())
 }
 
@@ -464,63 +542,59 @@ pub async fn insert_track_label(
     Ok(())
 }
 
-pub async fn update_track_title(
+/// Update any combination of track title, artist, and origin atomically.
+pub async fn update_track_metadata(
     db_pool: &SqlitePool,
     track_id: &VideoId,
-    new_title: &str,
+    title: Option<&str>,
+    artist: Option<&str>,
+    origin: Option<&str>,
 ) -> Result<(), Error> {
-    sqlx::query("UPDATE tracks SET track_title = ?1 WHERE id = ?2")
-        .bind(new_title)
-        .bind(track_id.as_str())
-        .execute(db_pool)
+    let mut transaction = db_pool
+        .begin()
         .await
-        .map_err(|e| {
-            format!(
-                "Failed to update title for track {}: {}",
-                track_id.as_str(),
-                e
-            )
-        })?;
-    Ok(())
-}
+        .map_err(|e| format!("Failed to begin track metadata transaction: {e}"))?;
 
-pub async fn update_track_artist(
-    db_pool: &SqlitePool,
-    track_id: &VideoId,
-    artist_id: i64,
-) -> Result<(), Error> {
-    sqlx::query("UPDATE tracks SET artist_id = ?1 WHERE id = ?2")
-        .bind(artist_id)
-        .bind(track_id.as_str())
-        .execute(db_pool)
-        .await
-        .map_err(|e| {
-            format!(
-                "Failed to update artist for track {}: {}",
-                track_id.as_str(),
-                e
-            )
-        })?;
-    Ok(())
-}
+    let artist_id = match artist {
+        Some(value) => Some(
+            get_or_insert_metadata_id_on_connection(&mut transaction, MetadataKind::Artist, value)
+                .await?,
+        ),
+        None => None,
+    };
+    let origin_id = match origin {
+        Some(value) => Some(
+            get_or_insert_metadata_id_on_connection(&mut transaction, MetadataKind::Origin, value)
+                .await?,
+        ),
+        None => None,
+    };
 
-pub async fn update_track_origin(
-    db_pool: &SqlitePool,
-    track_id: &VideoId,
-    origin_id: i64,
-) -> Result<(), Error> {
-    sqlx::query("UPDATE tracks SET origin_id = ?1 WHERE id = ?2")
-        .bind(origin_id)
-        .bind(track_id.as_str())
-        .execute(db_pool)
+    sqlx::query(
+        "UPDATE tracks
+         SET track_title = COALESCE(?1, track_title),
+             artist_id = COALESCE(?2, artist_id),
+             origin_id = COALESCE(?3, origin_id)
+         WHERE id = ?4",
+    )
+    .bind(title)
+    .bind(artist_id)
+    .bind(origin_id)
+    .bind(track_id.as_str())
+    .execute(&mut *transaction)
+    .await
+    .map_err(|e| {
+        format!(
+            "Failed to update metadata for track {}: {e}",
+            track_id.as_str()
+        )
+    })?;
+
+    transaction
+        .commit()
         .await
-        .map_err(|e| {
-            format!(
-                "Failed to update origin for track {}: {}",
-                track_id.as_str(),
-                e
-            )
-        })?;
+        .map_err(|e| format!("Failed to commit track metadata transaction: {e}"))?;
+
     Ok(())
 }
 
@@ -586,6 +660,98 @@ mod tests {
             require_track(&pool, &VideoId::from("missing"))
                 .await
                 .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn metadata_creation_is_safe_for_concurrent_callers() -> TestResult {
+        let (_directory, pool) = test_pool().await?;
+
+        let artist_ids =
+            futures::future::join_all((0..16).map(|_| {
+                get_or_insert_metadata_id(&pool, MetadataKind::Artist, "Concurrent Artist")
+            }))
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        let origin_ids =
+            futures::future::join_all((0..16).map(|_| {
+                get_or_insert_metadata_id(&pool, MetadataKind::Origin, "Concurrent Origin")
+            }))
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+
+        assert!(artist_ids.windows(2).all(|ids| ids[0] == ids[1]));
+        assert!(origin_ids.windows(2).all(|ids| ids[0] == ids[1]));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM artists WHERE artist = 'Concurrent Artist'",
+            )
+            .fetch_one(&pool)
+            .await?,
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM origins WHERE origin = 'Concurrent Origin'",
+            )
+            .fetch_one(&pool)
+            .await?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn track_creation_rolls_back_metadata_when_track_insert_fails() -> TestResult {
+        let (_directory, pool) = test_pool().await?;
+        add_track(
+            &pool,
+            "existing-track",
+            "Existing",
+            "Existing Artist",
+            "Existing Origin",
+        )
+        .await?;
+
+        let error = insert_new_track_with_metadata(
+            &pool,
+            &VideoId::from("existing-track"),
+            &serde_json::json!({
+                "upload_date": "2026-01-01",
+                "title": "Duplicate"
+            }),
+            "Duplicate",
+            "Rolled Back Artist",
+            "Rolled Back Origin",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("UNIQUE"));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM artists WHERE artist = 'Rolled Back Artist'",
+            )
+            .fetch_one(&pool)
+            .await?,
+            0
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM origins WHERE origin = 'Rolled Back Origin'",
+            )
+            .fetch_one(&pool)
+            .await?,
+            0
+        );
+        assert_eq!(
+            require_track(&pool, &VideoId::from("existing-track"))
+                .await?
+                .title,
+            "Existing"
         );
         Ok(())
     }
@@ -663,6 +829,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn taxonomy_reset_rolls_back_when_a_later_delete_fails() -> TestResult {
+        let (_directory, pool) = test_pool().await?;
+        add_track(&pool, "rollback-track", "Rollback", "Artist", "Origin").await?;
+        let track_id = VideoId::from("rollback-track");
+        set_track_taxonomy(
+            &pool,
+            &track_id,
+            "whimsical",
+            "subtle",
+            Some("investigative"),
+        )
+        .await?;
+        insert_track_texture(&pool, &track_id, "synthetic").await?;
+        insert_track_environment(&pool, &track_id, "forest").await?;
+        insert_track_label(&pool, &track_id, "keep-me").await?;
+
+        sqlx::query(
+            "CREATE TRIGGER fail_environment_delete
+             BEFORE DELETE ON track_environments
+             BEGIN
+                 SELECT RAISE(ABORT, 'forced taxonomy reset failure');
+             END",
+        )
+        .execute(&pool)
+        .await?;
+
+        assert!(clear_track_taxonomy(&pool, &track_id).await.is_err());
+
+        let taxonomy: (Option<String>, Option<String>, Option<String>) =
+            sqlx::query_as("SELECT mood, intensity, function_tag FROM tracks WHERE id = ?1")
+                .bind(track_id.as_str())
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(
+            taxonomy,
+            (
+                Some("whimsical".into()),
+                Some("subtle".into()),
+                Some("investigative".into())
+            )
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM track_textures WHERE track_id = ?1",
+            )
+            .bind(track_id.as_str())
+            .fetch_one(&pool)
+            .await?,
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM track_environments WHERE track_id = ?1",
+            )
+            .bind(track_id.as_str())
+            .fetch_one(&pool)
+            .await?,
+            1
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM track_labels WHERE track_id = ?1")
+                .bind(track_id.as_str())
+                .fetch_one(&pool)
+                .await?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn searches_are_case_insensitive_limited_and_include_taxonomy() -> TestResult {
         let (_directory, pool) = test_pool().await?;
         add_track(&pool, "video-1", "Northern Lights", "Aurora", "Winter").await?;
@@ -692,12 +928,15 @@ mod tests {
     async fn updates_change_only_the_requested_track_metadata() -> TestResult {
         let (_directory, pool) = test_pool().await?;
         add_track(&pool, "video-1", "Before", "Artist A", "Origin A").await?;
-        let artist_id = get_or_insert_metadata_id(&pool, MetadataKind::Artist, "Artist B").await?;
-        let origin_id = get_or_insert_metadata_id(&pool, MetadataKind::Origin, "Origin B").await?;
         let track_id = VideoId::from("video-1");
-        update_track_title(&pool, &track_id, "After").await?;
-        update_track_artist(&pool, &track_id, artist_id).await?;
-        update_track_origin(&pool, &track_id, origin_id).await?;
+        update_track_metadata(
+            &pool,
+            &track_id,
+            Some("After"),
+            Some("Artist B"),
+            Some("Origin B"),
+        )
+        .await?;
 
         let track = require_track(&pool, &track_id).await?;
         assert_eq!(
