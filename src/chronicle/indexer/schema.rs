@@ -1,9 +1,7 @@
 //! Native runtime schema for Chronicle frontmatter.
 //!
-//! This module is intentionally separate from the migration specification in
-//! `tmp/taxonomy.toml`. The migration specification describes legacy data
-//! conversion; this module describes the fields and values accepted by the
-//! running application.
+//! The tracked fixture in `tests/fixtures/chronicle/taxonomy.toml` provides a
+//! compact external view used to check this runtime schema.
 
 /// How a field is represented in frontmatter and in the normalized metadata
 /// model.
@@ -510,11 +508,12 @@ mod tests {
     }
 
     #[test]
-    fn matches_every_runtime_field_and_vocabulary_in_the_migration_spec() -> anyhow::Result<()> {
+    fn matches_every_runtime_field_and_vocabulary_in_the_schema_fixture() -> anyhow::Result<()> {
         use anyhow::Context;
 
-        let specification: toml::Value =
-            toml::from_str(include_str!("../../../tmp/taxonomy.toml"))?;
+        let specification: toml::Value = toml::from_str(include_str!(
+            "../../../tests/fixtures/chronicle/taxonomy.toml"
+        ))?;
         let universal_fields = specification
             .get("universal_fields")
             .and_then(toml::Value::as_table)
