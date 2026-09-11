@@ -242,6 +242,34 @@ pub struct StructuredPlanningResult {
     pub repair_validation_error: Option<String>,
 }
 
+/// A route selected without model inference because the question's shape has a
+/// deterministic and production-safe interpretation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PredeterminedRoute {
+    EmptyQuestion,
+    UnsupportedStructuredRequest,
+}
+
+impl PredeterminedRoute {
+    pub fn operation(self) -> super::plan::RouteOperation {
+        match self {
+            Self::EmptyQuestion => super::plan::RouteOperation::Clarify,
+            Self::UnsupportedStructuredRequest => super::plan::RouteOperation::Unsupported,
+        }
+    }
+}
+
+/// Applies the deterministic pre-routing policy shared by production and the
+/// planner evaluator. Keeping it independent of service route types prevents
+/// benchmark results from exercising a different decision path than users do.
+pub fn predetermined_route(question: &str) -> Option<PredeterminedRoute> {
+    if question.trim().is_empty() {
+        return Some(PredeterminedRoute::EmptyQuestion);
+    }
+    is_definitely_unsupported_structured_request(question)
+        .then_some(PredeterminedRoute::UnsupportedStructuredRequest)
+}
+
 pub async fn generate_or_repair_structured_plan(
     llm: &dyn LanguageModel,
     question: &str,
@@ -411,6 +439,22 @@ mod tests {
         assert_eq!(parse(r#"{"operation":"search"}"#)?, Plan::Search {});
         assert_eq!(parse(r#"{"operation":"synthesis"}"#)?, Plan::Synthesis {});
         Ok(())
+    }
+
+    #[test]
+    fn predetermined_routes_match_the_production_preflight_policy() {
+        assert_eq!(
+            predetermined_route("   "),
+            Some(PredeterminedRoute::EmptyQuestion)
+        );
+        assert_eq!(
+            predetermined_route("How many NPCs were alive last year?"),
+            Some(PredeterminedRoute::UnsupportedStructuredRequest)
+        );
+        assert_eq!(
+            predetermined_route("Why did the rebellion not succeed?"),
+            None
+        );
     }
 
     #[test]

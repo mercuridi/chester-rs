@@ -127,21 +127,22 @@ pub(in crate::chronicle::service) async fn select_answer_route(
 }
 
 fn predetermined_route(question: &str, started: Instant) -> Option<RouteSelection> {
-    if question.trim().is_empty() {
-        emit_route_selection(RouteOperation::Clarify, "routed", "classifier", started);
-        return Some(RouteSelection::predetermined(AnswerRoute::EmptyQuestion));
+    match planner::predetermined_route(question)? {
+        planner::PredeterminedRoute::EmptyQuestion => {
+            emit_route_selection(RouteOperation::Clarify, "routed", "classifier", started);
+            Some(RouteSelection::predetermined(AnswerRoute::EmptyQuestion))
+        }
+        planner::PredeterminedRoute::UnsupportedStructuredRequest => {
+            debug!(
+                question_len = question.chars().count(),
+                "Skipping query planner for a definitely unsupported structured request"
+            );
+            emit_route_selection(RouteOperation::Unsupported, "routed", "classifier", started);
+            Some(RouteSelection::predetermined(AnswerRoute::Retrieval(
+                RetrievalMode::UnsupportedStructuredQuery,
+            )))
+        }
     }
-    if planner::is_definitely_unsupported_structured_request(question) {
-        debug!(
-            question_len = question.chars().count(),
-            "Skipping query planner for a definitely unsupported structured request"
-        );
-        emit_route_selection(RouteOperation::Unsupported, "routed", "classifier", started);
-        return Some(RouteSelection::predetermined(AnswerRoute::Retrieval(
-            RetrievalMode::UnsupportedStructuredQuery,
-        )));
-    }
-    None
 }
 
 async fn classify_route(

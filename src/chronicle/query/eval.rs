@@ -264,6 +264,10 @@ async fn evaluate(case: Case, db: &IndexerDb, llm: Option<&Llm>) -> Result<CaseR
         end_to_end_correct: None,
     };
     if let Some(llm) = llm {
+        if let Some(predetermined) = planner::predetermined_route(&report.case.question) {
+            accept_predetermined_route(&mut report, predetermined);
+            return Ok(report);
+        }
         match llm.classify_route(&report.case.question).await {
             Ok(response) => {
                 report.classifier_response = Some(response.clone());
@@ -293,6 +297,15 @@ async fn evaluate(case: Case, db: &IndexerDb, llm: Option<&Llm>) -> Result<CaseR
         }
     }
     Ok(report)
+}
+
+fn accept_predetermined_route(report: &mut CaseReport, route: planner::PredeterminedRoute) {
+    let operation = route.operation();
+    let plan = plan_for_operation(operation)
+        .expect("predetermined routes must map to a non-structured plan");
+    report.route_correct = Some(operation == report.expected_operation);
+    report.end_to_end_correct = Some(plan == report.case.plan);
+    report.actual_plan = Some(plan);
 }
 
 async fn evaluate_structured_route(
