@@ -15,7 +15,6 @@ use songbird::{
     Config as SongbirdConfig, SerenityInit,
     driver::{DecodeConfig, DecodeMode},
 };
-use sqlx::SqlitePool;
 use tracing::info;
 
 use crate::{
@@ -230,13 +229,7 @@ fn handle_event<'a>(
 }
 
 fn build_framework(
-    pool: SqlitePool,
-    config: Config,
-    chronicle: Arc<Chronicle>,
-    recorder: crate::chronicle::recording::recorder::RecorderManager,
-    player: Arc<jester::player::service::PlayerService>,
-    shutdown: Arc<shutdown::ShutdownState>,
-    downloader: Arc<Downloader>,
+    data: Data,
     poise_commands: Vec<poise::Command<Data, Error>>,
 ) -> poise::Framework<Data, Error> {
     let poise_options = poise::FrameworkOptions {
@@ -266,13 +259,7 @@ fn build_framework(
 
     poise::Framework::builder()
         .options(poise_options)
-        .setup(|_ctx, _ready, _framework| {
-            Box::pin(async move {
-                Ok(Data::new(
-                    pool, config, chronicle, recorder, player, downloader, shutdown,
-                ))
-            })
-        })
+        .setup(|_ctx, _ready, _framework| Box::pin(async move { Ok(data) }))
         .build()
 }
 
@@ -645,16 +632,16 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
         Duration::from_secs(20),
     ));
 
-    let framework = build_framework(
+    let data = Data::new(
         pool,
         config,
         chronicle,
         recorder,
         player,
-        coordinator.state.clone(),
         downloader,
-        poise_commands,
+        coordinator.state.clone(),
     );
+    let framework = build_framework(data, poise_commands);
 
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
 
