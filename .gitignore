@@ -9,8 +9,9 @@ logs/
 *.log
 tmp/
 
-# rebuild roadmap
+# rebuild roadmaps
 docs/rebuild-plan
+docs/tech-debt-audit-2026-09-11.md
 
 # chronicle
 docs/chronicle/
