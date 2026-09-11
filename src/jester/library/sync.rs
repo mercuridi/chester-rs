@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 use std::sync::Arc;
 use std::{path::PathBuf, time::Duration};
 use tokio::process::Command;
-use tracing::{debug, info, instrument, warn};
+use tracing::{info, instrument, warn};
 
 use crate::jester::library::constants::{AUDIO_DIR, DOWNLOAD_CONCURRENCY, MAX_RETRIES, YTDLP_PATH};
 
@@ -101,23 +101,19 @@ pub async fn sync_audio_library_with(
         })
         .buffer_unordered(DOWNLOAD_CONCURRENCY);
 
-    while let Some((id, result)) = tasks.next().await {
+    while let Some((_id, result)) = tasks.next().await {
         match result {
             DownloadResult::AlreadyPresent => {
                 stats.already_present += 1;
-                debug!(%id, "Already present");
             }
             DownloadResult::Downloaded => {
                 stats.downloaded += 1;
-                debug!(%id, "Downloaded");
             }
             DownloadResult::Failed => {
                 stats.failed += 1;
-                warn!(%id, "Download failed");
             }
             DownloadResult::Skipped => {
                 stats.skipped += 1;
-                debug!(%id, "Skipped");
             }
         }
     }
