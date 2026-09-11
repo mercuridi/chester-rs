@@ -15,11 +15,19 @@ use crate::{
     discord::context::Error,
 };
 
+struct EncoderState {
+    opus: OpusEncoder,
+    mono_buffer: [i16; MONO_FRAME_SAMPLES],
+    opus_packet: [u8; MAX_OPUS_PACKET_SIZE],
+    granule_position: u64,
+    encoded_packets: Vec<(Vec<u8>, u64)>,
+}
+
 pub fn run_encoder(
     user_id: UserId,
     path: &Path,
-    mut consumer: Consumer<RecordedFrame>,
-    mut stop_rx: oneshot::Receiver<u64>,
+    consumer: Consumer<RecordedFrame>,
+    stop_rx: oneshot::Receiver<u64>,
     initial_silence_ticks: u64,
 ) -> Result<(), Error> {
     let file = File::create(path)?;
@@ -31,12 +39,6 @@ pub fn run_encoder(
         Application::Audio,
     )?;
 
-    let mut mono_buffer = [0i16; MONO_FRAME_SAMPLES];
-
-    let mut opus_packet = [0u8; MAX_OPUS_PACKET_SIZE];
-    let mut encoded_packets = Vec::<(Vec<u8>, u64)>::new();
-
-    let mut granule_position = 0u64;
     let serial = rand::random::<u32>();
 
     let pre_skip = u16::try_from(opus.get_lookahead()?)?;
@@ -49,16 +51,43 @@ pub fn run_encoder(
         pre_skip,
     )?;
 
-    for _ in 0..initial_silence_ticks {
-        encode_silence_frame(
-            &mut opus,
-            &mut mono_buffer,
-            &mut opus_packet,
-            &mut granule_position,
-            &mut encoded_packets,
-        )?;
-    }
+    let mut state = EncoderState {
+        opus,
+        mono_buffer: [0; MONO_FRAME_SAMPLES],
+        opus_packet: [0; MAX_OPUS_PACKET_SIZE],
+        granule_position: 0,
+        encoded_packets: Vec::new(),
+    };
+    encode_initial_silence(initial_silence_ticks, &mut state)?;
+    let (next_tick, final_tick) = drain_recording_frames(
+        user_id,
+        consumer,
+        stop_rx,
+        initial_silence_ticks,
+        &mut state,
+    )?;
+    pad_final_silence(final_tick, next_tick, &mut state)?;
+    write_audio_packets(&mut ogg, serial, state.encoded_packets)?;
 
+    tracing::info!(?user_id, ?path, "Finished recording");
+
+    Ok(())
+}
+
+fn encode_initial_silence(ticks: u64, state: &mut EncoderState) -> Result<(), Error> {
+    for _ in 0..ticks {
+        encode_silence_frame(state)?;
+    }
+    Ok(())
+}
+
+fn drain_recording_frames(
+    user_id: UserId,
+    mut consumer: Consumer<RecordedFrame>,
+    mut stop_rx: oneshot::Receiver<u64>,
+    initial_silence_ticks: u64,
+    state: &mut EncoderState,
+) -> Result<(u64, Option<u64>), Error> {
     let mut stopping = false;
     let mut final_tick = None;
     let mut next_tick = initial_silence_ticks;
@@ -74,13 +103,7 @@ pub fn run_encoder(
             };
 
             while next_tick < frame.tick {
-                encode_silence_frame(
-                    &mut opus,
-                    &mut mono_buffer,
-                    &mut opus_packet,
-                    &mut granule_position,
-                    &mut encoded_packets,
-                )?;
+                encode_silence_frame(state)?;
                 next_tick += 1;
             }
 
@@ -94,14 +117,8 @@ pub fn run_encoder(
                 continue;
             }
 
-            downmix_stereo_frame(&frame.samples, &mut mono_buffer);
-            encode_mono_frame(
-                &mut opus,
-                &mut mono_buffer,
-                &mut opus_packet,
-                &mut granule_position,
-                &mut encoded_packets,
-            )?;
+            downmix_stereo_frame(&frame.samples, &mut state.mono_buffer);
+            encode_mono_frame(state)?;
             next_tick += 1;
         }
 
@@ -117,26 +134,34 @@ pub fn run_encoder(
             Err(oneshot::error::TryRecvError::Closed) => {
                 stopping = true;
             }
-
             Err(oneshot::error::TryRecvError::Empty) => {
                 std::thread::yield_now();
             }
         }
     }
 
+    Ok((next_tick, final_tick))
+}
+
+fn pad_final_silence(
+    final_tick: Option<u64>,
+    mut next_tick: u64,
+    state: &mut EncoderState,
+) -> Result<(), Error> {
     if let Some(final_tick) = final_tick {
         while next_tick < final_tick {
-            encode_silence_frame(
-                &mut opus,
-                &mut mono_buffer,
-                &mut opus_packet,
-                &mut granule_position,
-                &mut encoded_packets,
-            )?;
+            encode_silence_frame(state)?;
             next_tick += 1;
         }
     }
+    Ok(())
+}
 
+fn write_audio_packets<W: std::io::Write>(
+    ogg: &mut PacketWriter<W>,
+    serial: u32,
+    encoded_packets: Vec<(Vec<u8>, u64)>,
+) -> std::io::Result<()> {
     let packet_count = encoded_packets.len();
     for (index, (packet, granule_position)) in encoded_packets.into_iter().enumerate() {
         let end_info = if index + 1 == packet_count {
@@ -146,44 +171,28 @@ pub fn run_encoder(
         };
         ogg.write_packet(packet, serial, end_info, granule_position)?;
     }
-
-    tracing::info!(?user_id, ?path, "Finished recording");
-
     Ok(())
 }
 
-fn encode_mono_frame(
-    opus: &mut OpusEncoder,
-    mono_buffer: &mut [i16; MONO_FRAME_SAMPLES],
-    opus_packet: &mut [u8; MAX_OPUS_PACKET_SIZE],
-    granule_position: &mut u64,
-    encoded_packets: &mut Vec<(Vec<u8>, u64)>,
-) -> Result<(), Error> {
-    let encoded_len = opus.encode(mono_buffer, opus_packet)?;
+fn encode_mono_frame(state: &mut EncoderState) -> Result<(), Error> {
+    let encoded_len = state
+        .opus
+        .encode(&state.mono_buffer, &mut state.opus_packet)?;
 
     if encoded_len > 0 {
-        *granule_position += MONO_FRAME_SAMPLES as u64;
-        encoded_packets.push((opus_packet[..encoded_len].to_vec(), *granule_position));
+        state.granule_position += MONO_FRAME_SAMPLES as u64;
+        state.encoded_packets.push((
+            state.opus_packet[..encoded_len].to_vec(),
+            state.granule_position,
+        ));
     }
 
     Ok(())
 }
 
-fn encode_silence_frame(
-    opus: &mut OpusEncoder,
-    mono_buffer: &mut [i16; MONO_FRAME_SAMPLES],
-    opus_packet: &mut [u8; MAX_OPUS_PACKET_SIZE],
-    granule_position: &mut u64,
-    encoded_packets: &mut Vec<(Vec<u8>, u64)>,
-) -> Result<(), Error> {
-    mono_buffer.fill(0);
-    encode_mono_frame(
-        opus,
-        mono_buffer,
-        opus_packet,
-        granule_position,
-        encoded_packets,
-    )
+fn encode_silence_frame(state: &mut EncoderState) -> Result<(), Error> {
+    state.mono_buffer.fill(0);
+    encode_mono_frame(state)
 }
 
 fn downmix_stereo_frame(interleaved: &[i16], mono: &mut [i16; MONO_FRAME_SAMPLES]) {
