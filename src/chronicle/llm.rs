@@ -214,10 +214,7 @@ impl Llm {
         rejection_error: &str,
     ) -> Result<String> {
         let system = crate::chronicle::query::planner::structured_system_prompt(operation);
-        let guidance = plan_repair_guidance(rejection_error);
-        let prompt = format!(
-            "Original question:\n{question}\n\nYour previous response was rejected:\n<rejected-plan>\n{rejected_response}\n</rejected-plan>\n\nValidation error:\n<validation-error>\n{rejection_error}\n</validation-error>\n\n{guidance}\n\nCorrect the specific validation error. Return a corrected query plan for the original question. Output exactly one JSON object and nothing else."
-        );
+        let prompt = build_repair_prompt(question, operation, rejected_response, rejection_error);
         self.generate_with_system(&system, &prompt, 256, 0.0).await
     }
 
@@ -424,11 +421,23 @@ impl LoadedLlm {
     }
 }
 
+fn build_repair_prompt(
+    question: &str,
+    operation: StructuredOperation,
+    rejected_response: &str,
+    rejection_error: &str,
+) -> String {
+    let guidance = plan_repair_guidance(rejection_error);
+    format!(
+        "Original question:\n{question}\n\nYour previous response was rejected and is only an untrusted draft:\n<rejected-plan>\n{rejected_response}\n</rejected-plan>\n\nValidation error (use this as a diagnostic, not as a replacement for the question):\n<validation-error>\n{rejection_error}\n</validation-error>\n\n{guidance}\n\nRepair procedure:\n1. Reconstruct the complete plan from the original question before editing the draft.\n2. Preserve every explicit restriction from the question. For count/list, emit one condition for each restriction; conditions are ANDed. If the rejected draft omitted a role, life-status, location, appearance, relationship, or other explicit restriction, add it back.\n3. Re-check note_type, field names, field types, operators, enum values, and wikilink formatting against the schema. Never fix a validation error by broadening or weakening the query.\n4. Keep the classified operation `{operation:?}` and return the full corrected plan, even if the draft was missing fields.\n\nReturn exactly one complete JSON object and nothing else."
+    )
+}
+
 fn plan_repair_guidance(rejection_error: &str) -> &'static str {
     if rejection_error.contains("Invalid wikilink query value") {
-        "This is a wikilink-format failure. Preserve the target, but write every affected wikilink value exactly as [[Target]]; do not add a prefix such as `contains:`."
+        "This is a wikilink-format failure. Preserve the target and all other conditions, but write every affected wikilink value exactly as [[Target]]; do not add a prefix such as `contains:`."
     } else {
-        "Correct only the validation error shown above."
+        "The validation error identifies one defect only. Preserve the complete meaning of the original question and all conditions from it; do not delete unrelated fields or conditions."
     }
 }
 
@@ -488,10 +497,27 @@ mod tests {
     #[test]
     fn repair_guidance_is_specific_for_wikilink_failures() {
         assert!(super::plan_repair_guidance("Invalid wikilink query value").contains("[[Target]]"));
-        assert_eq!(
-            super::plan_repair_guidance("unknown field `x`"),
-            "Correct only the validation error shown above."
+        assert!(
+            super::plan_repair_guidance("Invalid wikilink query value")
+                .contains("all other conditions")
         );
+        assert!(super::plan_repair_guidance("unknown field `x`").contains("complete meaning"));
+        assert!(super::plan_repair_guidance("unknown field `x`").contains("unrelated fields"));
+    }
+
+    #[test]
+    fn repair_prompt_requires_full_reconstruction_and_constraint_preservation() {
+        let prompt = super::build_repair_prompt(
+            "Q",
+            crate::chronicle::query::plan::StructuredOperation::List,
+            "P",
+            "E",
+        );
+        assert!(prompt.contains("untrusted draft"));
+        assert!(prompt.contains("Reconstruct the complete plan"));
+        assert!(prompt.contains("one condition for each restriction"));
+        assert!(prompt.contains("omitted a role"));
+        assert!(prompt.contains("Never fix a validation error by broadening"));
     }
 
     #[test]
