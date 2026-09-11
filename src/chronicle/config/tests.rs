@@ -6,7 +6,7 @@ use tempfile::tempdir;
 
 use super::{
     app::Config,
-    paths::{resolve_path, resolve_sqlite_url},
+    paths::{AppPaths, resolve_path, resolve_sqlite_url},
 };
 
 const CONFIG: &str = r#"
@@ -72,7 +72,7 @@ fn load(contents: &str) -> Result<Config> {
     fs::create_dir(&config_dir)?;
     let path = config_dir.join("config.toml");
     fs::write(&path, contents)?;
-    Config::load(&path)
+    Config::load(AppPaths::from_runtime_root(directory.path(), None)?)
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn checked_in_example_uses_the_only_supported_schema() -> Result<()> {
         &path,
         include_str!("../../../chronicle.config.example.toml"),
     )?;
-    Config::load(path)?;
+    Config::load(AppPaths::from_runtime_root(directory.path(), None)?)?;
     Ok(())
 }
 
@@ -226,4 +226,22 @@ fn resolves_project_relative_paths_and_sqlite_urls() {
         resolve_sqlite_url(root, "sqlite://:memory:"),
         "sqlite://:memory:"
     );
+}
+
+#[test]
+fn resolves_all_runtime_paths_from_the_selected_root() -> Result<()> {
+    let directory = tempdir()?;
+    let paths = AppPaths::from_runtime_root(directory.path(), Some(Path::new("settings.toml")))?;
+
+    assert_eq!(paths.config_path, directory.path().join("settings.toml"));
+    assert_eq!(paths.env_path, directory.path().join(".env"));
+    assert_eq!(paths.log_dir, directory.path().join("logs/application"));
+    assert_eq!(paths.audio_dir, directory.path().join("audio"));
+    assert_eq!(
+        paths.recordings_dir,
+        directory.path().join(".chronicle/recordings")
+    );
+    assert_eq!(paths.ytdlp_path, directory.path().join("yt-dlp"));
+    assert_eq!(paths.cookies_path, directory.path().join("cookies.txt"));
+    Ok(())
 }

@@ -2,13 +2,6 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::fs;
 
-use crate::jester::library::constants::AUDIO_DIR;
-
-#[expect(dead_code, reason = "legacy convenience wrapper retained for callers")]
-pub fn process_ytdlp_json(file_id: &str) -> Result<serde_json::Value> {
-    process_ytdlp_json_at(std::path::Path::new(AUDIO_DIR), file_id)
-}
-
 pub fn process_ytdlp_json_at(
     audio_dir: &std::path::Path,
     file_id: &str,

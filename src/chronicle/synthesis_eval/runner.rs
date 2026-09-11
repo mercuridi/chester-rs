@@ -941,20 +941,21 @@ fn validate(suite: &Suite) -> Result<()> {
     Ok(())
 }
 
-fn create_report_file(requested: Option<&Path>) -> Result<(std::fs::File, PathBuf)> {
+fn create_report_file(
+    requested: Option<&Path>,
+    log_dir: &Path,
+) -> Result<(std::fs::File, PathBuf)> {
     let path = requested.map_or_else(
         || {
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("logs/evaluation")
-                .join(format!(
-                    "chronicle-synthesis-report-{}.json",
-                    Utc::now().format("%Y%m%d-%H%M%S")
-                ))
+            log_dir.join("evaluation").join(format!(
+                "chronicle-synthesis-report-{}.json",
+                Utc::now().format("%Y%m%d-%H%M%S")
+            ))
         },
         Path::to_path_buf,
     );
     if requested.is_none() {
-        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("logs/evaluation");
+        let directory = log_dir.join("evaluation");
         create_dir_all(&directory).with_context(|| {
             format!(
                 "Failed to create report directory at {}",
@@ -1199,12 +1200,15 @@ async fn evaluate_case(
     })
 }
 
-pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<()> {
+pub async fn run(
+    suite_path: &Path,
+    requested_report: Option<&Path>,
+    paths: &crate::chronicle::config::paths::AppPaths,
+) -> Result<()> {
     let suite: Suite = toml::from_str(&std::fs::read_to_string(suite_path)?)?;
     validate(&suite)?;
     let thresholds = EvaluationThresholds::from(&suite);
-    let config =
-        Config::load(Path::new(env!("CARGO_MANIFEST_DIR")).join(".chronicle/config.toml"))?;
+    let config = Config::load(paths.clone())?;
     let corpus = suite_path
         .parent()
         .context("Suite needs a parent directory")?
@@ -1266,7 +1270,7 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
         passed,
         cases,
     };
-    let (file, path) = create_report_file(requested_report)?;
+    let (file, path) = create_report_file(requested_report, &paths.log_dir)?;
     serde_json::to_writer_pretty(file, &report)?;
     ensure!(
         passed,

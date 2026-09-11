@@ -18,7 +18,7 @@ use tracing::info;
 
 use crate::{
     chronicle::{
-        config::app::Config,
+        config::{app::Config, paths::AppPaths},
         indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,
         recording::recorder::{notify_recording_user, scan_incomplete_manifests},
@@ -26,7 +26,7 @@ use crate::{
         service::Chronicle,
     },
     discord::context::{Data, Error},
-    jester::library::sync::sync_audio_library,
+    jester::library::sync::{SyncConfig, sync_audio_library},
 };
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
@@ -257,16 +257,30 @@ fn build_framework(
         .build()
 }
 
+#[allow(clippy::print_stderr)]
 #[tokio::main]
 async fn main() {
-    let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let env_path = project_root.join(".env");
+    let startup = match StartupOptions::parse(std::env::args().skip(1)) {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error:#}");
+            std::process::exit(2);
+        }
+    };
+    let paths =
+        match AppPaths::from_runtime_root(&startup.runtime_root, startup.config_path.as_deref()) {
+            Ok(paths) => paths,
+            Err(error) => {
+                eprintln!("Failed to resolve runtime paths: {error:#}");
+                std::process::exit(2);
+            }
+        };
 
     // Load .env before constructing the logging filter. RUST_LOG in .env is
     // intentionally authoritative, even if the process inherited another
     // value from its shell environment.
     #[allow(deprecated)]
-    let dotenv_entries = dotenv::from_path_iter(&env_path);
+    let dotenv_entries = dotenv::from_path_iter(&paths.env_path);
     if let Ok(entries) = dotenv_entries {
         for entry in entries.flatten() {
             if entry.0 == "RUST_LOG" {
@@ -275,7 +289,7 @@ async fn main() {
             }
         }
     }
-    from_path(&env_path).ok();
+    from_path(&paths.env_path).ok();
 
     // Keep normal operation useful without being noisy. RUST_LOG is read from
     // .env above, for example: `RUST_LOG=chester_rs=debug`.
@@ -284,9 +298,8 @@ async fn main() {
         Err(error) => (EnvFilter::new("chester_rs=info,warn"), Some(error)),
     };
 
-    let log_directory = project_root.join("logs/application");
     #[allow(clippy::print_stderr)]
-    let log_file = match create_log_file(&log_directory) {
+    let log_file = match create_log_file(&paths.log_dir) {
         Ok(file) => file,
         Err(error) => {
             eprintln!("Failed to initialize logfile: {error:#}");
@@ -313,7 +326,7 @@ async fn main() {
         tracing::warn!(?error, "Invalid RUST_LOG filter; using the default filter");
     }
 
-    if let Err(error) = run().await {
+    if let Err(error) = run(startup.command_arguments, paths).await {
         tracing::error!("Chester failed to start: {error:#}");
         tracing::debug!(error = ?error, "Startup error chain");
         std::process::exit(1);
@@ -361,8 +374,54 @@ fn configured_log_level() -> &'static str {
         .unwrap_or(DEFAULT_LOG_LEVEL)
 }
 
-async fn run_evaluation_command() -> Result<bool> {
-    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+#[derive(Debug)]
+struct StartupOptions {
+    runtime_root: std::path::PathBuf,
+    config_path: Option<std::path::PathBuf>,
+    command_arguments: Vec<String>,
+}
+
+impl StartupOptions {
+    fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Self> {
+        let mut runtime_root = None;
+        let mut config_path = None;
+        let mut command_arguments = Vec::new();
+        let mut arguments = arguments.into_iter();
+        while let Some(argument) = arguments.next() {
+            match argument.as_str() {
+                "--runtime-root" => {
+                    runtime_root = Some(
+                        arguments
+                            .next()
+                            .context("--runtime-root requires a directory")?
+                            .into(),
+                    );
+                }
+                "--config" => {
+                    config_path = Some(
+                        arguments
+                            .next()
+                            .context("--config requires a file path")?
+                            .into(),
+                    );
+                }
+                "--help" | "-h" => anyhow::bail!(
+                    "Usage: chester-rs [--runtime-root DIR] [--config FILE] [evaluation command]"
+                ),
+                _ => command_arguments.push(argument),
+            }
+        }
+        Ok(Self {
+            runtime_root: runtime_root.unwrap_or(
+                std::env::current_dir().context("Failed to determine current directory")?,
+            ),
+            config_path,
+            command_arguments,
+        })
+    }
+}
+
+async fn run_evaluation_command(arguments: &[String], paths: &AppPaths) -> Result<bool> {
     if arguments
         .first()
         .is_some_and(|arg| arg == "--chronicle-synthesis-eval")
@@ -377,6 +436,7 @@ async fn run_evaluation_command() -> Result<bool> {
         chronicle::synthesis_eval::runner::run(
             std::path::Path::new(suite_path),
             arguments.get(2).map(std::path::Path::new),
+            paths,
         )
         .await?;
         return Ok(true);
@@ -401,6 +461,7 @@ async fn run_evaluation_command() -> Result<bool> {
             std::path::Path::new(suite_path),
             args.get(1).map(std::path::Path::new),
             test_planner,
+            paths,
         )
         .await?;
         return Ok(true);
@@ -419,6 +480,7 @@ async fn run_evaluation_command() -> Result<bool> {
         chronicle::eval::run(
             std::path::Path::new(suite_path),
             arguments.get(2).map(std::path::Path::new),
+            paths,
         )
         .await?;
         return Ok(true);
@@ -426,16 +488,15 @@ async fn run_evaluation_command() -> Result<bool> {
     Ok(false)
 }
 
-async fn run() -> Result<()> {
-    if run_evaluation_command().await? {
+async fn run(arguments: Vec<String>, paths: AppPaths) -> Result<()> {
+    if run_evaluation_command(&arguments, &paths).await? {
         return Ok(());
     }
-    let project_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
 
-    tracing::info!("Starting Chester");
+    tracing::info!(runtime_root = %paths.runtime_root.display(), config_path = %paths.config_path.display(), "Starting Chester");
 
-    let config_path = project_root.join(".chronicle/config.toml");
-    let config = Config::load(&config_path).with_context(|| {
+    let config_path = paths.config_path.clone();
+    let config = Config::load(paths).with_context(|| {
         format!(
             "Failed to load configuration from {}",
             config_path.display()
@@ -464,7 +525,7 @@ async fn run() -> Result<()> {
         .await
         .context("Failed to initialize Chronicle")?;
 
-    let sync_stats = sync_audio_library(&pool)
+    let sync_stats = sync_audio_library(&pool, SyncConfig::from(&config.paths))
         .await
         .context("Failed to synchronize the audio library")?;
 
@@ -511,4 +572,39 @@ async fn run() -> Result<()> {
         .context("Discord gateway stopped with an error")?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::StartupOptions;
+    use std::path::PathBuf;
+
+    #[test]
+    fn separates_runtime_options_from_evaluation_arguments() -> anyhow::Result<()> {
+        let options = StartupOptions::parse([
+            "--runtime-root".into(),
+            "/srv/chester".into(),
+            "--config".into(),
+            "config/production.toml".into(),
+            "--chronicle-eval".into(),
+            "suite.toml".into(),
+        ])?;
+
+        assert_eq!(options.runtime_root, PathBuf::from("/srv/chester"));
+        assert_eq!(
+            options.config_path,
+            Some(PathBuf::from("config/production.toml"))
+        );
+        assert_eq!(
+            options.command_arguments,
+            vec!["--chronicle-eval", "suite.toml"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_runtime_options_without_values() {
+        assert!(StartupOptions::parse(["--config".into()]).is_err());
+        assert!(StartupOptions::parse(["--runtime-root".into()]).is_err());
+    }
 }

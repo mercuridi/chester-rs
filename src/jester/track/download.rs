@@ -13,7 +13,6 @@ use crate::{
         metadata::MetadataKind,
         repository::{get_or_insert_metadata_id, insert_new_track, lookup_track},
     },
-    jester::library::constants::{AUDIO_DIR, COOKIES_PATH, YTDLP_PATH},
     jester::track::{
         metadata::process_ytdlp_json_at,
         types::{TrackInfo, VideoId},
@@ -45,12 +44,12 @@ pub struct DownloadConfig {
     pub cookies_path: PathBuf,
 }
 
-impl Default for DownloadConfig {
-    fn default() -> Self {
+impl From<&crate::chronicle::config::paths::AppPaths> for DownloadConfig {
+    fn from(paths: &crate::chronicle::config::paths::AppPaths) -> Self {
         Self {
-            audio_dir: AUDIO_DIR.into(),
-            ytdlp_path: YTDLP_PATH.into(),
-            cookies_path: COOKIES_PATH.into(),
+            audio_dir: paths.audio_dir.clone(),
+            ytdlp_path: paths.ytdlp_path.clone(),
+            cookies_path: paths.cookies_path.clone(),
         }
     }
 }
@@ -62,6 +61,7 @@ pub async fn download_track(
     track_artist: Option<String>,
     track_origin: Option<String>,
     track_title: Option<String>,
+    config: DownloadConfig,
 ) -> Result<TrackInfo, Error> {
     download_track_with(
         db_pool,
@@ -70,7 +70,7 @@ pub async fn download_track(
         track_origin,
         track_title,
         Arc::new(ProcessExecutor),
-        DownloadConfig::default(),
+        config,
     )
     .await
 }

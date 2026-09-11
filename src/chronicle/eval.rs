@@ -305,7 +305,10 @@ async fn evaluate_case(
     })
 }
 
-fn create_report_file(requested_path: Option<&Path>) -> Result<(File, std::path::PathBuf)> {
+fn create_report_file(
+    requested_path: Option<&Path>,
+    log_dir: &Path,
+) -> Result<(File, std::path::PathBuf)> {
     if let Some(path) = requested_path {
         ensure!(!path.exists(), "Report path must be a new file");
         let file = OpenOptions::new()
@@ -316,7 +319,7 @@ fn create_report_file(requested_path: Option<&Path>) -> Result<(File, std::path:
         return Ok((file, path.to_owned()));
     }
 
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("logs/evaluation");
+    let directory = log_dir.join("evaluation");
     create_dir_all(&directory).with_context(|| {
         format!(
             "Failed to create report directory at {}",
@@ -392,7 +395,11 @@ fn fixture_fingerprint(
     Ok(hex::encode(hash.finalize()))
 }
 
-pub async fn run(suite_path: &Path, requested_report_path: Option<&Path>) -> Result<()> {
+pub async fn run(
+    suite_path: &Path,
+    requested_report_path: Option<&Path>,
+    paths: &crate::chronicle::config::paths::AppPaths,
+) -> Result<()> {
     if let Some(path) = requested_report_path {
         ensure!(!path.exists(), "Report path must be a new file");
     }
@@ -459,7 +466,7 @@ pub async fn run(suite_path: &Path, requested_report_path: Option<&Path>) -> Res
         cases,
     };
     // Never overwrite a corpus file, suite, or previous baseline report.
-    let (file, report_path) = create_report_file(requested_report_path)?;
+    let (file, report_path) = create_report_file(requested_report_path, &paths.log_dir)?;
     serde_json::to_writer_pretty(file, &report)?;
     tracing::info!(report = %report_path.display(), recall = report.aggregate["hybrid"].mean_recall, passed, "Evaluation complete");
     ensure!(

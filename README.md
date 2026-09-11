@@ -6,7 +6,7 @@ This document describes a Linux deployment from an empty machine. Windows and ma
 
 ## What runs where
 
-- Chester itself is a Rust binary started from the repository root.
+- Chester resolves its runtime files from a runtime root, not from where it was built.
 - `data/jester.sqlite3` stores the local music library and metadata.
 - `audio/` stores downloaded MP3 files.
 - `data/chronicle.index-v<version>.sqlite3` stores Chronicle's local derived index.
@@ -14,7 +14,7 @@ This document describes a Linux deployment from an empty machine. Windows and ma
   index-format version and rebuilds into a fresh file when that version changes.
 - `.chronicle/` stores voice recordings and Chronicle configuration.
 - `corpus/` contains the documents indexed by Chronicle.
-- `yt-dlp` must be an executable file in the repository root. The bot does not search `PATH` for it.
+- `yt-dlp` must be an executable file in the runtime root. The bot does not search `PATH` for it.
 - SQLite is bundled into the Rust binary.
 
 Chronicle uses Candle with CUDA. A CUDA-capable NVIDIA GPU is therefore required for Chronicle's embedding, transcription, and LLM features.
@@ -80,7 +80,7 @@ printf '%s\n' 'DISCORD_TOKEN=replace-with-your-bot-token' > .env
 cargo build --release
 ```
 
-Keep `yt-dlp` beside `Cargo.toml`; both the bot and `download.sh` use `./yt-dlp`.
+Keep `yt-dlp` in the runtime root; both the bot and `download.sh` use `./yt-dlp`.
 
 The Jester and Chronicle SQLite databases are local runtime state and are not committed. Chester creates their parent directories, database files, and schemas automatically on first startup.
 
@@ -102,13 +102,14 @@ If commands are not visible, check the bot's OAuth scopes, application-command p
 
 ## Configuration
 
-Chester loads `.chronicle/config.toml` relative to the repository root. Start with the supplied example:
+By default Chester uses its current directory as the runtime root and loads
+`.chronicle/config.toml` below it. Start with the supplied example:
 
 ```bash
 cp chronicle.config.example.toml .chronicle/config.toml
 ```
 
-The example configuration is enough for a basic deployment. Paths are relative to the repository root:
+The example configuration is enough for a basic deployment. Paths are relative to the runtime root:
 
 ```toml
 [database]
@@ -155,6 +156,25 @@ chunk_overlap_tokens = 0
 ```
 
 The configuration schema is strict: unknown keys are rejected, and both chunking settings must be present. The loader validates `llm_max_tokens` (1–32768), `llm_context_limit` (greater than `llm_max_tokens`, up to 32768), `llm_temperature` (0.0–2.0), `llm_max_reply_length` (1–2000), `retrieval_limit` (1–100), `retrieval_candidate_limit` (at least `retrieval_limit`, up to 1000), a finite non-negative `retrieval_distance_threshold`, a `retrieval_near_duplicate_threshold` between 0.0 and 1.0, a positive `retrieval_max_chunks_per_document`, `synthesis_retrieval_limit` (1–100), `synthesis_candidate_limit` (at least `synthesis_retrieval_limit`, up to 1000), a positive `synthesis_max_chunks_per_document`, `synthesis_batch_token_budget` (no greater than the available LLM prompt budget), `synthesis_max_batches` (1–100), `max_chunk_tokens` (3–512), and `chunk_overlap_tokens` (no greater than the chunk budget minus 3). Retrieval examines the candidate limit, discards chunks beyond the distance threshold, removes exact and near-duplicate chunks, preserves intentional similarity between adjacent chunks from the same document, limits the number of chunks from each document, and sends at most `retrieval_limit` accepted chunks to the LLM. Chronicle then fits those chunks to the tokenizer-based context budget, preserving ranked order and truncating only when the highest-ranked result cannot otherwise fit. If the question is blank, the corpus is empty, or no chunk meets the threshold, Chronicle returns a short-circuit message instead of invoking the LLM. Startup downloads the BGE embedding model if it is not already cached. The first `/chronicle start` downloads the configured LLM model and tokenizer into the Hugging Face cache.
+
+### Runtime location
+
+Release binaries can run from any working directory. Select the deployment
+directory explicitly with `--runtime-root`; Chester resolves `.env`, logs,
+audio, recordings, `yt-dlp`, cookies, and relative settings in `config.toml`
+from that one directory:
+
+```bash
+/opt/chester/chester-rs --runtime-root /srv/chester
+```
+
+Use `--config FILE` to select a different configuration file. A relative
+config path is resolved below the runtime root, while relative paths inside
+the configuration remain rooted at `--runtime-root`:
+
+```bash
+/opt/chester/chester-rs --runtime-root /srv/chester --config config/production.toml
+```
 
 ### Alias and guild configuration
 

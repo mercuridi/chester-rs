@@ -6,7 +6,7 @@ use std::{path::PathBuf, time::Duration};
 use tokio::process::Command;
 use tracing::{info, instrument, warn};
 
-use crate::jester::library::constants::{AUDIO_DIR, DOWNLOAD_CONCURRENCY, MAX_RETRIES, YTDLP_PATH};
+use crate::jester::library::constants::{DOWNLOAD_CONCURRENCY, MAX_RETRIES};
 
 #[async_trait::async_trait]
 pub trait CommandExecutor: Send + Sync {
@@ -33,11 +33,11 @@ pub struct SyncConfig {
     pub retries: usize,
 }
 
-impl Default for SyncConfig {
-    fn default() -> Self {
+impl From<&crate::chronicle::config::paths::AppPaths> for SyncConfig {
+    fn from(paths: &crate::chronicle::config::paths::AppPaths) -> Self {
         Self {
-            audio_dir: PathBuf::from(AUDIO_DIR),
-            ytdlp_path: PathBuf::from(YTDLP_PATH),
+            audio_dir: paths.audio_dir.clone(),
+            ytdlp_path: paths.ytdlp_path.clone(),
             ffmpeg_path: PathBuf::from("ffmpeg"),
             retries: MAX_RETRIES,
         }
@@ -61,9 +61,9 @@ enum DownloadResult {
     Skipped,
 }
 
-#[instrument(skip(pool))]
-pub async fn sync_audio_library(pool: &SqlitePool) -> Result<SyncStats> {
-    sync_audio_library_with(pool, Arc::new(ProcessExecutor), SyncConfig::default()).await
+#[instrument(skip(pool, config))]
+pub async fn sync_audio_library(pool: &SqlitePool, config: SyncConfig) -> Result<SyncStats> {
+    sync_audio_library_with(pool, Arc::new(ProcessExecutor), config).await
 }
 
 pub async fn sync_audio_library_with(
@@ -136,7 +136,7 @@ async fn verify_dependencies(executor: &dyn CommandExecutor, config: &SyncConfig
 
     let ytdlp = executor
         .output(
-            config.ytdlp_path.to_str().unwrap_or(YTDLP_PATH),
+            config.ytdlp_path.to_string_lossy().as_ref(),
             &["--version".into()],
         )
         .await
@@ -237,7 +237,7 @@ async fn download_track(
         format!("https://www.youtube.com/watch?v={id}"),
     ];
     let output = executor
-        .output(config.ytdlp_path.to_str().unwrap_or(YTDLP_PATH), &args)
+        .output(config.ytdlp_path.to_string_lossy().as_ref(), &args)
         .await
         .context("yt-dlp process failed")?;
 

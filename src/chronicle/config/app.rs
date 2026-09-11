@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use anyhow::Result;
 use serenity::all::{GuildId, UserId};
 
@@ -19,8 +17,8 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
-        super::loader::load(path.as_ref())
+    pub fn load(paths: AppPaths) -> Result<Self> {
+        super::loader::load(paths)
     }
     pub fn alias_group(&self, group_id: &str) -> Option<&AliasGroup> {
         self.discord.alias_group(group_id)

@@ -2,7 +2,7 @@ use crate::{
     discord::context::Error,
     jester::db::repository::lookup_track,
     jester::track::{
-        download::download_track,
+        download::{DownloadConfig, download_track},
         types::{TrackInfo, VideoId},
         youtube::get_youtube_id,
     },
@@ -16,7 +16,11 @@ pub fn normalise_track_input(input: &str) -> VideoId {
 }
 
 #[instrument(skip(db_pool), fields(input = %input))]
-pub async fn resolve_track(db_pool: &SqlitePool, input: String) -> Result<TrackInfo, Error> {
+pub async fn resolve_track(
+    db_pool: &SqlitePool,
+    input: String,
+    download_config: DownloadConfig,
+) -> Result<TrackInfo, Error> {
     let video_id = normalise_track_input(&input);
     debug!(track_id = %video_id.as_str(), "Resolving track");
 
@@ -26,7 +30,7 @@ pub async fn resolve_track(db_pool: &SqlitePool, input: String) -> Result<TrackI
     }
 
     info!(track_id = %video_id.as_str(), "Track is not in library; downloading");
-    download_track(db_pool, input, None, None, None).await
+    download_track(db_pool, input, None, None, None, download_config).await
 }
 
 #[cfg(test)]
