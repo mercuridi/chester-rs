@@ -3,9 +3,9 @@ use super::super::{
     config::app::Config,
     indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
     llm::{LanguageModel, Llm},
-    query::{classifier, plan::RouteOperation},
+    query::plan::RouteOperation,
     runtime::GpuRuntime,
-    service::Chronicle,
+    service::{Chronicle, EffectiveRoute},
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use chrono::Utc;
@@ -492,9 +492,10 @@ struct CaseReport {
     classifier_response: Option<String>,
     classifier_error: Option<String>,
     classified_operation: Option<RouteOperation>,
+    effective_route: EffectiveRoute,
     route_correct: bool,
     answer: String,
-    synthesis_diagnostics: super::super::service::SynthesisDiagnostics,
+    synthesis_diagnostics: Option<super::super::service::SynthesisDiagnostics>,
     required_fact_recall: f64,
     core_recall: f64,
     supporting_recall: f64,
@@ -1121,23 +1122,17 @@ async fn judge_unresolved_claims(
 async fn evaluate_case(
     case: Case,
     chronicle: &Chronicle,
-    llm: &Llm,
     judge: &SynthesisJudge,
     thresholds: EvaluationThresholds,
 ) -> Result<CaseReport> {
-    let (classifier_response, classifier_error, classified_operation) =
-        match llm.classify_route(&case.question).await {
-            Ok(response) => match classifier::parse(&response) {
-                Ok(operation) => (Some(response), None, Some(operation)),
-                Err(error) => (Some(response), Some(format!("{error:#}")), None),
-            },
-            Err(error) => (None, Some(format!("{error:#}")), None),
-        };
-    let route_correct = classified_operation == Some(RouteOperation::Synthesis);
-    let answer = chronicle.ask(&case.question).await?;
-    let synthesis_diagnostics = chronicle
-        .last_synthesis_diagnostics()?
-        .context("Synthesis did not produce diagnostics")?;
+    let runtime_answer = chronicle.ask_with_metadata(&case.question).await?;
+    let route_correct = runtime_answer.effective_route == EffectiveRoute::Synthesis;
+    let classifier_response = runtime_answer.classifier_response;
+    let classifier_error = runtime_answer.classifier_error;
+    let classified_operation = runtime_answer.classified_operation;
+    let effective_route = runtime_answer.effective_route;
+    let synthesis_diagnostics = runtime_answer.synthesis_diagnostics;
+    let answer = runtime_answer.reply;
     let mut results = initial_claim_results(&case, &answer);
     let targets = judge_targets(&case, &results);
     let judge =
@@ -1184,6 +1179,7 @@ async fn evaluate_case(
         classifier_response,
         classifier_error,
         classified_operation,
+        effective_route,
         route_correct,
         answer,
         synthesis_diagnostics,
@@ -1253,7 +1249,7 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
     let judge = SynthesisJudge::new(std::sync::Arc::new(llm.clone()));
     let mut cases = Vec::new();
     for case in suite.cases {
-        cases.push(evaluate_case(case, &chronicle, &llm, &judge, thresholds).await?);
+        cases.push(evaluate_case(case, &chronicle, &judge, thresholds).await?);
     }
     chronicle.stop_llm().await?;
     let passed = cases.iter().all(|case| case.passed);

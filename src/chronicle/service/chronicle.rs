@@ -5,6 +5,7 @@ use super::{
     synthesis_pipeline::{self, EvidenceRetrieval},
 };
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
@@ -15,7 +16,10 @@ use super::super::{
         retriever::{api::RetrieverApi, runtime::Retriever},
     },
     llm::{LanguageModel, Llm},
-    query::{plan::Plan, render},
+    query::{
+        plan::{Plan, RouteOperation},
+        render,
+    },
     runtime::GpuRuntime,
     synthesis::{self, EvidenceNote},
     transcription::service::TranscriptionService,
@@ -38,7 +42,6 @@ pub struct Chronicle {
     synthesis: SynthesisSettings,
     max_reply_length: usize,
     lifecycle: tokio::sync::Mutex<()>,
-    last_synthesis_diagnostics: std::sync::Mutex<Option<SynthesisDiagnostics>>,
 }
 
 struct SynthesisEvidenceNotes {
@@ -50,15 +53,42 @@ struct SynthesisEvidenceNotes {
 const PARTIAL_SYNTHESIS_PREFIX: &str =
     "This is a partial synthesis based on the retrieved notes completed so far.\n\n";
 
-/// The common boundary returned by every answer route. More route-neutral response metadata can
-/// be added here without changing `ask_for` or the individual route contracts.
+/// The route that actually generated a Chronicle reply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EffectiveRoute {
+    Structured,
+    Retrieval,
+    Synthesis,
+    Clarification,
+    EmptyQuestion,
+}
+
+/// Per-request metadata for a Chronicle answer. This is deliberately returned with the answer
+/// rather than retained as mutable service state, so evaluators cannot associate one request's
+/// route or diagnostics with another request's reply.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChronicleAnswer {
+    pub reply: String,
+    pub classifier_response: Option<String>,
+    pub classifier_error: Option<String>,
+    pub classified_operation: Option<RouteOperation>,
+    pub effective_route: EffectiveRoute,
+    pub synthesis_diagnostics: Option<SynthesisDiagnostics>,
+}
+
+/// The common boundary returned by every answer route.
 struct AnswerOutcome {
     reply: String,
+    synthesis_diagnostics: Option<SynthesisDiagnostics>,
 }
 
 impl AnswerOutcome {
     fn new(reply: String) -> Self {
-        Self { reply }
+        Self {
+            reply,
+            synthesis_diagnostics: None,
+        }
     }
 
     fn bounded(reply: &str, max_reply_length: usize) -> Self {
@@ -96,7 +126,6 @@ impl Chronicle {
             synthesis,
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
-            last_synthesis_diagnostics: std::sync::Mutex::new(None),
         }
     }
 
@@ -133,39 +162,68 @@ impl Chronicle {
             synthesis,
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
-            last_synthesis_diagnostics: std::sync::Mutex::new(None),
         }
     }
 
-    pub fn last_synthesis_diagnostics(&self) -> Result<Option<SynthesisDiagnostics>> {
-        self.last_synthesis_diagnostics
-            .lock()
-            .map(|diagnostics| diagnostics.clone())
-            .map_err(|_| anyhow::anyhow!("synthesis diagnostics state is poisoned"))
-    }
-
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "convenience API for player-scoped callers")
+    )]
     #[instrument(skip(self, question), fields(question_len = question.len()))]
     pub async fn ask(&self, question: &str) -> Result<String> {
         self.ask_for(question, AccessScope::Player).await
     }
 
     pub async fn ask_for(&self, question: &str, access: AccessScope) -> Result<String> {
+        Ok(self.ask_for_with_metadata(question, access).await?.reply)
+    }
+
+    pub(crate) async fn ask_with_metadata(&self, question: &str) -> Result<ChronicleAnswer> {
+        self.ask_for_with_metadata(question, AccessScope::Player)
+            .await
+    }
+
+    async fn ask_for_with_metadata(
+        &self,
+        question: &str,
+        access: AccessScope,
+    ) -> Result<ChronicleAnswer> {
         info!("Starting Chronicle question");
         let _lifecycle = self.lifecycle.lock().await;
         let _gpu_lease = self.runtime.acquire_inference()?;
 
-        let route = self.select_answer_route(question).await?;
-        let outcome = self.execute_answer_route(question, access, route).await?;
+        let selection = self.select_answer_route(question).await?;
+        let effective_route = Self::effective_route(&selection.route);
+        let outcome = self
+            .execute_answer_route(question, access, selection.route)
+            .await?;
         debug!(reply = %outcome.reply, "Chronicle final reply");
         info!(
             reply_len = outcome.reply.chars().count(),
             "Completed Chronicle question"
         );
-        Ok(outcome.reply)
+        Ok(ChronicleAnswer {
+            reply: outcome.reply,
+            classifier_response: selection.classifier_response,
+            classifier_error: selection.classifier_error,
+            classified_operation: selection.classified_operation,
+            effective_route,
+            synthesis_diagnostics: outcome.synthesis_diagnostics,
+        })
     }
 
-    async fn select_answer_route(&self, question: &str) -> Result<AnswerRoute> {
+    async fn select_answer_route(&self, question: &str) -> Result<answer_routing::RouteSelection> {
         answer_routing::select_answer_route(self.llm.as_ref(), self.db.as_ref(), question).await
+    }
+
+    fn effective_route(route: &AnswerRoute) -> EffectiveRoute {
+        match route {
+            AnswerRoute::Structured(_) => EffectiveRoute::Structured,
+            AnswerRoute::Retrieval(_) => EffectiveRoute::Retrieval,
+            AnswerRoute::Synthesis => EffectiveRoute::Synthesis,
+            AnswerRoute::Clarification => EffectiveRoute::Clarification,
+            AnswerRoute::EmptyQuestion => EffectiveRoute::EmptyQuestion,
+        }
     }
 
     async fn execute_answer_route(
@@ -272,8 +330,10 @@ impl Chronicle {
         let answer = self
             .generate_synthesis_answer(question, evidence, &mut diagnostics)
             .await?;
-        self.record_synthesis_diagnostics(diagnostics)?;
-        Ok(AnswerOutcome::new(answer))
+        Ok(AnswerOutcome {
+            reply: answer,
+            synthesis_diagnostics: Some(diagnostics),
+        })
     }
 
     async fn generate_evidence_notes(
@@ -462,14 +522,6 @@ impl Chronicle {
         })
     }
 
-    fn record_synthesis_diagnostics(&self, diagnostics: SynthesisDiagnostics) -> Result<()> {
-        self.last_synthesis_diagnostics
-            .lock()
-            .map_err(|_| anyhow::anyhow!("synthesis diagnostics state is poisoned"))?
-            .replace(diagnostics);
-        Ok(())
-    }
-
     fn incomplete_synthesis_response(&self) -> String {
         retrieval_answer::truncate_to_char_limit(
             "Chronicle synthesis could not be completed from the retrieved notes.",
@@ -502,7 +554,7 @@ impl Chronicle {
 #[allow(clippy::type_complexity, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::super::retrieval_answer::truncate_to_char_limit;
-    use super::{Chronicle, SynthesisSettings};
+    use super::{Chronicle, EffectiveRoute, SynthesisSettings};
     use crate::chronicle::{
         indexer::{
             db::repository::facade::{IndexerDb, SearchResult},
@@ -512,6 +564,7 @@ mod tests {
             },
         },
         llm::LanguageModel,
+        query::plan::RouteOperation,
         runtime::GpuRuntime,
     };
     use anyhow::Context;
@@ -999,10 +1052,19 @@ mod tests {
             .map_err(|_| anyhow!("classifier output poisoned"))? = Some("not JSON".into());
 
         let answer = chronicle
-            .ask("How many characters are in Northmere?")
+            .ask_with_metadata("How many characters are in Northmere?")
             .await?;
 
-        assert!(answer.starts_with("Chronicle couldn't classify this request"));
+        assert!(
+            answer
+                .reply
+                .starts_with("Chronicle couldn't classify this request")
+        );
+        assert_eq!(answer.effective_route, EffectiveRoute::Retrieval);
+        assert_eq!(answer.classified_operation, None);
+        assert_eq!(answer.classifier_response.as_deref(), Some("not JSON"));
+        assert!(answer.classifier_error.is_some());
+        assert!(answer.synthesis_diagnostics.is_none());
         assert!(
             llm.prompts
                 .lock()
@@ -1096,10 +1158,14 @@ mod tests {
             .lock()
             .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"synthesis"}"#.into();
 
-        assert_eq!(
-            chronicle.ask("Summarise the history of Northmere.").await?,
-            "answer"
-        );
+        let answer = chronicle
+            .ask_with_metadata("Summarise the history of Northmere.")
+            .await?;
+        assert_eq!(answer.reply, "answer");
+        assert_eq!(answer.classified_operation, Some(RouteOperation::Synthesis));
+        assert_eq!(answer.effective_route, EffectiveRoute::Synthesis);
+        assert!(answer.synthesis_diagnostics.is_some());
+        assert_eq!(mutex_value(&llm.plan_calls)?, 1);
         assert_eq!(
             retriever
                 .calls
@@ -1128,6 +1194,34 @@ mod tests {
             .map_err(|_| anyhow!("prompts poisoned"))?;
         assert!(prompts[0].contains("<evidence>"));
         assert!(prompts[1].contains("<coverage_ledger>"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn answer_metadata_does_not_reuse_synthesis_diagnostics_for_a_later_retrieval()
+    -> Result<()> {
+        let (chronicle, _retriever, llm) = service(
+            FakeOutcome::Results,
+            ["evidence note", "synthesis answer", "retrieval answer"],
+            100,
+        )?;
+        *llm.plan_output
+            .lock()
+            .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"synthesis"}"#.into();
+
+        let synthesis = chronicle.ask_with_metadata("Summarise Northmere.").await?;
+        assert_eq!(synthesis.effective_route, EffectiveRoute::Synthesis);
+        assert!(synthesis.synthesis_diagnostics.is_some());
+
+        *llm.plan_output
+            .lock()
+            .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"search"}"#.into();
+        let retrieval = chronicle
+            .ask_with_metadata("Tell me about Northmere.")
+            .await?;
+        assert_eq!(retrieval.reply, "retrieval answer");
+        assert_eq!(retrieval.effective_route, EffectiveRoute::Retrieval);
+        assert!(retrieval.synthesis_diagnostics.is_none());
         Ok(())
     }
 

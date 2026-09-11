@@ -30,6 +30,45 @@ pub(in crate::chronicle::service) enum AnswerRoute {
     EmptyQuestion,
 }
 
+/// The classifier result associated with a single route selection. Keeping this with the
+/// selected route prevents callers from having to make a second, potentially divergent,
+/// classification request just for reporting.
+pub(in crate::chronicle::service) struct RouteSelection {
+    pub route: AnswerRoute,
+    pub classifier_response: Option<String>,
+    pub classifier_error: Option<String>,
+    pub classified_operation: Option<RouteOperation>,
+}
+
+impl RouteSelection {
+    fn predetermined(route: AnswerRoute) -> Self {
+        Self {
+            route,
+            classifier_response: None,
+            classifier_error: None,
+            classified_operation: None,
+        }
+    }
+
+    fn classified(route: AnswerRoute, response: String, operation: RouteOperation) -> Self {
+        Self {
+            route,
+            classifier_response: Some(response),
+            classifier_error: None,
+            classified_operation: Some(operation),
+        }
+    }
+
+    fn classifier_failure(route: AnswerRoute, response: Option<String>, error: String) -> Self {
+        Self {
+            route,
+            classifier_response: response,
+            classifier_error: Some(error),
+            classified_operation: None,
+        }
+    }
+}
+
 impl RetrievalMode {
     pub(in crate::chronicle::service) fn prefix(self) -> &'static str {
         match self {
@@ -66,7 +105,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
     llm: &dyn LanguageModel,
     db: Option<&IndexerDb>,
     question: &str,
-) -> Result<AnswerRoute> {
+) -> Result<RouteSelection> {
     let selection_started = Instant::now();
     if question.trim().is_empty() {
         emit_route_selection(
@@ -75,7 +114,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
             "classifier",
             selection_started,
         );
-        return Ok(AnswerRoute::EmptyQuestion);
+        return Ok(RouteSelection::predetermined(AnswerRoute::EmptyQuestion));
     }
     if planner::is_definitely_unsupported_structured_request(question) {
         debug!(%question, "Skipping query planner for a definitely unsupported structured request");
@@ -85,16 +124,16 @@ pub(in crate::chronicle::service) async fn select_answer_route(
             "classifier",
             selection_started,
         );
-        return Ok(AnswerRoute::Retrieval(
+        return Ok(RouteSelection::predetermined(AnswerRoute::Retrieval(
             RetrievalMode::UnsupportedStructuredQuery,
-        ));
+        )));
     }
     let classifier_started = Instant::now();
-    let operation = match llm.classify_route(question).await {
+    let (response, operation) = match llm.classify_route(question).await {
         Ok(response) => {
             debug!(%question, classifier_response = %response, "Route classifier response received");
             match classifier::parse(&response) {
-                Ok(operation) => operation,
+                Ok(operation) => (response, operation),
                 Err(error) => {
                     debug!(%question, classifier_response = %response, %error, "Route classification response rejected");
                     tracing::warn!(%error, "Route classification failed; using non-exhaustive retrieval");
@@ -104,7 +143,11 @@ pub(in crate::chronicle::service) async fn select_answer_route(
                         "classifier",
                         classifier_started,
                     );
-                    return Ok(AnswerRoute::Retrieval(RetrievalMode::ClassificationFailure));
+                    return Ok(RouteSelection::classifier_failure(
+                        AnswerRoute::Retrieval(RetrievalMode::ClassificationFailure),
+                        Some(response),
+                        format!("{error:#}"),
+                    ));
                 }
             }
         }
@@ -117,27 +160,45 @@ pub(in crate::chronicle::service) async fn select_answer_route(
                 "classifier",
                 classifier_started,
             );
-            return Ok(AnswerRoute::Retrieval(RetrievalMode::ClassificationFailure));
+            return Ok(RouteSelection::classifier_failure(
+                AnswerRoute::Retrieval(RetrievalMode::ClassificationFailure),
+                None,
+                format!("{error:#}"),
+            ));
         }
     };
     debug!(%question, ?operation, "Route classification accepted");
     match operation {
         RouteOperation::Search => {
             emit_route_selection(operation, "routed", "classifier", classifier_started);
-            return Ok(AnswerRoute::Retrieval(RetrievalMode::Ordinary));
+            return Ok(RouteSelection::classified(
+                AnswerRoute::Retrieval(RetrievalMode::Ordinary),
+                response,
+                operation,
+            ));
         }
         RouteOperation::Synthesis => {
             emit_route_selection(operation, "routed", "classifier", classifier_started);
-            return Ok(AnswerRoute::Synthesis);
+            return Ok(RouteSelection::classified(
+                AnswerRoute::Synthesis,
+                response,
+                operation,
+            ));
         }
         RouteOperation::Clarify => {
             emit_route_selection(operation, "routed", "classifier", classifier_started);
-            return Ok(AnswerRoute::Clarification);
+            return Ok(RouteSelection::classified(
+                AnswerRoute::Clarification,
+                response,
+                operation,
+            ));
         }
         RouteOperation::Unsupported => {
             emit_route_selection(operation, "routed", "classifier", classifier_started);
-            return Ok(AnswerRoute::Retrieval(
-                RetrievalMode::UnsupportedStructuredQuery,
+            return Ok(RouteSelection::classified(
+                AnswerRoute::Retrieval(RetrievalMode::UnsupportedStructuredQuery),
+                response,
+                operation,
             ));
         }
         RouteOperation::Count | RouteOperation::List | RouteOperation::CountMembers => {}
@@ -225,7 +286,11 @@ pub(in crate::chronicle::service) async fn select_answer_route(
         }
     };
     let Some(mut plan) = plan else {
-        return Ok(AnswerRoute::Retrieval(RetrievalMode::PlanningFailure));
+        return Ok(RouteSelection::classified(
+            AnswerRoute::Retrieval(RetrievalMode::PlanningFailure),
+            response,
+            operation,
+        ));
     };
     if plan.selection().is_some() {
         db.context("Structured datastore unavailable")?
@@ -233,7 +298,11 @@ pub(in crate::chronicle::service) async fn select_answer_route(
             .await?;
     }
     debug!(route = ?plan, "Validated Chronicle query plan");
-    Ok(AnswerRoute::Structured(plan))
+    Ok(RouteSelection::classified(
+        AnswerRoute::Structured(plan),
+        response,
+        operation,
+    ))
 }
 
 /// Emits low-cardinality production telemetry for every completed routing stage. Detailed model

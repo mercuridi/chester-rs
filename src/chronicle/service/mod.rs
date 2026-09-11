@@ -4,4 +4,4 @@ mod lifecycle;
 mod retrieval_answer;
 mod synthesis_pipeline;
 
-pub use chronicle::{Chronicle, SynthesisDiagnostics};
+pub use chronicle::{Chronicle, EffectiveRoute, SynthesisDiagnostics};
