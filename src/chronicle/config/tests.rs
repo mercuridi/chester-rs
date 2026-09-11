@@ -90,6 +90,25 @@ fn checked_in_example_uses_the_only_supported_schema() -> Result<()> {
 }
 
 #[test]
+fn readme_configuration_example_matches_and_parses_as_the_checked_in_example() -> Result<()> {
+    let readme = include_str!("../../../README.md");
+    let (_, after_start) = readme
+        .split_once("<!-- config-example:start -->\n```toml\n")
+        .expect("README configuration example must have a start marker");
+    let (documented_config, _) = after_start
+        .split_once("```\n<!-- config-example:end -->")
+        .expect("README configuration example must have an end marker");
+
+    assert_eq!(
+        documented_config,
+        include_str!("../../../chronicle.config.example.toml"),
+        "README configuration example must stay in sync with the checked-in example"
+    );
+    load(documented_config)?;
+    Ok(())
+}
+
+#[test]
 fn loads_complete_nested_settings_and_domain_ownership() -> Result<()> {
     let config = load(&CONFIG.replace("gm_user_ids = []", "gm_user_ids = [\"99\"]"))?;
     assert_eq!(config.chronicle.llm.model.repo, "owner/model");

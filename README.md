@@ -80,7 +80,7 @@ printf '%s\n' 'DISCORD_TOKEN=replace-with-your-bot-token' > .env
 cargo build --release
 ```
 
-Keep `yt-dlp` in the runtime root; both the bot and `download.sh` use `./yt-dlp`.
+Keep `yt-dlp` in the runtime root; Chester uses `./yt-dlp` directly.
 
 The Jester and Chronicle SQLite databases are local runtime state and are not committed. Chester creates their parent directories, database files, and schemas automatically on first startup.
 
@@ -109,53 +109,106 @@ By default Chester uses its current directory as the runtime root and loads
 cp chronicle.config.example.toml .chronicle/config.toml
 ```
 
-The example configuration is enough for a basic deployment. Paths are relative to the runtime root:
+The example configuration is enough for a basic deployment. It is strict: the
+top-level `database`, `chronicle`, and `discord` sections, and every nested
+section shown below, are required. Unknown keys are rejected. Paths are relative
+to the runtime root:
 
+<!-- config-example:start -->
 ```toml
+# Copy this file to .chronicle/config.toml and adjust it for the deployment.
+
 [database]
 jester = "sqlite://data/jester.sqlite3"
 chronicle = "sqlite://data/chronicle.sqlite3"
 
-[chronicle]
+[chronicle.indexing]
 corpus_dir = "corpus"
-
-llm_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
-llm_revision = "main"
-llm_model_file = "qwen2.5-7b-instruct-q3_k_m.gguf"
-llm_tokenizer_repo = "Qwen/Qwen2.5-7B-Instruct"
-llm_tokenizer_file = "tokenizer.json"
-
-llm_max_tokens = 512
-# 8192 is the conservative default for the bundled 7B model. Higher context
-# limits require substantially more GPU memory.
-llm_context_limit = 8192
-llm_temperature = 0.2
-llm_seed = 42
-llm_system_prompt = """\
-You are Chronicle, a concise and thoughtful assistant.
-Answer only from the supplied Chronicle context.
-If the context is insufficient, say so plainly.
-Do not invent facts.
-"""
-# Maximum number of Unicode characters in a generated Discord reply.
-llm_max_reply_length = 1900
-retrieval_limit = 5
-retrieval_candidate_limit = 15
-retrieval_distance_threshold = 0.8
-retrieval_near_duplicate_threshold = 0.85
-retrieval_max_chunks_per_document = 2
-synthesis_retrieval_limit = 12
-synthesis_candidate_limit = 40
-synthesis_max_chunks_per_document = 3
-synthesis_batch_token_budget = 1800
-synthesis_max_batches = 6
+excluded_note_ids = []
 max_chunk_tokens = 480
-# Target content tokens shared by adjacent chunks, excluding special model tokens.
-# Section boundaries may reduce the effective overlap. Zero disables overlap.
 chunk_overlap_tokens = 0
+
+# The first `/chronicle start` downloads these files into the Hugging Face cache.
+[chronicle.llm.model]
+repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
+revision = "main"
+file = "qwen2.5-7b-instruct-q3_k_m.gguf"
+
+[chronicle.llm.tokenizer]
+repo = "Qwen/Qwen2.5-7B-Instruct"
+file = "tokenizer.json"
+
+[chronicle.llm.generation]
+max_tokens = 512
+context_limit = 8192
+temperature = 0.2
+seed = 42
+system_prompt = """\
+    You are Chronicle, a concise and thoughtful assistant.\
+    Answer only from the supplied Chronicle context.\
+    If the context is insufficient, say so plainly.\
+    Do not invent facts.\
+"""
+max_reply_length = 1900
+
+[chronicle.retrieval]
+limit = 5
+candidate_limit = 15
+distance_threshold = 0.8
+near_duplicate_threshold = 0.85
+max_chunks_per_document = 2
+pagerank_weight = 0.15
+
+[chronicle.synthesis]
+retrieval_limit = 12
+candidate_limit = 40
+max_chunks_per_document = 3
+batch_token_budget = 1800
+max_batches = 6
+
+# Discord users allowed to retrieve GM-only notes and `[!secret]` callouts.
+[chronicle.access]
+gm_user_ids = []
+
+# Map Discord users to names used in transcripts.
+[discord]
+alias_groups = {}
+guilds = {}
+
+# To add mappings, replace the empty maps above with tables such as:
+# [discord.alias_groups.main]
+# name = "Main names"
+#
+# [discord.alias_groups.main.aliases]
+# "123456789012345678" = "Alice"
+# "234567890123456789" = "Bob"
+#
+# [discord.guilds."345678901234567890"]
+# alias_groups = ["main"]
+```
+<!-- config-example:end -->
+
+To add transcript aliases, replace the empty `discord` maps above with the
+following nested tables:
+
+```toml
+[discord.alias_groups.main]
+name = "Main names"
+
+[discord.alias_groups.main.aliases]
+"123456789012345678" = "Alice"
+"234567890123456789" = "Bob"
+
+[discord.guilds."345678901234567890"]
+alias_groups = ["main"]
 ```
 
-The configuration schema is strict: unknown keys are rejected, and both chunking settings must be present. The loader validates `llm_max_tokens` (1–32768), `llm_context_limit` (greater than `llm_max_tokens`, up to 32768), `llm_temperature` (0.0–2.0), `llm_max_reply_length` (1–2000), `retrieval_limit` (1–100), `retrieval_candidate_limit` (at least `retrieval_limit`, up to 1000), a finite non-negative `retrieval_distance_threshold`, a `retrieval_near_duplicate_threshold` between 0.0 and 1.0, a positive `retrieval_max_chunks_per_document`, `synthesis_retrieval_limit` (1–100), `synthesis_candidate_limit` (at least `synthesis_retrieval_limit`, up to 1000), a positive `synthesis_max_chunks_per_document`, `synthesis_batch_token_budget` (no greater than the available LLM prompt budget), `synthesis_max_batches` (1–100), `max_chunk_tokens` (3–512), and `chunk_overlap_tokens` (no greater than the chunk budget minus 3). Retrieval examines the candidate limit, discards chunks beyond the distance threshold, removes exact and near-duplicate chunks, preserves intentional similarity between adjacent chunks from the same document, limits the number of chunks from each document, and sends at most `retrieval_limit` accepted chunks to the LLM. Chronicle then fits those chunks to the tokenizer-based context budget, preserving ranked order and truncating only when the highest-ranked result cannot otherwise fit. If the question is blank, the corpus is empty, or no chunk meets the threshold, Chronicle returns a short-circuit message instead of invoking the LLM. Startup downloads the BGE embedding model if it is not already cached. The first `/chronicle start` downloads the configured LLM model and tokenizer into the Hugging Face cache.
+The loader validates the LLM, retrieval, synthesis, indexing, access, and Discord
+settings, including cross-setting token budgets. Retrieval examines the candidate
+limit, applies the vector distance threshold, removes duplicates, caps chunks per
+document, and returns at most `limit` accepted chunks. Startup downloads the BGE
+embedding model if needed; the first `/chronicle start` downloads the configured
+LLM model and tokenizer into the Hugging Face cache.
 
 ### Runtime location
 
@@ -176,23 +229,9 @@ the configuration remain rooted at `--runtime-root`:
 /opt/chester/chester-rs --runtime-root /srv/chester --config config/production.toml
 ```
 
-### Alias and guild configuration
-
-Alias groups map Discord user IDs to names used in transcripts. A guild can enable one or more groups:
-
-```toml
-[alias_groups.main]
-name = "Main names"
-
-[alias_groups.main.aliases]
-"123456789012345678" = "Alice"
-"234567890123456789" = "Bob"
-
-[guilds."345678901234567890"]
-alias_groups = ["main"]
-```
-
-Use Discord's developer mode to copy user and server IDs. Every participant in a recording must have an alias in the selected group or transcript generation will stop with a validation error. Group IDs referenced by a guild must exist.
+Use Discord's developer mode to copy user and server IDs. Every participant in a
+recording must have an alias in the selected group or transcript generation will
+stop with a validation error. Group IDs referenced by a guild must exist.
 
 ## Run Chester
 
@@ -232,7 +271,7 @@ The main application commands are:
 | `/fix` | Fill missing metadata |
 | `/set_taxonomy`, `/add_texture`, `/add_environment`, `/add_label`, `/reset_taxonomy` | Manage controlled taxonomy and custom labels |
 | `/recording start`, `/recording stop` | Record a voice session; start accepts an optional initial scene |
-| `/chronicle scene` | Add a scene marker to an active recording |
+| `/recording scene` | Add a scene marker to an active recording |
 | `/transcript generate`, `/transcript show` | Create or display a transcript; generation can ignore scene markers |
 | `/chronicle start`, `/chronicle stop`, `/chronicle ask` | Load, unload, or query the local assistant |
 | `/help` | Show command help |
@@ -285,8 +324,7 @@ visibility-aware document graph. Links may target a note ID, vault-relative path
 filename title, or declared alias; display aliases, heading references, and block
 references resolve to their containing document. Dangling and ambiguous links do
 not create graph edges. The graph and player/GM-specific PageRank scores rebuild
-after every indexing pass. Scores are retained for the forthcoming retrieval
-reranker and do not yet alter retrieval ranking.
+after every indexing pass.
 SQLite FTS5 BM25 and vector retrieval each fetch `retrieval_candidate_limit`
 candidates. Reciprocal rank fusion (constant 60) merges the lists with a
 low-weight PageRank prior for those same candidates; `pagerank_weight` controls
@@ -299,7 +337,7 @@ words are quoted as literals rather than interpreted as FTS operators.
 Startup incrementally updates both indexes, removing deleted or newly ineligible
 notes. FTS5 triggers maintain the lexical index as chunks change; opening the
 database does not rebuild it. Model loading and `/chronicle ask` remain unchanged.
-`gm_user_ids` in `[chronicle]` grants the listed Discord users access to every
+`gm_user_ids` in `[chronicle.access]` grants the listed Discord users access to every
 canon note. Other callers can retrieve `player` notes and the player-visible
 parts of `mixed` notes, but never `secret` notes or protected passages.
 
@@ -322,13 +360,16 @@ A fixed fictional vault and retrieval evaluation suite live in
 [`tests/fixtures/chronicle`](tests/fixtures/chronicle/README.md). Run:
 
 ```sh
-cargo run -- --chronicle-eval tests/fixtures/chronicle/suite.toml /tmp/chronicle-report.json
+cargo run -- --chronicle-eval
 ```
 
-Use a new output filename. The command compares lexical, vector, and hybrid retrieval
-in a temporary database without loading the chat LLM or connecting to Discord.
-Reports include recall, precision, reciprocal rank, evidence coverage and per-candidate
-selection diagnostics. Enable normal retrieval diagnostics with
+This uses the checked-in suite and writes a timestamped report below
+`logs/evaluation/`. To override them, pass `[SUITE.toml] [REPORT.json]`; existing
+report files are never overwritten. The command compares lexical, vector, and hybrid
+retrieval in a temporary database without loading application configuration, the chat
+LLM, or Discord. Reports include recall, precision, reciprocal rank, evidence
+coverage, visibility checks, and per-candidate selection diagnostics. Enable normal
+retrieval diagnostics with
 `RUST_LOG=info,chester_rs::chronicle::indexer::retriever=debug`; these stay outside prompts.
 
 ### Structured counts and lists
@@ -358,7 +399,8 @@ questions retain hybrid retrieval and answer generation. Ambiguous references su
 as “List them” ask for clarification; conversation memory is not implemented.
 Negation, OR, location/relationship restrictions, non-canon selection, historical
 queries, numeric totals, and arbitrary SQL are unsupported for structured execution.
-Visibility remains unenforced.
+Structured queries enforce the caller's player or GM visibility scope, just as
+retrieval does.
 
 Startup refreshes these properties from frontmatter, including existing unchanged
 notes. Metadata-only edits reuse embeddings when their prepared searchable chunks
