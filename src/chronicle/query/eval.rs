@@ -179,12 +179,7 @@ fn validate(suite: &Suite) -> Result<()> {
     Ok(())
 }
 
-async fn evaluate(
-    case: Case,
-    db: &IndexerDb,
-    llm: Option<&Llm>,
-    runtime: &GpuRuntime,
-) -> Result<CaseReport> {
+async fn evaluate(case: Case, db: &IndexerDb, llm: Option<&Llm>) -> Result<CaseReport> {
     let result = if case.plan.is_structured() {
         let plan = StructuredPlan::try_from(case.plan.clone())?;
         Some(db.execute_plan_for(&plan, AccessScope::Gm).await?)
@@ -220,7 +215,6 @@ async fn evaluate(
         end_to_end_correct: None,
     };
     if let Some(llm) = llm {
-        let _lease = runtime.acquire_inference()?;
         match llm.classify_route(&report.case.question).await {
             Ok(response) => {
                 report.classifier_response = Some(response.clone());
@@ -381,7 +375,7 @@ pub async fn run(
     };
     let mut cases = Vec::new();
     for case in suite.cases {
-        cases.push(evaluate(case, &db, llm.as_ref(), &runtime).await?);
+        cases.push(evaluate(case, &db, llm.as_ref()).await?);
     }
     if let Some(llm) = llm {
         llm.unload().await?;
@@ -436,7 +430,7 @@ mod tests {
         validate(&suite)?;
         let (_temp, db, _) = fixture_database(&root).await?;
         for case in suite.cases {
-            let report = evaluate(case, &db, None, &GpuRuntime::new()).await?;
+            let report = evaluate(case, &db, None).await?;
             ensure!(
                 report.executor_correct,
                 "Incorrect executor result for {}",
