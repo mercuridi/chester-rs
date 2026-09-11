@@ -410,6 +410,7 @@ impl LanguageModel for JudgeTestModel {
         Ok(r#"{"operation":"synthesis"}"#.into())
     }
 
+    #[allow(clippy::unreachable)]
     async fn generate_structured_plan(
         &self,
         _question: &str,
@@ -418,6 +419,7 @@ impl LanguageModel for JudgeTestModel {
         unreachable!("synthesis test model should not generate a structured plan")
     }
 
+    #[allow(clippy::unreachable)]
     async fn repair_structured_plan(
         &self,
         _question: &str,

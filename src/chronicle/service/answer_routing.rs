@@ -101,6 +101,7 @@ impl RetrievalMode {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub(in crate::chronicle::service) async fn select_answer_route(
     llm: &dyn LanguageModel,
     structured_store: &dyn StructuredStore,
@@ -317,7 +318,7 @@ fn emit_route_selection(
         operation = operation.as_str(),
         outcome,
         stage,
-        duration_ms = started.elapsed().as_millis() as u64,
+        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         structured = operation.is_structured(),
         "Chronicle route selection"
     );

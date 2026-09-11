@@ -128,7 +128,7 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
     tracing::info!("Chronicle services initialized");
 
     Ok(Chronicle::new(
-        config.chronicle.retrieval.clone(),
+        config.chronicle.retrieval,
         config.chronicle.synthesis,
         config.chronicle.llm.generation.clone(),
         ChronicleDependencies {

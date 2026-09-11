@@ -777,9 +777,17 @@ mod tests {
             }]
         );
 
-        clear_track_taxonomy(&pool, &track_id).await?;
+        assert_clearing_taxonomy_updates_tags(&pool, &track_id).await?;
+        Ok(())
+    }
+
+    async fn assert_clearing_taxonomy_updates_tags(
+        pool: &SqlitePool,
+        track_id: &VideoId,
+    ) -> TestResult {
+        clear_track_taxonomy(pool, track_id).await?;
         assert_eq!(
-            fetch_library_by_tag(&pool).await?[0],
+            fetch_library_by_tag(pool).await?[0],
             LibraryGroupEntry {
                 group_name: Some("Unclassified".into()),
                 title: "Alpha".into()

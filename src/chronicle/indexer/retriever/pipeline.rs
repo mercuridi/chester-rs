@@ -100,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_explain_selection_without_passage_text() {
+    fn diagnostics_explain_selection_without_passage_text() -> Result<(), serde_json::Error> {
         let mut rejected = result("threshold", 0, "private body text", false);
         rejected.distance = 2.0;
         let lexical = vec![
@@ -113,11 +113,7 @@ mod tests {
         let (selected, report) =
             select_with_diagnostics(vec![rejected], lexical, settings(2, 0.8, 0.75, 1, 0.0));
         assert_eq!(selected.len(), 2);
-        assert!(
-            !serde_json::to_string(&report)
-                .unwrap()
-                .contains("private body text")
-        );
+        assert!(!serde_json::to_string(&report)?.contains("private body text"));
         for reason in [
             "selected",
             "vector_threshold",
@@ -132,6 +128,7 @@ mod tests {
                     .any(|candidate| candidate.decision == reason)
             );
         }
+        Ok(())
     }
 
     #[test]

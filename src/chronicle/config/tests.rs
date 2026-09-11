@@ -160,7 +160,10 @@ fn rejects_legacy_flat_chronicle_and_top_level_discord_keys() {
 #[test]
 fn rejects_retired_indexing_keys_with_parse_context() {
     let legacy = CONFIG.replace("max_chunk_tokens = 480", "max_chunk_length = 480");
-    let error = load(&legacy).expect_err("retired key must not be accepted");
+    let error = match load(&legacy) {
+        Ok(_) => anyhow::anyhow!("retired key must not be accepted"),
+        Err(error) => error,
+    };
     let message = format!("{error:#}");
 
     assert!(message.contains("Failed to parse config file"));
@@ -196,9 +199,10 @@ fn rejects_invalid_discord_ids_and_unknown_guild_alias_groups() {
 #[test]
 fn participant_validation_reports_missing_aliases() -> Result<()> {
     let config = load(CONFIG)?;
-    let error = config
-        .validate_participants("party", [&UserId::new(10), &UserId::new(99)])
-        .expect_err("unknown participant must require an alias");
+    let error = match config.validate_participants("party", [&UserId::new(10), &UserId::new(99)]) {
+        Ok(()) => anyhow::anyhow!("unknown participant must require an alias"),
+        Err(error) => error.into(),
+    };
 
     assert!(error.to_string().contains("99"));
     Ok(())

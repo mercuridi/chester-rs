@@ -339,6 +339,7 @@ fn parse_structured_plan(
     Ok(plan)
 }
 
+#[allow(clippy::unreachable)]
 fn plan_for_operation(operation: RouteOperation) -> Plan {
     match operation {
         RouteOperation::Search => Plan::Search {},

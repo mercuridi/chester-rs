@@ -1244,7 +1244,7 @@ pub async fn run(
     let retriever = Arc::new(Retriever::new(database.clone()));
     let llm = Arc::new(llm);
     let chronicle = Chronicle::new(
-        config.chronicle.retrieval.clone(),
+        config.chronicle.retrieval,
         config.chronicle.synthesis,
         config.chronicle.llm.generation.clone(),
         ChronicleDependencies {

@@ -785,10 +785,10 @@ mod tests {
                 .lock()
                 .map_err(|_| anyhow!("plan poisoned"))?
                 .clone();
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&plan) {
-                if let Some(operation) = value.get("operation") {
-                    return Ok(serde_json::json!({ "operation": operation }).to_string());
-                }
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&plan)
+                && let Some(operation) = value.get("operation")
+            {
+                return Ok(serde_json::json!({ "operation": operation }).to_string());
             }
             let question = question.to_lowercase();
             let operation = if question.starts_with("list") || question.starts_with("name") {
