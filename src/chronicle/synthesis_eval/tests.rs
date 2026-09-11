@@ -414,7 +414,7 @@ impl LanguageModel for JudgeTestModel {
     async fn generate_structured_plan(
         &self,
         _question: &str,
-        _operation: crate::chronicle::query::plan::RouteOperation,
+        _operation: crate::chronicle::query::plan::StructuredOperation,
     ) -> Result<String> {
         unreachable!("synthesis test model should not generate a structured plan")
     }
@@ -423,7 +423,7 @@ impl LanguageModel for JudgeTestModel {
     async fn repair_structured_plan(
         &self,
         _question: &str,
-        _operation: crate::chronicle::query::plan::RouteOperation,
+        _operation: crate::chronicle::query::plan::StructuredOperation,
         _rejected_response: &str,
         _rejection_error: &str,
     ) -> Result<String> {

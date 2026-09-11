@@ -7,12 +7,11 @@ use super::facade::{AccessScope, IndexerDb, StructuredNote, StructuredResult};
 impl IndexerDb {
     pub async fn execute_plan_for(
         &self,
-        plan: &crate::chronicle::query::plan::Plan,
+        plan: &crate::chronicle::query::plan::StructuredPlan,
         access: AccessScope,
     ) -> Result<StructuredResult> {
         use crate::chronicle::query::{plan::Plan, render::LIST_LIMIT};
-        let mut plan = plan.clone();
-        plan.validate()?;
+        let plan = plan.as_plan();
         if let Plan::CountMembers {
             note_type,
             subject,
@@ -21,7 +20,6 @@ impl IndexerDb {
         {
             return self.count_members(note_type, subject, field, access).await;
         }
-        self.resolve_string_or_wikilinks(&mut plan).await?;
         let (note_type, filters) = plan.selection().context("Plan is not a structured query")?;
         let mut count = structured_query(
             "SELECT COUNT(DISTINCT m.note_id) FROM note_metadata m",
@@ -106,9 +104,9 @@ impl IndexerDb {
     /// link query.
     pub async fn resolve_string_or_wikilinks(
         &self,
-        plan: &mut crate::chronicle::query::plan::Plan,
+        plan: &mut crate::chronicle::query::plan::StructuredPlan,
     ) -> Result<()> {
-        let (note_type, filters) = match plan {
+        let (note_type, filters) = match plan.as_plan_mut() {
             crate::chronicle::query::plan::Plan::Count { note_type, filters }
             | crate::chronicle::query::plan::Plan::List { note_type, filters } => {
                 (note_type.as_str(), filters)

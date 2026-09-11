@@ -1,7 +1,7 @@
 //! Separate structured-query evaluation; leaves the retrieval baseline unchanged.
 use super::{
     classifier,
-    plan::{Plan, RouteOperation},
+    plan::{Plan, RouteOperation, StructuredOperation, StructuredPlan},
     planner,
 };
 use crate::chronicle::{
@@ -186,7 +186,8 @@ async fn evaluate(
     runtime: &GpuRuntime,
 ) -> Result<CaseReport> {
     let result = if case.plan.is_structured() {
-        Some(db.execute_plan_for(&case.plan, AccessScope::Gm).await?)
+        let plan = StructuredPlan::try_from(case.plan.clone())?;
+        Some(db.execute_plan_for(&plan, AccessScope::Gm).await?)
     } else {
         None
     };
@@ -227,10 +228,9 @@ async fn evaluate(
                     Ok(operation) => {
                         report.classified_operation = Some(operation);
                         report.route_correct = Some(operation == report.expected_operation);
-                        if operation.is_structured() {
+                        if let Ok(operation) = StructuredOperation::try_from(operation) {
                             evaluate_structured_route(&mut report, db, llm, operation).await;
-                        } else {
-                            let plan = plan_for_operation(operation);
+                        } else if let Some(plan) = plan_for_operation(operation) {
                             report.actual_plan = Some(plan.clone());
                             report.end_to_end_correct = Some(plan == report.case.plan);
                         }
@@ -256,53 +256,26 @@ async fn evaluate_structured_route(
     report: &mut CaseReport,
     db: &IndexerDb,
     llm: &Llm,
-    operation: RouteOperation,
+    operation: StructuredOperation,
 ) {
-    let response = match llm
-        .generate_structured_plan(&report.case.question, operation)
-        .await
-    {
-        Ok(response) => response,
-        Err(error) => {
-            report.query_generation_error = Some(format!("{error:#}"));
-            report.end_to_end_correct = Some(false);
-            return;
-        }
-    };
-    report.query_generation_responses.push(response.clone());
-    match parse_structured_plan(&report.case.question, &response, operation) {
-        Ok(plan) => accept_structured_plan(report, db, plan).await,
-        Err(error) => {
-            report.query_validation_error = Some(format!("{error:#}"));
-            let repair_response = match llm
-                .repair_structured_plan(
-                    &report.case.question,
-                    operation,
-                    &response,
-                    &error.to_string(),
-                )
-                .await
-            {
-                Ok(response) => response,
-                Err(error) => {
-                    report.repair_error = Some(format!("{error:#}"));
-                    report.end_to_end_correct = Some(false);
-                    return;
-                }
-            };
-            report.repair_response = Some(repair_response.clone());
-            match parse_structured_plan(&report.case.question, &repair_response, operation) {
-                Ok(plan) => accept_structured_plan(report, db, plan).await,
-                Err(error) => {
-                    report.repair_validation_error = Some(format!("{error:#}"));
-                    report.end_to_end_correct = Some(false);
-                }
-            }
-        }
+    let planning =
+        planner::generate_or_repair_structured_plan(llm, &report.case.question, operation).await;
+    report
+        .query_generation_responses
+        .extend(planning.generated_response.into_iter());
+    report.query_generation_error = planning.generation_error;
+    report.query_validation_error = planning.validation_error;
+    report.repair_response = planning.repair_response;
+    report.repair_error = planning.repair_error;
+    report.repair_validation_error = planning.repair_validation_error;
+    if let Some(plan) = planning.plan {
+        accept_structured_plan(report, db, plan).await;
+    } else {
+        report.end_to_end_correct = Some(false);
     }
 }
 
-async fn accept_structured_plan(report: &mut CaseReport, db: &IndexerDb, mut plan: Plan) {
+async fn accept_structured_plan(report: &mut CaseReport, db: &IndexerDb, mut plan: StructuredPlan) {
     if let Err(error) = db.resolve_string_or_wikilinks(&mut plan).await {
         report.link_resolution_error = Some(format!("{error:#}"));
         report.end_to_end_correct = Some(false);
@@ -319,36 +292,20 @@ async fn accept_structured_plan(report: &mut CaseReport, db: &IndexerDb, mut pla
     report.query_correct = report
         .route_correct
         .filter(|correct| *correct)
-        .map(|_| plan == report.case.plan);
+        .map(|_| plan.as_plan() == &report.case.plan);
     report.end_to_end_correct =
         Some(report.route_correct == Some(true) && report.query_correct == Some(true));
-    report.actual_plan = Some(plan);
+    report.actual_plan = Some(plan.into_plan());
     report.actual_result = Some(result);
 }
 
-fn parse_structured_plan(
-    question: &str,
-    response: &str,
-    operation: RouteOperation,
-) -> Result<Plan> {
-    let plan = planner::parse_for_question(question, response)?;
-    ensure!(
-        plan.structured_operation() == Some(operation),
-        "Structured plan operation did not match classified route"
-    );
-    Ok(plan)
-}
-
-#[allow(clippy::unreachable)]
-fn plan_for_operation(operation: RouteOperation) -> Plan {
+fn plan_for_operation(operation: RouteOperation) -> Option<Plan> {
     match operation {
-        RouteOperation::Search => Plan::Search {},
-        RouteOperation::Synthesis => Plan::Synthesis {},
-        RouteOperation::Unsupported => Plan::Unsupported {},
-        RouteOperation::Clarify => Plan::Clarify {},
-        RouteOperation::Count | RouteOperation::List | RouteOperation::CountMembers => {
-            unreachable!("structured route must generate a plan")
-        }
+        RouteOperation::Search => Some(Plan::Search {}),
+        RouteOperation::Synthesis => Some(Plan::Synthesis {}),
+        RouteOperation::Unsupported => Some(Plan::Unsupported {}),
+        RouteOperation::Clarify => Some(Plan::Clarify {}),
+        RouteOperation::Count | RouteOperation::List | RouteOperation::CountMembers => None,
     }
 }
 

@@ -16,7 +16,7 @@ use super::super::{
     },
     llm::LanguageModel,
     query::{
-        plan::{Plan, RouteOperation},
+        plan::{RouteOperation, StructuredPlan},
         render,
     },
     runtime::GpuRuntime,
@@ -40,18 +40,26 @@ pub struct Chronicle {
 
 #[async_trait::async_trait]
 pub trait StructuredStore: Send + Sync {
-    async fn resolve_string_or_wikilinks(&self, plan: &mut Plan) -> Result<()>;
+    async fn resolve_string_or_wikilinks(&self, plan: &mut StructuredPlan) -> Result<()>;
 
-    async fn execute_plan(&self, plan: &Plan, access: AccessScope) -> Result<StructuredResult>;
+    async fn execute_plan(
+        &self,
+        plan: &StructuredPlan,
+        access: AccessScope,
+    ) -> Result<StructuredResult>;
 }
 
 #[async_trait::async_trait]
 impl StructuredStore for IndexerDb {
-    async fn resolve_string_or_wikilinks(&self, plan: &mut Plan) -> Result<()> {
+    async fn resolve_string_or_wikilinks(&self, plan: &mut StructuredPlan) -> Result<()> {
         self.resolve_string_or_wikilinks(plan).await
     }
 
-    async fn execute_plan(&self, plan: &Plan, access: AccessScope) -> Result<StructuredResult> {
+    async fn execute_plan(
+        &self,
+        plan: &StructuredPlan,
+        access: AccessScope,
+    ) -> Result<StructuredResult> {
         self.execute_plan_for(plan, access).await
     }
 }
@@ -224,7 +232,7 @@ impl Chronicle {
 
     async fn answer_from_structured_plan(
         &self,
-        plan: &Plan,
+        plan: &StructuredPlan,
         access: AccessScope,
     ) -> Result<AnswerOutcome> {
         let result = self.structured_store.execute_plan(plan, access).await?;
@@ -527,7 +535,7 @@ mod tests {
             },
         },
         llm::LanguageModel,
-        query::plan::{Plan, RouteOperation},
+        query::plan::{RouteOperation, StructuredOperation, StructuredPlan},
         runtime::GpuRuntime,
         transcription::service::TranscriptionService,
     };
@@ -593,11 +601,15 @@ mod tests {
 
     #[async_trait::async_trait]
     impl StructuredStore for FakeStructuredStore {
-        async fn resolve_string_or_wikilinks(&self, plan: &mut Plan) -> Result<()> {
+        async fn resolve_string_or_wikilinks(&self, plan: &mut StructuredPlan) -> Result<()> {
             self.database()?.resolve_string_or_wikilinks(plan).await
         }
 
-        async fn execute_plan(&self, plan: &Plan, access: AccessScope) -> Result<StructuredResult> {
+        async fn execute_plan(
+            &self,
+            plan: &StructuredPlan,
+            access: AccessScope,
+        ) -> Result<StructuredResult> {
             self.database()?.execute_plan_for(plan, access).await
         }
     }
@@ -802,7 +814,7 @@ mod tests {
         async fn generate_structured_plan(
             &self,
             _question: &str,
-            _operation: crate::chronicle::query::plan::RouteOperation,
+            _operation: StructuredOperation,
         ) -> Result<String> {
             *self
                 .structured_plan_calls
@@ -818,7 +830,7 @@ mod tests {
         async fn repair_structured_plan(
             &self,
             question: &str,
-            _operation: crate::chronicle::query::plan::RouteOperation,
+            _operation: StructuredOperation,
             rejected_response: &str,
             rejection_error: &str,
         ) -> Result<String> {

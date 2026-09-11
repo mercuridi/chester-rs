@@ -66,8 +66,10 @@ async fn structured_lists_are_capped_but_counts_are_distinct_and_complete() -> R
     }
     db.replace_note("Duplicate.md", "hash", &[], &[], &metadata)
         .await?;
-    let plan = crate::chronicle::query::planner::parse(
-        r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
+    let plan = crate::chronicle::query::plan::StructuredPlan::try_from(
+        crate::chronicle::query::planner::parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
+        )?,
     )?;
     let result = db.execute_plan_for(&plan, AccessScope::Gm).await?;
     assert_eq!(result.total, 25);
@@ -386,15 +388,19 @@ async fn structured_conditions_query_scalar_and_wikilink_list_metadata() -> Resu
     db.replace_note("Vex.md", "hash", &[], &[], &metadata)
         .await?;
 
-    let plan = crate::chronicle::query::planner::parse(
-        r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"[[Great Dungeon Fight]]"},{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
+    let plan = crate::chronicle::query::plan::StructuredPlan::try_from(
+        crate::chronicle::query::planner::parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"[[Great Dungeon Fight]]"},{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
+        )?,
     )?;
     let result = db.execute_plan_for(&plan, AccessScope::Gm).await?;
     assert_eq!(result.total, 1);
     assert_eq!(result.notes[0].id, "vex");
 
-    let mut plain_target_plan = crate::chronicle::query::planner::parse(
-        r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"Great Dungeon Fight"}]}}"#,
+    let mut plain_target_plan = crate::chronicle::query::plan::StructuredPlan::try_from(
+        crate::chronicle::query::planner::parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"Great Dungeon Fight"}]}}"#,
+        )?,
     )?;
     db.resolve_string_or_wikilinks(&mut plain_target_plan)
         .await?;
@@ -414,8 +420,10 @@ async fn structured_conditions_query_scalar_and_wikilink_list_metadata() -> Resu
         1
     );
 
-    let mut literal_plan = crate::chronicle::query::planner::parse(
-        r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"old age"}]}}"#,
+    let mut literal_plan = crate::chronicle::query::plan::StructuredPlan::try_from(
+        crate::chronicle::query::planner::parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_cause","operator":"equals","value":"old age"}]}}"#,
+        )?,
     )?;
     db.resolve_string_or_wikilinks(&mut literal_plan).await?;
     assert_eq!(
@@ -439,9 +447,11 @@ async fn count_members_resolves_note_identifiers_and_deduplicates_values() -> Re
         .await?;
 
     for subject in ["[[Ada]]", "[[ada]]", "[[The Gardener]]"] {
-        let plan = crate::chronicle::query::planner::parse(&format!(
-            r#"{{"operation":"count_members","note_type":"character","subject":"{subject}","field":"enemies"}}"#,
-        ))?;
+        let plan = crate::chronicle::query::plan::StructuredPlan::try_from(
+            crate::chronicle::query::planner::parse(&format!(
+                r#"{{"operation":"count_members","note_type":"character","subject":"{subject}","field":"enemies"}}"#,
+            ))?,
+        )?;
         assert_eq!(
             db.execute_plan_for(&plan, AccessScope::Gm).await?.total,
             2,
@@ -463,8 +473,10 @@ async fn player_structured_queries_exclude_secret_notes() -> Result<()> {
         db.replace_note(&format!("{id}.md"), id, &[], &[], &metadata)
             .await?;
     }
-    let plan = crate::chronicle::query::planner::parse(
-        r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
+    let plan = crate::chronicle::query::plan::StructuredPlan::try_from(
+        crate::chronicle::query::planner::parse(
+            r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
+        )?,
     )?;
     assert_eq!(
         db.execute_plan_for(&plan, AccessScope::Player).await?.total,

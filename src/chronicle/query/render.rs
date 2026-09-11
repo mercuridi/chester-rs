@@ -1,10 +1,10 @@
-use super::plan::Plan;
+use super::plan::{Plan, StructuredPlan};
 use crate::chronicle::indexer::db::repository::facade::StructuredResult;
 
 pub const LIST_LIMIT: usize = 20;
 
-pub fn render(plan: &Plan, result: &StructuredResult, max_chars: usize) -> String {
-    if let Plan::CountMembers { subject, field, .. } = plan {
+pub fn render(plan: &StructuredPlan, result: &StructuredResult, max_chars: usize) -> String {
+    if let Plan::CountMembers { subject, field, .. } = plan.as_plan() {
         return format!(
             "{} distinct {} recorded for {}.",
             result.total,
@@ -24,7 +24,7 @@ pub fn render(plan: &Plan, result: &StructuredResult, max_chars: usize) -> Strin
         _ => format!("{note_type}s"),
     };
     let header = format!("{} canon {noun} recorded.", result.total);
-    if matches!(plan, Plan::Count { .. }) || result.total == 0 {
+    if matches!(plan.as_plan(), Plan::Count { .. }) || result.total == 0 {
         return header.chars().take(max_chars).collect();
     }
     let mut names = Vec::new();
@@ -59,10 +59,11 @@ mod tests {
     use crate::chronicle::{indexer::db::repository::facade::StructuredNote, query::plan::Filters};
     #[test]
     fn lists_report_total_and_do_not_silently_truncate_names() {
-        let plan = Plan::List {
+        let plan = StructuredPlan::try_from(Plan::List {
             note_type: "character".into(),
             filters: Filters::default(),
-        };
+        })
+        .expect("test plan should be valid");
         let result = StructuredResult {
             total: 25,
             notes: (0..20)

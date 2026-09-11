@@ -549,8 +549,10 @@ mod tests {
         db.refresh_metadata(docs[0].id, &docs[0].content_hash, &metadata)
             .await?;
         assert_eq!(indexer.index().await?.unchanged, 1);
-        let plan = crate::chronicle::query::planner::parse(
-            r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
+        let plan = crate::chronicle::query::plan::StructuredPlan::try_from(
+            crate::chronicle::query::planner::parse(
+                r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
+            )?,
         )?;
         assert_eq!(db.execute_plan_for(&plan, AccessScope::Gm).await?.total, 1);
         std::fs::write(&path, source.replace("role: npc", "role: pc"))?;

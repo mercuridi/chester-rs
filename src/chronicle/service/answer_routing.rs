@@ -1,4 +1,4 @@
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use std::time::Instant;
 use tracing::{debug, info};
 
@@ -6,7 +6,7 @@ use super::super::{
     llm::LanguageModel,
     query::{
         classifier,
-        plan::{Plan, RouteOperation},
+        plan::{RouteOperation, StructuredOperation},
         planner,
     },
 };
@@ -23,7 +23,7 @@ pub(in crate::chronicle::service) enum RetrievalMode {
 /// A validated answer path. Route selection is complete before route execution begins, keeping
 /// structured-query, retrieval, and synthesis policies from leaking into one another.
 pub(in crate::chronicle::service) enum AnswerRoute {
-    Structured(Plan),
+    Structured(crate::chronicle::query::plan::StructuredPlan),
     Retrieval(RetrievalMode),
     Synthesis,
     Clarification,
@@ -216,90 +216,48 @@ pub(in crate::chronicle::service) async fn select_answer_route(
         RouteOperation::Count | RouteOperation::List | RouteOperation::CountMembers => {}
     }
 
+    let structured_operation = StructuredOperation::try_from(operation)?;
     let generator_started = Instant::now();
-    let plan = match llm.generate_structured_plan(question, operation).await {
-        Ok(response) => match parse_structured_plan(question, &response, operation) {
-            Ok(plan) => {
-                emit_route_selection(
-                    operation,
-                    "routed",
-                    "structured_generator",
-                    generator_started,
-                );
-                Some(plan)
-            }
-            Err(error) => {
-                debug!(question_len = question.chars().count(), response_len = response.chars().count(), %error, ?operation, "Chronicle structured query response rejected");
-                emit_route_selection(
-                    operation,
-                    "validation_failure",
-                    "structured_generator",
-                    generator_started,
-                );
-                debug!(
-                    question_len = question.chars().count(),
-                    ?operation,
-                    "Retrying Chronicle structured query with correction request"
-                );
-                let repair_started = Instant::now();
-                match llm
-                    .repair_structured_plan(question, operation, &response, &error.to_string())
-                    .await
-                {
-                    Ok(retry_response) => {
-                        match parse_structured_plan(question, &retry_response, operation) {
-                            Ok(plan) => {
-                                debug!(
-                                    question_len = question.chars().count(),
-                                    "Chronicle structured query retry accepted"
-                                );
-                                emit_route_selection(
-                                    operation,
-                                    "repaired",
-                                    "structured_repair",
-                                    repair_started,
-                                );
-                                Some(plan)
-                            }
-                            Err(retry_error) => {
-                                debug!(question_len = question.chars().count(), retry_response_len = retry_response.chars().count(), %retry_error, "Chronicle structured query retry response rejected");
-                                tracing::warn!(%retry_error, "Structured query planning failed after retry; using non-exhaustive retrieval");
-                                emit_route_selection(
-                                    operation,
-                                    "repair_failure",
-                                    "structured_repair",
-                                    repair_started,
-                                );
-                                None
-                            }
-                        }
-                    }
-                    Err(retry_error) => {
-                        debug!(question_len = question.chars().count(), %retry_error, initial_error = %error, "Structured query planning retry request failed");
-                        tracing::warn!(%retry_error, initial_error = %error, "Structured query planning retry failed; using non-exhaustive retrieval");
-                        emit_route_selection(
-                            operation,
-                            "repair_failure",
-                            "structured_repair",
-                            repair_started,
-                        );
-                        None
-                    }
-                }
-            }
-        },
-        Err(error) => {
-            debug!(question_len = question.chars().count(), %error, ?operation, "Structured query generation request failed");
-            tracing::warn!(%error, ?operation, "Structured query planning failed; using non-exhaustive retrieval");
-            emit_route_selection(
-                operation,
-                "generation_failure",
-                "structured_generator",
-                generator_started,
-            );
-            None
-        }
-    };
+    let planning =
+        planner::generate_or_repair_structured_plan(llm, question, structured_operation).await;
+    let plan = planning.plan;
+    if let Some(error) = planning.generation_error.as_deref() {
+        debug!(question_len = question.chars().count(), %error, ?operation, "Chronicle structured query generation failed");
+        tracing::warn!(%error, ?operation, "Structured query planning failed; using non-exhaustive retrieval");
+        emit_route_selection(
+            operation,
+            "generation_failure",
+            "structured_generator",
+            generator_started,
+        );
+    } else if let Some(error) = planning
+        .repair_validation_error
+        .as_deref()
+        .or(planning.repair_error.as_deref())
+    {
+        debug!(question_len = question.chars().count(), %error, "Chronicle structured query repair rejected");
+        tracing::warn!(%error, "Structured query planning failed after retry; using non-exhaustive retrieval");
+        emit_route_selection(
+            operation,
+            "repair_failure",
+            "structured_repair",
+            generator_started,
+        );
+    } else if planning.repair_response.is_some() {
+        emit_route_selection(
+            operation,
+            "repaired",
+            "structured_repair",
+            generator_started,
+        );
+    } else {
+        emit_route_selection(
+            operation,
+            "routed",
+            "structured_generator",
+            generator_started,
+        );
+    }
     let Some(mut plan) = plan else {
         return Ok(RouteSelection::classified(
             AnswerRoute::Retrieval(RetrievalMode::PlanningFailure),
@@ -336,17 +294,4 @@ fn emit_route_selection(
         structured = operation.is_structured(),
         "Chronicle route selection"
     );
-}
-
-fn parse_structured_plan(
-    question: &str,
-    response: &str,
-    operation: RouteOperation,
-) -> Result<Plan> {
-    let plan = planner::parse_for_question(question, response)?;
-    ensure!(
-        plan.structured_operation() == Some(operation),
-        "Structured plan operation did not match classified route"
-    );
-    Ok(plan)
 }

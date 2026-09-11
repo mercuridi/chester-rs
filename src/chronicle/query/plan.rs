@@ -32,6 +32,27 @@ pub enum RouteOperation {
     Clarify,
 }
 
+/// Operations for which the structured query planner is valid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructuredOperation {
+    Count,
+    List,
+    CountMembers,
+}
+
+impl TryFrom<RouteOperation> for StructuredOperation {
+    type Error = anyhow::Error;
+
+    fn try_from(operation: RouteOperation) -> Result<Self, Self::Error> {
+        match operation {
+            RouteOperation::Count => Ok(Self::Count),
+            RouteOperation::List => Ok(Self::List),
+            RouteOperation::CountMembers => Ok(Self::CountMembers),
+            operation => anyhow::bail!("{operation:?} is not a structured operation"),
+        }
+    }
+}
+
 impl RouteOperation {
     /// Stable, low-cardinality value for route-selection telemetry.
     pub fn as_str(self) -> &'static str {
@@ -159,11 +180,11 @@ impl Plan {
         }
     }
 
-    pub fn structured_operation(&self) -> Option<RouteOperation> {
+    pub fn structured_operation(&self) -> Option<StructuredOperation> {
         match self {
-            Self::Count { .. } => Some(RouteOperation::Count),
-            Self::List { .. } => Some(RouteOperation::List),
-            Self::CountMembers { .. } => Some(RouteOperation::CountMembers),
+            Self::Count { .. } => Some(StructuredOperation::Count),
+            Self::List { .. } => Some(StructuredOperation::List),
+            Self::CountMembers { .. } => Some(StructuredOperation::CountMembers),
             Self::Search {} | Self::Synthesis {} | Self::Unsupported {} | Self::Clarify {} => None,
         }
     }
@@ -175,6 +196,44 @@ impl Plan {
             }
             _ => None,
         }
+    }
+}
+
+/// A validated plan that is guaranteed to be executable by the structured store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructuredPlan(Plan);
+
+impl TryFrom<Plan> for StructuredPlan {
+    type Error = anyhow::Error;
+
+    fn try_from(plan: Plan) -> Result<Self, Self::Error> {
+        plan.validate()?;
+        ensure!(plan.is_structured(), "Plan is not a structured query");
+        Ok(Self(plan))
+    }
+}
+
+impl StructuredPlan {
+    pub fn as_plan(&self) -> &Plan {
+        &self.0
+    }
+
+    pub fn as_plan_mut(&mut self) -> &mut Plan {
+        &mut self.0
+    }
+
+    pub fn into_plan(self) -> Plan {
+        self.0
+    }
+
+    pub fn operation(&self) -> StructuredOperation {
+        self.0
+            .structured_operation()
+            .expect("StructuredPlan invariant violated")
+    }
+
+    pub fn selection(&self) -> Option<(&str, &Filters)> {
+        self.0.selection()
     }
 }
 
@@ -287,5 +346,29 @@ mod tests {
                 .is_err()
         );
         Ok(())
+    }
+
+    #[test]
+    fn structured_plan_rejects_non_structured_routes() {
+        for plan in [
+            Plan::Search {},
+            Plan::Synthesis {},
+            Plan::Unsupported {},
+            Plan::Clarify {},
+        ] {
+            assert!(StructuredPlan::try_from(plan).is_err());
+        }
+    }
+
+    #[test]
+    fn structured_operation_rejects_non_structured_routes() {
+        for operation in [
+            RouteOperation::Search,
+            RouteOperation::Synthesis,
+            RouteOperation::Unsupported,
+            RouteOperation::Clarify,
+        ] {
+            assert!(StructuredOperation::try_from(operation).is_err());
+        }
     }
 }

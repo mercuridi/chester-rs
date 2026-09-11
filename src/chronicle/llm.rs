@@ -12,7 +12,7 @@ use tokenizers::Tokenizer;
 
 use super::{
     config::chronicle::LlmSettings,
-    query::plan::RouteOperation,
+    query::plan::StructuredOperation,
     runtime::{GpuRuntime, report_cuda_oom},
 };
 use tracing::{info, instrument};
@@ -26,12 +26,12 @@ pub trait LanguageModel: Send + Sync {
     async fn generate_structured_plan(
         &self,
         question: &str,
-        operation: RouteOperation,
+        operation: StructuredOperation,
     ) -> Result<String>;
     async fn repair_structured_plan(
         &self,
         question: &str,
-        operation: RouteOperation,
+        operation: StructuredOperation,
         _rejected_response: &str,
         _rejection_error: &str,
     ) -> Result<String> {
@@ -200,7 +200,7 @@ impl Llm {
     pub async fn generate_structured_plan(
         &self,
         question: &str,
-        operation: RouteOperation,
+        operation: StructuredOperation,
     ) -> Result<String> {
         let system = crate::chronicle::query::planner::structured_system_prompt(operation);
         self.generate_with_system(&system, question, 256, 0.0).await
@@ -209,7 +209,7 @@ impl Llm {
     pub async fn repair_structured_plan(
         &self,
         question: &str,
-        operation: RouteOperation,
+        operation: StructuredOperation,
         rejected_response: &str,
         rejection_error: &str,
     ) -> Result<String> {
@@ -348,14 +348,14 @@ impl LanguageModel for Llm {
     async fn generate_structured_plan(
         &self,
         question: &str,
-        operation: RouteOperation,
+        operation: StructuredOperation,
     ) -> Result<String> {
         self.generate_structured_plan(question, operation).await
     }
     async fn repair_structured_plan(
         &self,
         question: &str,
-        operation: RouteOperation,
+        operation: StructuredOperation,
         rejected_response: &str,
         rejection_error: &str,
     ) -> Result<String> {
