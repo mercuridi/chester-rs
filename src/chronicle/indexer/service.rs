@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use tokenizers::Encoding;
 
-use crate::chronicle::indexer::document::{Chunk, ChunkVisibility, Document};
+use crate::chronicle::{
+    indexer::document::{Chunk, ChunkVisibility, Document},
+    runtime::report_cuda_oom,
+};
 use tracing::{debug, info, instrument, warn};
 
 use super::{
@@ -332,6 +335,9 @@ impl Indexer {
             let batch_embeddings = self
                 .embedder
                 .embed_encodings(&encodings)
+                .inspect_err(|error| {
+                    report_cuda_oom(error, "embedding", "batch");
+                })
                 .context("Failed to embed chunk batch")?;
             if batch_embeddings.len() != batch.len() {
                 anyhow::bail!(

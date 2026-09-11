@@ -3,6 +3,45 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Result, bail};
 use tracing::{debug, info, warn};
 
+/// Returns whether an error chain reports that CUDA could not allocate GPU memory.
+///
+/// Candle and the CUDA driver wrap this condition differently depending on the
+/// operation and toolkit version, so inspect the complete chain rather than a
+/// single concrete error type.
+pub fn is_cuda_oom(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        let raw_message = cause.to_string();
+        if raw_message.contains("CUDA_ERROR_OUT_OF_MEMORY") {
+            return true;
+        }
+
+        let message = raw_message.to_ascii_lowercase();
+        let cuda_oom_marker = message.contains("cuda_error_out_of_memory");
+        cuda_oom_marker || (message.contains("cuda") && message.contains("out of memory"))
+    })
+}
+
+/// Emit the canonical, searchable OOM event before a caller recovers from or
+/// propagates a GPU error. Returns whether an event was emitted.
+pub fn report_cuda_oom(
+    error: &anyhow::Error,
+    operation: &'static str,
+    phase: &'static str,
+) -> bool {
+    if !is_cuda_oom(error) {
+        return false;
+    }
+
+    tracing::error!(
+        event = "cuda_oom",
+        operation,
+        phase,
+        error_chain = %format!("{error:#}"),
+        "CUDA out of memory"
+    );
+    true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeState {
     Idle,
@@ -174,7 +213,21 @@ impl Drop for GpuLease {
 
 #[cfg(test)]
 mod tests {
-    use super::GpuRuntime;
+    use super::{GpuRuntime, is_cuda_oom, report_cuda_oom};
+
+    #[test]
+    fn recognizes_cuda_oom_anywhere_in_an_error_chain() {
+        let error = anyhow::anyhow!("CUDA_ERROR_OUT_OF_MEMORY").context("BGE forward pass failed");
+        assert!(is_cuda_oom(&error));
+        assert!(report_cuda_oom(&error, "embedding", "batch"));
+    }
+
+    #[test]
+    fn does_not_misclassify_non_cuda_memory_errors() {
+        let error = anyhow::anyhow!("database is out of memory");
+        assert!(!is_cuda_oom(&error));
+        assert!(!report_cuda_oom(&error, "embedding", "batch"));
+    }
 
     #[test]
     fn runtime_starts_idle() -> anyhow::Result<()> {

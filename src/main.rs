@@ -22,7 +22,7 @@ use crate::{
         indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,
         recording::recorder::{notify_recording_user, scan_incomplete_manifests},
-        runtime::GpuRuntime,
+        runtime::{GpuRuntime, report_cuda_oom},
         service::Chronicle,
     },
     discord::context::{Data, Error},
@@ -60,7 +60,11 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
             error: cmd_err,
             ..
         } => {
-            tracing::warn!(command = %ctx.command().name, error = ?cmd_err, "Command failed");
+            tracing::warn!(
+                command = %ctx.command().name,
+                error_chain = %format!("{cmd_err:#}"),
+                "Command failed"
+            );
         }
         // You can match other variants here if you like...
         _ => {}
@@ -83,9 +87,16 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
         .context("Failed to open Chronicle index database")?;
     tracing::info!("Loading Chronicle embedding model");
     let device = candle_core::Device::cuda_if_available(0)
+        .map_err(anyhow::Error::from)
+        .inspect_err(|error| {
+            report_cuda_oom(error, "embedding", "device_initialization");
+        })
         .context("Failed to select a CUDA or CPU device for Chronicle embeddings")?;
-    let embedder =
-        Embedder::load(device).context("Failed to load the Chronicle embedding model")?;
+    let embedder = Embedder::load(device)
+        .inspect_err(|error| {
+            report_cuda_oom(error, "embedding", "load");
+        })
+        .context("Failed to load the Chronicle embedding model")?;
     let indexer = Indexer::new(
         config.chronicle.indexing.corpus_dir.clone(),
         chronicle_db,

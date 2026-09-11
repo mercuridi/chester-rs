@@ -10,7 +10,10 @@ use candle_transformers::{generation::LogitsProcessor, models::quantized_qwen2::
 use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::Tokenizer;
 
-use super::{config::chronicle::LlmSettings, runtime::GpuRuntime};
+use super::{
+    config::chronicle::LlmSettings,
+    runtime::{GpuRuntime, report_cuda_oom},
+};
 use tracing::{info, instrument};
 
 #[async_trait::async_trait]
@@ -86,7 +89,7 @@ impl Llm {
         let tokenizer_repo = self.tokenizer_repo.clone();
         let tokenizer_file = self.tokenizer_file.clone();
 
-        let loaded = tokio::task::spawn_blocking(move || {
+        let loaded_result = tokio::task::spawn_blocking(move || {
             LoadedLlm::load(
                 &repo,
                 &revision,
@@ -96,7 +99,14 @@ impl Llm {
             )
         })
         .await
-        .context("Native LLM loading task failed")??;
+        .context("Native LLM loading task failed")?;
+        let loaded = match loaded_result {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                report_cuda_oom(&error, "llm", "load");
+                return Err(error);
+            }
+        };
 
         let mut model = self
             .model
@@ -200,7 +210,7 @@ impl Llm {
         let context_limit = self.context_limit;
         let seed = self.seed;
 
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let mut model = model
                 .lock()
                 .map_err(|_| anyhow!("LLM model state is poisoned"))?;
@@ -275,7 +285,12 @@ impl Llm {
             Ok(response)
         })
         .await
-        .context("Native LLM inference task failed")?
+        .context("Native LLM inference task failed")?;
+
+        if let Err(error) = &result {
+            report_cuda_oom(error, "llm", "inference");
+        }
+        result
     }
 
     fn format_input_prompt(&self, prompt: &str) -> String {

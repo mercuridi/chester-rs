@@ -5,7 +5,7 @@ use anyhow::{Context, Result, anyhow};
 use serenity::model::id::UserId;
 
 use super::{audio::load_opus, whisper::transcriber::WhisperTranscriber};
-use crate::chronicle::runtime::GpuRuntime;
+use crate::chronicle::runtime::{GpuRuntime, report_cuda_oom};
 use tracing::{debug, info, instrument};
 
 fn user_id_from_recording_path(path: &std::path::Path) -> Result<UserId> {
@@ -80,7 +80,7 @@ impl TranscriptionService {
 
         info!("Starting recording transcription");
         let factory = Arc::clone(&self.factory);
-        tokio::task::spawn_blocking(move || {
+        let result = tokio::task::spawn_blocking(move || {
             let mut transcriber = factory.create()?;
             let mut output = Vec::new();
 
@@ -112,7 +112,12 @@ impl TranscriptionService {
             Ok::<_, anyhow::Error>(output)
         })
         .await
-        .context("Transcription task failed")?
+        .context("Transcription task failed")?;
+
+        if let Err(error) = &result {
+            report_cuda_oom(error, "transcription", "transcribe");
+        }
+        result
     }
 }
 
