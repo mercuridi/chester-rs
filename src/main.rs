@@ -29,7 +29,10 @@ use crate::{
         transcription::service::TranscriptionService,
     },
     discord::context::{Data, Error},
-    jester::library::sync::{SyncConfig, sync_audio_library},
+    jester::{
+        library::sync::{SyncConfig, sync_audio_library},
+        track::download::Downloader,
+    },
 };
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
@@ -234,6 +237,7 @@ fn build_framework(
     recorder: crate::chronicle::recording::recorder::RecorderManager,
     player: Arc<jester::player::service::PlayerService>,
     shutdown: Arc<shutdown::ShutdownState>,
+    downloader: Arc<Downloader>,
     poise_commands: Vec<poise::Command<Data, Error>>,
 ) -> poise::Framework<Data, Error> {
     let poise_options = poise::FrameworkOptions {
@@ -266,7 +270,7 @@ fn build_framework(
         .setup(|_ctx, _ready, _framework| {
             Box::pin(async move {
                 Ok(Data::new(
-                    pool, config, chronicle, recorder, player, shutdown,
+                    pool, config, chronicle, recorder, player, downloader, shutdown,
                 ))
             })
         })
@@ -615,9 +619,17 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
             .context("Failed to initialize Chronicle")?,
     );
 
-    let sync_stats = sync_audio_library(&pool, SyncConfig::from(&config.paths))
-        .await
-        .context("Failed to synchronize the audio library")?;
+    let downloader = Downloader::new(crate::jester::track::download::DownloadConfig::from(
+        &config.paths,
+    ));
+    let sync_stats = sync_audio_library(
+        &pool,
+        SyncConfig {
+            downloader: downloader.clone(),
+        },
+    )
+    .await
+    .context("Failed to synchronize the audio library")?;
 
     info!(
         downloaded = sync_stats.downloaded,
@@ -666,6 +678,7 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
         recorder,
         player,
         coordinator.state.clone(),
+        downloader,
         poise_commands,
     );
 

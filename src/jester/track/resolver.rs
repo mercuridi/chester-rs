@@ -1,7 +1,7 @@
 use crate::{
     jester::db::repository::lookup_track,
     jester::track::{
-        download::{DownloadConfig, download_track},
+        download::{Downloader, download_track},
         types::{TrackInfo, VideoId},
         youtube::get_youtube_id,
     },
@@ -15,11 +15,11 @@ pub fn normalise_track_input(input: &str) -> VideoId {
     VideoId::from(get_youtube_id(input).unwrap_or_else(|| input.to_string()))
 }
 
-#[instrument(skip(db_pool), fields(input = %input))]
+#[instrument(skip(db_pool, downloader), fields(input = %input))]
 pub async fn resolve_track(
     db_pool: &SqlitePool,
     input: String,
-    download_config: DownloadConfig,
+    downloader: std::sync::Arc<Downloader>,
 ) -> Result<TrackInfo> {
     let video_id = normalise_track_input(&input);
     debug!(track_id = %video_id.as_str(), "Resolving track");
@@ -30,7 +30,7 @@ pub async fn resolve_track(
     }
 
     info!(track_id = %video_id.as_str(), "Track is not in library; downloading");
-    download_track(db_pool, input, None, None, None, download_config).await
+    download_track(db_pool, input, None, None, None, downloader).await
 }
 
 #[cfg(test)]

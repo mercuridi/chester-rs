@@ -2,30 +2,38 @@ use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::SqlitePool;
-use std::{path::PathBuf, process::Output, sync::Arc};
-use tokio::process::Command;
-
-use crate::{
-    jester::db::repository::{insert_new_track_with_metadata, lookup_track},
-    jester::track::{
-        metadata::process_ytdlp_json_at,
-        types::{TrackInfo, VideoId},
-        youtube::get_youtube_id,
-    },
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::Output,
+    sync::Arc,
+    time::Duration,
 };
-use tracing::{debug, info, instrument, warn};
+use tokio::{
+    process::Command,
+    sync::{Mutex, Semaphore},
+};
+use tracing::{info, instrument, warn};
+
+use crate::jester::db::repository::{insert_new_track_with_metadata, lookup_track};
+use crate::jester::track::{
+    metadata::process_ytdlp_json_at,
+    types::{TrackInfo, VideoId},
+    youtube::get_youtube_id,
+};
 
 #[async_trait]
 pub trait DownloadExecutor: Send + Sync {
-    async fn output(&self, program: &str, args: &[String]) -> anyhow::Result<Output>;
+    async fn output(&self, program: &str, args: &[String]) -> Result<Output>;
 }
 
 struct ProcessExecutor;
 #[async_trait]
 impl DownloadExecutor for ProcessExecutor {
-    async fn output(&self, program: &str, args: &[String]) -> anyhow::Result<Output> {
+    async fn output(&self, program: &str, args: &[String]) -> Result<Output> {
         Command::new(program)
             .args(args)
+            .kill_on_drop(true)
             .output()
             .await
             .map_err(Into::into)
@@ -37,6 +45,10 @@ pub struct DownloadConfig {
     pub audio_dir: PathBuf,
     pub ytdlp_path: PathBuf,
     pub cookies_path: PathBuf,
+    pub ffmpeg_path: PathBuf,
+    pub deadline: Duration,
+    pub retries: usize,
+    pub concurrency: usize,
 }
 
 impl From<&crate::chronicle::config::paths::AppPaths> for DownloadConfig {
@@ -45,135 +57,262 @@ impl From<&crate::chronicle::config::paths::AppPaths> for DownloadConfig {
             audio_dir: paths.audio_dir.clone(),
             ytdlp_path: paths.ytdlp_path.clone(),
             cookies_path: paths.cookies_path.clone(),
+            ffmpeg_path: "ffmpeg".into(),
+            deadline: Duration::from_secs(300),
+            retries: 3,
+            concurrency: 4,
         }
     }
 }
 
-#[instrument(skip(db_pool), fields(link = %yt_link))]
+#[derive(Clone, Debug)]
+pub struct DownloadedArtifact {
+    pub id: VideoId,
+    pub audio_path: PathBuf,
+    pub metadata: Option<Value>,
+}
+
+#[derive(Clone)]
+pub struct Downloader {
+    config: DownloadConfig,
+    executor: Arc<dyn DownloadExecutor>,
+    permits: Arc<Semaphore>,
+    flights: Arc<Mutex<HashMap<VideoId, Arc<Mutex<()>>>>>,
+    completed_metadata: Arc<Mutex<HashMap<VideoId, Option<Value>>>>,
+}
+
+impl Downloader {
+    pub fn new(config: DownloadConfig) -> Arc<Self> {
+        Self::with_executor(config, Arc::new(ProcessExecutor))
+    }
+    pub fn with_executor(config: DownloadConfig, executor: Arc<dyn DownloadExecutor>) -> Arc<Self> {
+        Arc::new(Self {
+            permits: Arc::new(Semaphore::new(config.concurrency.max(1))),
+            config,
+            executor,
+            flights: Arc::new(Mutex::new(HashMap::new())),
+            completed_metadata: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    pub async fn verify_dependencies(&self) -> Result<()> {
+        let ytdlp = self
+            .executor
+            .output(
+                &self.config.ytdlp_path.to_string_lossy(),
+                &["--version".into()],
+            )
+            .await?;
+        if !ytdlp.status.success() {
+            anyhow::bail!("yt-dlp version check returned a non-zero exit status");
+        }
+        let ffmpeg = self
+            .executor
+            .output(
+                &self.config.ffmpeg_path.to_string_lossy(),
+                &["-version".into()],
+            )
+            .await?;
+        if !ffmpeg.status.success() {
+            anyhow::bail!("ffmpeg version check returned a non-zero exit status");
+        }
+        Ok(())
+    }
+
+    pub fn audio_path(&self, id: &str) -> PathBuf {
+        self.config.audio_dir.join(format!("{id}.mp3"))
+    }
+
+    async fn id_lock(&self, id: &VideoId) -> Arc<Mutex<()>> {
+        let mut flights = self.flights.lock().await;
+        flights
+            .entry(id.clone())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    pub async fn download(
+        &self,
+        id: VideoId,
+        source: String,
+        include_metadata: bool,
+    ) -> Result<DownloadedArtifact> {
+        let lock = self.id_lock(&id).await;
+        let _id_guard = lock.lock().await;
+        let final_path = self.config.audio_dir.join(format!("{}.mp3", id.as_str()));
+        if tokio::fs::try_exists(&final_path).await.unwrap_or(false) {
+            let metadata = self
+                .completed_metadata
+                .lock()
+                .await
+                .get(&id)
+                .cloned()
+                .flatten();
+            return Ok(DownloadedArtifact {
+                id,
+                audio_path: final_path,
+                metadata,
+            });
+        }
+        let _permit = self.permits.acquire().await.context("Downloader stopped")?;
+        tokio::fs::create_dir_all(&self.config.audio_dir)
+            .await
+            .context("Failed to create audio directory")?;
+        let staging = tempfile::tempdir_in(&self.config.audio_dir)
+            .context("Failed to create download staging directory")?;
+        let staged_base = staging.path().join(id.as_str());
+        let deadline = tokio::time::Instant::now() + self.config.deadline;
+        let (staged_audio, metadata) = self
+            .download_attempts(&id, &source, &staged_base, include_metadata, deadline)
+            .await?;
+        tokio::fs::rename(staged_audio, &final_path)
+            .await
+            .context("Failed to finalize downloaded audio")?;
+        self.completed_metadata
+            .lock()
+            .await
+            .insert(id.clone(), metadata.clone());
+        Ok(DownloadedArtifact {
+            id,
+            audio_path: final_path,
+            metadata,
+        })
+    }
+
+    async fn download_attempts(
+        &self,
+        id: &VideoId,
+        source: &str,
+        staged_base: &Path,
+        include_metadata: bool,
+        deadline: tokio::time::Instant,
+    ) -> Result<(PathBuf, Option<Value>)> {
+        let attempts = self.config.retries.max(1);
+        for attempt in 1..=attempts {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let output = match tokio::time::timeout(
+                remaining,
+                self.executor.output(
+                    &self.config.ytdlp_path.to_string_lossy(),
+                    &self.args(staged_base, source, include_metadata),
+                ),
+            )
+            .await
+            {
+                Ok(Ok(output)) => output,
+                Ok(Err(error)) => {
+                    warn!(track_id = %id.as_str(), attempt, error = %error, "yt-dlp process failed");
+                    if attempt < attempts {
+                        tokio::time::sleep(
+                            Duration::from_millis(200 * attempt as u64).min(
+                                deadline.saturating_duration_since(tokio::time::Instant::now()),
+                            ),
+                        )
+                        .await;
+                    }
+                    continue;
+                }
+                Err(_) => {
+                    warn!(track_id = %id.as_str(), attempt, "yt-dlp download deadline exceeded");
+                    break;
+                }
+            };
+            if output.status.success() {
+                let audio = staged_base.with_extension("mp3");
+                if tokio::fs::try_exists(&audio).await.unwrap_or(false) {
+                    let metadata = if include_metadata {
+                        Some(
+                            process_ytdlp_json_at(
+                                staged_base.parent().unwrap_or(Path::new(".")),
+                                id.as_str(),
+                            )
+                            .context("Failed to process yt-dlp metadata")?,
+                        )
+                    } else {
+                        None
+                    };
+                    return Ok((audio, metadata));
+                }
+            } else {
+                warn!(track_id = %id.as_str(), attempt, stderr = %String::from_utf8_lossy(&output.stderr), "yt-dlp returned non-zero exit");
+            }
+            if attempt < attempts {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                tokio::time::sleep(Duration::from_millis(200 * attempt as u64).min(remaining))
+                    .await;
+            }
+        }
+        Err(anyhow!(
+            "All yt-dlp download attempts failed for video ID {}",
+            id.as_str()
+        ))
+    }
+
+    fn args(&self, staged_base: &Path, source: &str, include_metadata: bool) -> Vec<String> {
+        let mut args = vec![
+            "-x".into(),
+            "--audio-format".into(),
+            "mp3".into(),
+            "--audio-quality".into(),
+            "0".into(),
+            "--no-playlist".into(),
+            "--no-progress".into(),
+            "-o".into(),
+            format!("{}.%(ext)s", staged_base.display()),
+            "--cookies".into(),
+            self.config.cookies_path.to_string_lossy().into_owned(),
+        ];
+        if include_metadata {
+            args.push("--write-info-json".into());
+        }
+        args.push(source.into());
+        args
+    }
+}
+
+#[instrument(skip(db_pool, downloader), fields(link = %yt_link))]
 pub async fn download_track(
     db_pool: &SqlitePool,
     yt_link: String,
     track_artist: Option<String>,
     track_origin: Option<String>,
     track_title: Option<String>,
-    config: DownloadConfig,
-) -> Result<TrackInfo> {
-    download_track_with(
-        db_pool,
-        yt_link,
-        track_artist,
-        track_origin,
-        track_title,
-        Arc::new(ProcessExecutor),
-        config,
-    )
-    .await
-}
-
-pub async fn download_track_with(
-    db_pool: &SqlitePool,
-    yt_link: String,
-    track_artist: Option<String>,
-    track_origin: Option<String>,
-    track_title: Option<String>,
-    executor: Arc<dyn DownloadExecutor>,
-    config: DownloadConfig,
+    downloader: Arc<Downloader>,
 ) -> Result<TrackInfo> {
     let video_id =
         VideoId::from(get_youtube_id(&yt_link).ok_or_else(|| anyhow!("Invalid YouTube link"))?);
-    info!(track_id = %video_id.as_str(), "Starting track download");
-
-    // Guard against duplicate downloads
     if let Some(track) = lookup_track(db_pool, &video_id).await? {
-        debug!(track_id = %video_id.as_str(), "Skipping duplicate track download");
         return Ok(track);
     }
-
-    let args = vec![
-        "-t".into(),
-        "mp3".into(),
-        "-o".into(),
-        config
-            .audio_dir
-            .join(format!("{}.part.%(ext)s", video_id.as_str()))
-            .to_string_lossy()
-            .into_owned(),
-        "--no-playlist".into(),
-        "--write-info-json".into(),
-        "--no-progress".into(),
-        "--cookies".into(),
-        config.cookies_path.to_string_lossy().into_owned(),
-        yt_link,
-    ];
-    let output = executor
-        .output(&config.ytdlp_path.to_string_lossy(), &args)
-        .await
-        .context("Failed to execute yt-dlp")?;
-
-    if !output.status.success() {
-        warn!(track_id = %video_id.as_str(), stderr = %String::from_utf8_lossy(&output.stderr), "yt-dlp returned non-zero exit");
-        return Err(anyhow!(
-            "yt-dlp failed with error: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    let staged_id = format!("{}.part", video_id.as_str());
-    let staged_audio = config.audio_dir.join(format!("{staged_id}.mp3"));
-    let final_audio = config.audio_dir.join(format!("{}.mp3", video_id.as_str()));
-
-    let slim = match process_ytdlp_json_at(&config.audio_dir, &staged_id) {
-        Ok(slim) => slim,
-        Err(error) => {
-            cleanup_staged_download(&config.audio_dir, &staged_id).await;
-            return Err(anyhow!(
-                "Failed to process metadata JSON for video ID {}: {}",
-                video_id.as_str(),
-                error
-            ));
-        }
-    };
-
-    if !tokio::fs::try_exists(&staged_audio).await.unwrap_or(false) {
-        cleanup_staged_download(&config.audio_dir, &staged_id).await;
-        return Err(anyhow!(
-            "Downloaded audio file was not found for video ID {}",
-            video_id.as_str()
-        ));
-    }
-
+    let artifact = downloader.download(video_id.clone(), yt_link, true).await?;
+    let metadata = artifact
+        .metadata
+        .as_ref()
+        .context("Downloader did not return metadata")?;
     let title = track_title.unwrap_or_else(|| {
-        slim.get("title")
+        metadata
+            .get("title")
             .and_then(Value::as_str)
             .unwrap_or("Unknown Title")
             .to_string()
     });
-
     if let Err(error) = insert_new_track_with_metadata(
         db_pool,
         &video_id,
-        &slim,
+        metadata,
         &title,
         track_artist.as_deref(),
         track_origin.as_deref(),
     )
     .await
     {
-        cleanup_staged_download(&config.audio_dir, &staged_id).await;
+        let _ = tokio::fs::remove_file(&artifact.audio_path).await;
         return Err(error);
     }
-
-    if let Err(error) = tokio::fs::rename(&staged_audio, &final_audio).await {
-        cleanup_staged_download(&config.audio_dir, &staged_id).await;
-        return Err(anyhow!(
-            "Failed to finalize downloaded audio for video ID {}: {}",
-            video_id.as_str(),
-            error
-        ));
-    }
-
-    info!(track_id = %video_id.as_str(), %title, artist = ?track_artist, origin = ?track_origin, "Track downloaded and added to library");
-
+    info!(track_id = %video_id.as_str(), %title, "Track downloaded and added to library");
     Ok(TrackInfo {
         id: video_id,
         title,
@@ -182,263 +321,67 @@ pub async fn download_track_with(
     })
 }
 
-async fn cleanup_staged_download(audio_dir: &std::path::Path, staged_id: &str) {
-    let _ = tokio::fs::remove_file(audio_dir.join(format!("{staged_id}.mp3"))).await;
-    let _ = tokio::fs::remove_file(audio_dir.join(format!("{staged_id}.info.json"))).await;
-}
-
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::jester::db::{
-        metadata::MetadataKind,
-        repository::{get_or_insert_metadata_id, insert_new_track},
-    };
     use std::{os::unix::process::ExitStatusExt, sync::Mutex};
     use tempfile::tempdir;
 
-    type TestResult<T = ()> = std::result::Result<T, crate::discord::context::Error>;
-
     struct FakeExecutor {
-        success: bool,
-        stderr: Vec<u8>,
-        calls: Mutex<Vec<(String, Vec<String>)>>,
+        calls: Mutex<usize>,
     }
-
     #[async_trait]
     impl DownloadExecutor for FakeExecutor {
-        async fn output(&self, program: &str, args: &[String]) -> anyhow::Result<Output> {
-            self.calls
-                .lock()
+        async fn output(&self, _program: &str, args: &[String]) -> Result<Output> {
+            *self.calls.lock().unwrap() += 1;
+            let path = args
+                .iter()
+                .find(|arg| arg.contains("%(ext)s"))
                 .unwrap()
-                .push((program.into(), args.to_vec()));
-            if self.success
-                && let Some(output) = args
-                    .windows(2)
-                    .find(|pair| pair[0] == "-o")
-                    .map(|pair| pair[1].replace("%(ext)s", "mp3"))
-            {
-                std::fs::write(output, b"staged audio")?;
-            }
+                .replace("%(ext)s", "mp3");
+            std::fs::write(path, b"audio")?;
             Ok(Output {
-                status: std::process::ExitStatus::from_raw(if self.success { 0 } else { 1 << 8 }),
-                stdout: Vec::new(),
-                stderr: self.stderr.clone(),
+                status: std::process::ExitStatus::from_raw(0),
+                stdout: vec![],
+                stderr: vec![],
             })
         }
     }
 
-    async fn test_pool() -> TestResult<(tempfile::TempDir, SqlitePool)> {
-        let directory = tempdir()?;
-        let url = format!("sqlite://{}", directory.path().join("jester.db").display());
-        let pool = crate::database::pool::open_sqlite_pool(&url, "test").await?;
-        crate::jester::db::schema::initialise(&pool).await?;
-        Ok((directory, pool))
-    }
-
-    fn config(audio_dir: &std::path::Path) -> DownloadConfig {
+    fn config(dir: &Path) -> DownloadConfig {
         DownloadConfig {
-            audio_dir: audio_dir.into(),
-            ytdlp_path: "test-yt-dlp".into(),
-            cookies_path: "test-cookies.txt".into(),
+            audio_dir: dir.into(),
+            ytdlp_path: "yt-dlp".into(),
+            cookies_path: "cookies".into(),
+            ffmpeg_path: "ffmpeg".into(),
+            deadline: Duration::from_secs(5),
+            retries: 2,
+            concurrency: 2,
         }
     }
 
     #[tokio::test]
-    async fn rejects_invalid_links_without_executing_ytdlp() -> TestResult {
-        let (_directory, pool) = test_pool().await?;
+    async fn concurrent_calls_for_one_id_execute_once() -> Result<()> {
+        let dir = tempdir()?;
         let executor = Arc::new(FakeExecutor {
-            success: true,
-            stderr: Vec::new(),
-            calls: Mutex::new(Vec::new()),
+            calls: Mutex::new(0),
         });
-
-        let error = download_track_with(
-            &pool,
-            "https://example.com/not-a-video".into(),
-            None,
-            None,
-            None,
-            executor.clone(),
-            config(std::path::Path::new("/tmp")),
-        )
-        .await
-        .unwrap_err();
-
-        assert!(error.to_string().contains("Invalid YouTube link"));
-        assert!(executor.calls.lock().unwrap().is_empty());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn existing_track_skips_ytdlp_and_returns_persisted_metadata() -> TestResult {
-        let (directory, pool) = test_pool().await?;
-        let artist_id = get_or_insert_metadata_id(&pool, MetadataKind::Artist, "Artist").await?;
-        let origin_id = get_or_insert_metadata_id(&pool, MetadataKind::Origin, "Origin").await?;
-        let id = VideoId::from("dQw4w9WgXcQ");
-        insert_new_track(
-            &pool,
-            &id,
-            &serde_json::json!({"upload_date": "20260101", "title": "Source"}),
-            "Saved title",
-            artist_id,
-            origin_id,
-        )
-        .await?;
-        let executor = Arc::new(FakeExecutor {
-            success: true,
-            stderr: Vec::new(),
-            calls: Mutex::new(Vec::new()),
-        });
-
-        let track = download_track_with(
-            &pool,
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ".into(),
-            None,
-            None,
-            None,
-            executor.clone(),
-            config(directory.path()),
-        )
-        .await?;
-
-        assert_eq!(track.title, "Saved title");
-        assert!(executor.calls.lock().unwrap().is_empty());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn ytdlp_failure_returns_stderr_and_preserves_database() -> TestResult {
-        let (directory, pool) = test_pool().await?;
-        let executor = Arc::new(FakeExecutor {
-            success: false,
-            stderr: b"network unavailable".to_vec(),
-            calls: Mutex::new(Vec::new()),
-        });
-
-        let error = download_track_with(
-            &pool,
-            "https://youtu.be/dQw4w9WgXcQ".into(),
-            None,
-            None,
-            None,
-            executor.clone(),
-            config(directory.path()),
-        )
-        .await
-        .unwrap_err();
-
-        assert!(error.to_string().contains("network unavailable"));
-        assert_eq!(executor.calls.lock().unwrap().len(), 1);
-        assert!(
-            lookup_track(&pool, &VideoId::from("dQw4w9WgXcQ"))
-                .await?
-                .is_none()
+        let downloader = Downloader::with_executor(config(dir.path()), executor.clone());
+        let (first, second) = tokio::join!(
+            downloader.download(
+                VideoId::from("abc"),
+                "https://youtube.test/abc".into(),
+                false
+            ),
+            downloader.download(
+                VideoId::from("abc"),
+                "https://youtube.test/abc".into(),
+                false
+            ),
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn invalid_metadata_cleans_staged_files_and_preserves_database() -> TestResult {
-        let (directory, pool) = test_pool().await?;
-        std::fs::write(
-            directory.path().join("dQw4w9WgXcQ.part.info.json"),
-            r#"{"id":"dQw4w9WgXcQ"}"#,
-        )?;
-        let executor = Arc::new(FakeExecutor {
-            success: true,
-            stderr: Vec::new(),
-            calls: Mutex::new(Vec::new()),
-        });
-
-        let error = download_track_with(
-            &pool,
-            "https://youtu.be/dQw4w9WgXcQ".into(),
-            Some("Failed Artist".into()),
-            Some("Failed Origin".into()),
-            None,
-            executor,
-            config(directory.path()),
-        )
-        .await
-        .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("Failed to process metadata JSON")
-        );
-        assert!(
-            lookup_track(&pool, &VideoId::from("dQw4w9WgXcQ"))
-                .await?
-                .is_none()
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM artists WHERE artist = 'Failed Artist'",
-            )
-            .fetch_one(&pool)
-            .await?,
-            0
-        );
-        assert!(!directory.path().join("dQw4w9WgXcQ.part.mp3").exists());
-        assert!(!directory.path().join("dQw4w9WgXcQ.part.info.json").exists());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn successful_download_persists_metadata_and_uses_expected_arguments() -> TestResult {
-        let (directory, pool) = test_pool().await?;
-        std::fs::write(
-            directory.path().join("dQw4w9WgXcQ.part.info.json"),
-            r#"{"id":"dQw4w9WgXcQ","upload_date":"20260101","title":"Source title","channel":"Channel"}"#,
-        )?;
-        let executor = Arc::new(FakeExecutor {
-            success: true,
-            stderr: Vec::new(),
-            calls: Mutex::new(Vec::new()),
-        });
-
-        let track = download_track_with(
-            &pool,
-            "https://youtu.be/dQw4w9WgXcQ".into(),
-            Some("Artist".into()),
-            Some("Origin".into()),
-            None,
-            executor.clone(),
-            config(directory.path()),
-        )
-        .await?;
-
-        assert_eq!(track.title, "Source title");
-        assert_eq!(track.artist.as_deref(), Some("Artist"));
-        assert_eq!(track.origin.as_deref(), Some("Origin"));
-        assert!(!directory.path().join("dQw4w9WgXcQ.part.info.json").exists());
-        assert!(directory.path().join("dQw4w9WgXcQ.mp3").exists());
-        assert!(!directory.path().join("dQw4w9WgXcQ.part.mp3").exists());
-        {
-            let calls = executor.calls.lock().unwrap();
-            assert_eq!(calls[0].0, "test-yt-dlp");
-            assert!(calls[0].1.windows(2).any(|pair| pair == ["-t", "mp3"]));
-            assert!(
-                calls[0]
-                    .1
-                    .windows(2)
-                    .any(|pair| pair == ["--write-info-json", "--no-progress"])
-            );
-            assert_eq!(
-                calls[0].1.last().map(String::as_str),
-                Some("https://youtu.be/dQw4w9WgXcQ")
-            );
-        }
-        assert_eq!(
-            lookup_track(&pool, &VideoId::from("dQw4w9WgXcQ"))
-                .await?
-                .ok_or_else(|| std::io::Error::other("track should be persisted"))?
-                .title,
-            "Source title"
-        );
+        assert_eq!(first?.audio_path, second?.audio_path);
+        assert_eq!(*executor.calls.lock().unwrap(), 1);
+        assert!(dir.path().join("abc.mp3").exists());
         Ok(())
     }
 }

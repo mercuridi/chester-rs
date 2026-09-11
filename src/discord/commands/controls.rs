@@ -60,12 +60,8 @@ pub async fn play(
     track: String,
 ) -> Result<(), Error> {
     let (guild_id, _, call) = ensure_vc(ctx).await?;
-    let track_info = resolve_track(
-        &ctx.data().db_pool,
-        track,
-        ctx.data().download_config.clone(),
-    )
-    .await?;
+    let track_info =
+        resolve_track(&ctx.data().db_pool, track, ctx.data().downloader.clone()).await?;
     ctx.data()
         .player
         .play_now(guild_id, call, track_info.clone())
@@ -173,12 +169,8 @@ pub async fn queue_add(
     #[autocomplete = "autocomplete_track"] track: String,
 ) -> Result<(), Error> {
     let (guild_id, _, call) = ensure_vc(ctx).await?;
-    let track_info = resolve_track(
-        &ctx.data().db_pool,
-        track,
-        ctx.data().download_config.clone(),
-    )
-    .await?;
+    let track_info =
+        resolve_track(&ctx.data().db_pool, track, ctx.data().downloader.clone()).await?;
     let started = ctx
         .data()
         .player
@@ -199,12 +191,8 @@ pub async fn queue_next(
     #[autocomplete = "autocomplete_track"] track: String,
 ) -> Result<(), Error> {
     let (guild_id, _, call) = ensure_vc(ctx).await?;
-    let track_info = resolve_track(
-        &ctx.data().db_pool,
-        track,
-        ctx.data().download_config.clone(),
-    )
-    .await?;
+    let track_info =
+        resolve_track(&ctx.data().db_pool, track, ctx.data().downloader.clone()).await?;
     let started = ctx
         .data()
         .player

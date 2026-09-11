@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 
 use crate::{
     chronicle::{config::app::Config, recording::recorder::RecorderManager, service::Chronicle},
-    jester::{player::service::PlayerService, track::download::DownloadConfig},
+    jester::{player::service::PlayerService, track::download::Downloader},
     shutdown::ShutdownState,
 };
 
@@ -13,7 +13,7 @@ pub struct Data {
     pub db_pool: SqlitePool,
     pub player: Arc<PlayerService>,
     pub recorder: RecorderManager,
-    pub download_config: DownloadConfig,
+    pub downloader: Arc<Downloader>,
     pub config: Config,
     pub chronicle: Arc<Chronicle>,
     pub shutdown: Arc<ShutdownState>,
@@ -26,15 +26,14 @@ impl Data {
         chronicle: Arc<Chronicle>,
         recorder: RecorderManager,
         player: Arc<PlayerService>,
+        downloader: Arc<Downloader>,
         shutdown: Arc<ShutdownState>,
     ) -> Self {
-        let paths = config.paths.clone();
-        let download_config = DownloadConfig::from(&paths);
         Self {
             db_pool,
             player,
             recorder,
-            download_config,
+            downloader,
             config,
             chronicle,
             shutdown,

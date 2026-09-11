@@ -29,7 +29,7 @@ pub async fn download_direct(
         track_artist,
         track_origin,
         track_title,
-        ctx.data().download_config.clone(),
+        ctx.data().downloader.clone(),
     )
     .await?;
 
