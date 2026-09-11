@@ -4,110 +4,62 @@
 jester = "sqlite://data/jester.sqlite3"
 chronicle = "sqlite://data/chronicle.sqlite3"
 
-[chronicle]
+[chronicle.indexing]
 corpus_dir = "corpus"
-
-# Note IDs to exclude completely from ingestion, embedding, indexing, and retrieval.
-# This is useful for index/central notes that mostly contain links.
 excluded_note_ids = []
+max_chunk_tokens = 480
+chunk_overlap_tokens = 0
 
 # The first `/chronicle start` downloads these files into the Hugging Face cache.
-llm_repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
-llm_revision = "main"
-llm_model_file = "qwen2.5-7b-instruct-q3_k_m.gguf"
-llm_tokenizer_repo = "Qwen/Qwen2.5-7B-Instruct"
-llm_tokenizer_file = "tokenizer.json"
+[chronicle.llm.model]
+repo = "Qwen/Qwen2.5-7B-Instruct-GGUF"
+revision = "main"
+file = "qwen2.5-7b-instruct-q3_k_m.gguf"
 
-# Must be between 1 and 32768.
-llm_max_tokens = 512
+[chronicle.llm.tokenizer]
+repo = "Qwen/Qwen2.5-7B-Instruct"
+file = "tokenizer.json"
 
-# Total model context budget, including prompt and generated tokens.
-# Must be greater than llm_max_tokens and no greater than 32768. Larger
-# contexts need substantially more VRAM; 8192 is a conservative default for
-# the bundled 7B model. Increase only after measuring available GPU memory.
-llm_context_limit = 8192
-
-# Must be finite and between 0.0 and 2.0.
-llm_temperature = 0.2
-
-# Seed used by the native Candle sampler.
-llm_seed = 42
-
-# Instructions applied in the system turn before each Chronicle question.
-llm_system_prompt = """\
+[chronicle.llm.generation]
+max_tokens = 512
+context_limit = 8192
+temperature = 0.2
+seed = 42
+system_prompt = """\
     You are Chronicle, a concise and thoughtful assistant.\
     Answer only from the supplied Chronicle context.\
     If the context is insufficient, say so plainly.\
     Do not invent facts.\
 """
+max_reply_length = 1900
 
-# Maximum number of Unicode characters in a generated Discord reply.
-llm_max_reply_length = 1900
-
-# Must be between 1 and 100. Larger values increase prompt size and latency.
-retrieval_limit = 5
-
-# Number of vector candidates to inspect before applying the distance threshold.
-# Must be at least retrieval_limit and no greater than 1000.
-retrieval_candidate_limit = 15
-
-# Maximum vector distance accepted as relevant context. Lower values are stricter.
-retrieval_distance_threshold = 0.8
-
-# Jaccard overlap threshold for suppressing near-duplicate word-pair shingles.
-# Must be between 0.0 and 1.0; higher values require more overlap.
-retrieval_near_duplicate_threshold = 0.85
-
-# Maximum accepted chunks from any one document.
-retrieval_max_chunks_per_document = 2
-
-# Low-weight PageRank prior applied only after vector/lexical candidate retrieval.
-# Must be finite and between 0.0 and 1.0; 0.0 disables the prior.
+[chronicle.retrieval]
+limit = 5
+candidate_limit = 15
+distance_threshold = 0.8
+near_duplicate_threshold = 0.85
+max_chunks_per_document = 2
 pagerank_weight = 0.15
 
-# Bounded synthesis retrieves a larger, diverse evidence set once, then reduces
-# it in context-safe batches. These settings do not affect ordinary retrieval.
-# Must be between 1 and 100.
-synthesis_retrieval_limit = 12
-
-# Must be at least synthesis_retrieval_limit and no greater than 1000.
-synthesis_candidate_limit = 40
-
-# Maximum accepted chunks from any one document during synthesis.
-synthesis_max_chunks_per_document = 3
-
-# Maximum input tokens for one synthesis map/reduce batch. Must fit within the
-# available LLM prompt budget (llm_context_limit - llm_max_tokens).
-synthesis_batch_token_budget = 1800
-
-# Maximum initial map batches. Must be between 1 and 100.
-synthesis_max_batches = 6
-
-# Maximum number of BGE embedding tokens per chunk, including special tokens.
-# Must be between 3 and 512.
-max_chunk_tokens = 480
-# Target number of content tokens shared by adjacent chunks. Special model
-# tokens are excluded. Section boundaries may reduce the effective overlap.
-# Zero disables overlap.
-# A 10–20% experiment for this budget would be 48–96 tokens.
-chunk_overlap_tokens = 0
+[chronicle.synthesis]
+retrieval_limit = 12
+candidate_limit = 40
+max_chunks_per_document = 3
+batch_token_budget = 1800
+max_batches = 6
 
 # Discord users allowed to retrieve GM-only notes and `[!secret]` callouts.
-# Use Discord user IDs, not usernames. Everyone else receives player-safe context.
+[chronicle.access]
 gm_user_ids = []
 
 # Optional: map Discord users to names used in transcripts.
-# Replace the example IDs with real Discord user IDs.
 #
-# [alias_groups.main]
+# [discord.alias_groups.main]
 # name = "Main names"
 #
-# [alias_groups.main.aliases]
+# [discord.alias_groups.main.aliases]
 # "123456789012345678" = "Alice"
 # "234567890123456789" = "Bob"
 #
-# Optional: make an alias group available to a guild.
-# Replace the example ID with a real Discord server ID.
-#
-# [guilds."345678901234567890"]
+# [discord.guilds."345678901234567890"]
 # alias_groups = ["main"]

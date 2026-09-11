@@ -64,14 +64,14 @@ impl Llm {
             model_file: config.model.file.clone(),
             tokenizer_repo: config.tokenizer.repo.clone(),
             tokenizer_file: config.tokenizer.file.clone(),
-            max_tokens: config.max_tokens as usize,
-            context_limit: config.context_limit,
-            temperature: f64::from(config.temperature),
-            seed: config.seed,
+            max_tokens: config.generation.max_tokens as usize,
+            context_limit: config.generation.context_limit,
+            temperature: f64::from(config.generation.temperature),
+            seed: config.generation.seed,
             system_prompt: format!(
                 "{}\n\nKeep every answer at or below {} characters.",
-                config.system_prompt.trim_end(),
-                config.max_reply_length
+                config.generation.system_prompt.trim_end(),
+                config.generation.max_reply_length
             ),
         }
     }
@@ -387,28 +387,29 @@ fn plan_repair_guidance(rejection_error: &str) -> &'static str {
 mod tests {
     use super::Llm;
     use crate::chronicle::{
-        config::chronicle::{LlmSettings, RepositoryFile},
+        config::chronicle::{GenerationSettings, LlmSettings, ModelSource, TokenizerSource},
         runtime::GpuRuntime,
     };
 
     fn config() -> LlmSettings {
         LlmSettings {
-            model: RepositoryFile {
+            model: ModelSource {
                 repo: "repo".into(),
                 revision: "revision".into(),
                 file: "model".into(),
             },
-            tokenizer: RepositoryFile {
+            tokenizer: TokenizerSource {
                 repo: "tokenizer-repo".into(),
-                revision: String::new(),
                 file: "tokenizer".into(),
             },
-            max_tokens: 256,
-            context_limit: 1024,
-            temperature: 0.5,
-            seed: 7,
-            system_prompt: "System prompt\n\n".into(),
-            max_reply_length: 100,
+            generation: GenerationSettings {
+                max_tokens: 256,
+                context_limit: 1024,
+                temperature: 0.5,
+                seed: 7,
+                system_prompt: "System prompt\n\n".into(),
+                max_reply_length: 100,
+            },
         }
     }
 

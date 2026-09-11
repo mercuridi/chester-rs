@@ -1233,7 +1233,7 @@ pub async fn run(suite_path: &Path, requested_report: Option<&Path>) -> Result<(
         config.chronicle.retrieval.max_chunks_per_document,
         config.chronicle.retrieval.pagerank_weight,
         config.chronicle.synthesis,
-        config.chronicle.llm.max_reply_length,
+        config.chronicle.llm.generation.max_reply_length,
     );
     chronicle.start_llm().await?;
     let judge = SynthesisJudge::new(std::sync::Arc::new(llm.clone()));

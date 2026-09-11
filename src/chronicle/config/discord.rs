@@ -1,9 +1,32 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 use serenity::all::{GuildId, UserId};
 
-use super::raw::{RawAliasGroup, RawGuildConfig};
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FileDiscordConfig {
+    #[serde(default)]
+    alias_groups: HashMap<String, FileAliasGroup>,
+    #[serde(default)]
+    guilds: HashMap<String, FileGuildConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileAliasGroup {
+    name: String,
+    #[serde(default)]
+    aliases: HashMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileGuildConfig {
+    #[serde(default)]
+    alias_groups: Vec<String>,
+}
 
 pub type AliasGroupId = String;
 
@@ -22,21 +45,15 @@ pub struct GuildConfig {
 pub struct DiscordConfig {
     alias_groups: HashMap<AliasGroupId, AliasGroup>,
     guilds: HashMap<GuildId, GuildConfig>,
-    chronicle_gm_user_ids: HashSet<UserId>,
 }
 
 impl DiscordConfig {
-    pub(crate) fn from_raw(
-        raw_groups: HashMap<String, RawAliasGroup>,
-        raw_guilds: HashMap<String, RawGuildConfig>,
-        raw_gm_user_ids: Vec<String>,
-    ) -> Result<Self> {
-        let alias_groups = build_alias_groups(raw_groups)?;
-        let guilds = build_guilds(raw_guilds, &alias_groups)?;
+    pub(crate) fn from_file(file: FileDiscordConfig) -> Result<Self> {
+        let alias_groups = build_alias_groups(file.alias_groups)?;
+        let guilds = build_guilds(file.guilds, &alias_groups)?;
         Ok(Self {
             alias_groups,
             guilds,
-            chronicle_gm_user_ids: parse_gm_user_ids(raw_gm_user_ids)?,
         })
     }
 
@@ -89,13 +106,10 @@ impl DiscordConfig {
             .get(&guild_id)
             .is_some_and(|guild| guild.alias_groups.iter().any(|id| id == group_id))
     }
-    pub fn is_chronicle_gm(&self, user_id: UserId) -> bool {
-        self.chronicle_gm_user_ids.contains(&user_id)
-    }
 }
 
 fn build_alias_groups(
-    raw_groups: HashMap<String, RawAliasGroup>,
+    raw_groups: HashMap<String, FileAliasGroup>,
 ) -> Result<HashMap<String, AliasGroup>> {
     raw_groups.into_iter().map(|(group_id, raw_group)| {
         if group_id.trim().is_empty() { bail!("Alias group ID cannot be empty"); }
@@ -110,7 +124,7 @@ fn build_alias_groups(
 }
 
 fn build_guilds(
-    raw_guilds: HashMap<String, RawGuildConfig>,
+    raw_guilds: HashMap<String, FileGuildConfig>,
     alias_groups: &HashMap<String, AliasGroup>,
 ) -> Result<HashMap<GuildId, GuildConfig>> {
     raw_guilds
@@ -131,18 +145,6 @@ fn build_guilds(
             ))
         })
         .collect()
-}
-
-fn parse_gm_user_ids(raw_user_ids: Vec<String>) -> Result<HashSet<UserId>> {
-    let mut user_ids = HashSet::new();
-    for raw_user_id in raw_user_ids {
-        let user_id = parse_user_id(&raw_user_id)
-            .with_context(|| format!("Invalid Chronicle GM user ID `{raw_user_id}`"))?;
-        if !user_ids.insert(user_id) {
-            bail!("Duplicate Chronicle GM user ID `{raw_user_id}`");
-        }
-    }
-    Ok(user_ids)
 }
 
 fn parse_user_id(value: &str) -> Result<UserId> {

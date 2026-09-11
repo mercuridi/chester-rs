@@ -7,53 +7,118 @@ use tempfile::tempdir;
 use super::{
     app::Config,
     paths::{resolve_path, resolve_sqlite_url},
-    raw::RawConfig,
 };
 
-const CHRONICLE: &str = r#"
-llm_repo = "owner/model"
-llm_revision = "main"
-llm_model_file = "model.gguf"
-llm_tokenizer_repo = "owner/tokenizer"
-llm_tokenizer_file = "tokenizer.json"
-corpus_dir = "corpus"
-llm_max_tokens = 512
-llm_temperature = 0.7
-llm_seed = 42
-llm_system_prompt = "Answer from the corpus."
-llm_max_reply_length = 1900
-retrieval_limit = 5
-max_chunk_tokens = 480
-chunk_overlap_tokens = 48
-"#;
-
-fn full_config() -> String {
-    format!(
-        r#"
-[chronicle]
-{CHRONICLE}
-
+const CONFIG: &str = r#"
 [database]
 jester = "sqlite://data/jester.sqlite3"
 chronicle = "sqlite://data/chronicle.sqlite3?mode=rwc"
 
-[alias_groups.party]
+[chronicle.indexing]
+corpus_dir = "corpus"
+max_chunk_tokens = 480
+chunk_overlap_tokens = 48
+
+[chronicle.llm.model]
+repo = "owner/model"
+revision = "main"
+file = "model.gguf"
+
+[chronicle.llm.tokenizer]
+repo = "owner/tokenizer"
+file = "tokenizer.json"
+
+[chronicle.llm.generation]
+max_tokens = 512
+context_limit = 4096
+temperature = 0.7
+seed = 42
+system_prompt = "Answer from the corpus."
+max_reply_length = 1900
+
+[chronicle.retrieval]
+limit = 5
+
+[discord.alias_groups.party]
 name = "Party"
 
-[alias_groups.party.aliases]
+[discord.alias_groups.party.aliases]
 "10" = "Alice"
 "20" = "Bob"
 
-[guilds."30"]
+[discord.guilds."30"]
 alias_groups = ["party"]
-"#
-    )
+"#;
+
+fn load(contents: &str) -> Result<Config> {
+    let directory = tempdir()?;
+    let config_dir = directory.path().join(".chronicle");
+    fs::create_dir(&config_dir)?;
+    let path = config_dir.join("config.toml");
+    fs::write(&path, contents)?;
+    Config::load(&path)
 }
 
 #[test]
-fn example_uses_the_strict_current_schema() -> Result<()> {
-    let _: RawConfig = toml::from_str(include_str!("../../../chronicle.config.example.toml"))?;
+fn checked_in_example_uses_the_only_supported_schema() -> Result<()> {
+    let directory = tempdir()?;
+    let config_dir = directory.path().join(".chronicle");
+    fs::create_dir(&config_dir)?;
+    let path = config_dir.join("config.toml");
+    fs::write(
+        &path,
+        include_str!("../../../chronicle.config.example.toml"),
+    )?;
+    Config::load(path)?;
     Ok(())
+}
+
+#[test]
+fn loads_nested_settings_with_defaults_and_domain_ownership() -> Result<()> {
+    let config = load(&CONFIG.replace(
+        "[chronicle.retrieval]",
+        "[chronicle.access]\ngm_user_ids = [\"99\"]\n\n[chronicle.retrieval]",
+    ))?;
+    assert_eq!(config.chronicle.llm.model.repo, "owner/model");
+    assert_eq!(config.chronicle.llm.generation.context_limit, 4096);
+    assert_eq!(config.chronicle.retrieval.candidate_limit, 15);
+    assert_eq!(config.chronicle.synthesis.max_batches, 6);
+    assert!(config.chronicle.access.is_gm(UserId::new(99)));
+    assert!(config.guild_has_alias_group(GuildId::new(30), "party"));
+    assert!(
+        config
+            .validate_participants("party", [&UserId::new(10), &UserId::new(20)])
+            .is_ok()
+    );
+    Ok(())
+}
+
+#[test]
+fn applies_nested_setting_defaults() -> Result<()> {
+    let config = load(&CONFIG.replace("context_limit = 4096\n", ""))?;
+    assert_eq!(config.chronicle.llm.generation.context_limit, 8_192);
+    assert_eq!(config.chronicle.retrieval.candidate_limit, 15);
+    assert_eq!(config.chronicle.synthesis.batch_token_budget, 1_800);
+    Ok(())
+}
+
+#[test]
+fn rejects_legacy_flat_chronicle_and_top_level_discord_keys() {
+    let legacy_chronicle = CONFIG.replace(
+        "[chronicle.indexing]",
+        "[chronicle]\nllm_repo = \"owner/model\"",
+    );
+    assert!(load(&legacy_chronicle).is_err());
+    let legacy_discord = CONFIG.replace("[discord.alias_groups.party]", "[alias_groups.party]");
+    assert!(load(&legacy_discord).is_err());
+    let legacy_guilds = CONFIG.replace("[discord.guilds.\"30\"]", "[guilds.\"30\"]");
+    assert!(load(&legacy_guilds).is_err());
+}
+
+#[test]
+fn rejects_cross_setting_synthesis_budget_overflow() {
+    let invalid = format!("{CONFIG}\n[chronicle.synthesis]\nbatch_token_budget = 3585\n");
+    assert!(load(&invalid).is_err());
 }
 
 #[test]
@@ -72,57 +137,4 @@ fn resolves_project_relative_paths_and_sqlite_urls() {
         resolve_sqlite_url(root, "sqlite://:memory:"),
         "sqlite://:memory:"
     );
-}
-
-#[test]
-fn loads_nested_runtime_settings_and_discord_policy() -> Result<()> {
-    let directory = tempdir()?;
-    let config_dir = directory.path().join(".chronicle");
-    fs::create_dir(&config_dir)?;
-    let path = config_dir.join("config.toml");
-    fs::write(
-        &path,
-        full_config().replace(
-            "chunk_overlap_tokens = 48",
-            "chunk_overlap_tokens = 48\ngm_user_ids = [\"99\"]",
-        ),
-    )?;
-
-    let config = Config::load(&path)?;
-    assert_eq!(config.chronicle.llm.model.repo, "owner/model");
-    assert_eq!(
-        config.chronicle.indexing.corpus_dir,
-        directory.path().join("corpus")
-    );
-    assert_eq!(config.chronicle.retrieval.candidate_limit, 15);
-    assert!(config.guild_has_alias_group(GuildId::new(30), "party"));
-    assert!(
-        config
-            .validate_participants("party", [&UserId::new(10), &UserId::new(20)])
-            .is_ok()
-    );
-    assert!(config.is_chronicle_gm(UserId::new(99)));
-    Ok(())
-}
-
-#[test]
-fn rejects_unknown_alias_group_and_duplicate_gm_ids() -> Result<()> {
-    let unknown_group =
-        full_config().replace("alias_groups = [\"party\"]", "alias_groups = [\"missing\"]");
-    assert!(toml::from_str::<RawConfig>(&unknown_group).is_ok());
-    let directory = tempdir()?;
-    let config_dir = directory.path().join(".chronicle");
-    fs::create_dir(&config_dir)?;
-    let path = config_dir.join("config.toml");
-    fs::write(&path, unknown_group)?;
-    assert!(Config::load(&path).is_err());
-    fs::write(
-        &path,
-        full_config().replace(
-            "chunk_overlap_tokens = 48",
-            "chunk_overlap_tokens = 48\ngm_user_ids = [\"10\", \"10\"]",
-        ),
-    )?;
-    assert!(Config::load(&path).is_err());
-    Ok(())
 }

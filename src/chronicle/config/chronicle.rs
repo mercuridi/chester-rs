@@ -1,10 +1,122 @@
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
+use serenity::all::UserId;
 
 use crate::discord::constants::MESSAGE_MAX_CHARS;
 
-use super::{paths::resolve_path, raw::RawChronicleConfig};
+use super::paths::resolve_path;
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FileChronicleConfig {
+    indexing: FileIndexingSettings,
+    llm: FileLlmSettings,
+    retrieval: FileRetrievalSettings,
+    #[serde(default)]
+    synthesis: FileSynthesisSettings,
+    #[serde(default)]
+    access: FileChronicleAccessSettings,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileIndexingSettings {
+    corpus_dir: String,
+    max_chunk_tokens: usize,
+    chunk_overlap_tokens: usize,
+    #[serde(default)]
+    excluded_note_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileLlmSettings {
+    model: FileModelSource,
+    tokenizer: FileTokenizerSource,
+    generation: FileGenerationSettings,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileModelSource {
+    repo: String,
+    revision: String,
+    file: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileTokenizerSource {
+    repo: String,
+    file: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileGenerationSettings {
+    max_tokens: u32,
+    #[serde(default = "default_llm_context_limit")]
+    context_limit: usize,
+    temperature: f32,
+    seed: u64,
+    system_prompt: String,
+    max_reply_length: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileRetrievalSettings {
+    limit: usize,
+    #[serde(default = "default_retrieval_candidate_limit")]
+    candidate_limit: usize,
+    #[serde(default = "default_retrieval_distance_threshold")]
+    distance_threshold: f32,
+    #[serde(default = "default_retrieval_near_duplicate_threshold")]
+    near_duplicate_threshold: f32,
+    #[serde(default = "default_retrieval_max_chunks_per_document")]
+    max_chunks_per_document: usize,
+    #[serde(default = "default_pagerank_weight")]
+    pagerank_weight: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileSynthesisSettings {
+    #[serde(default = "default_synthesis_retrieval_limit")]
+    retrieval_limit: usize,
+    #[serde(default = "default_synthesis_candidate_limit")]
+    candidate_limit: usize,
+    #[serde(default = "default_synthesis_max_chunks_per_document")]
+    max_chunks_per_document: usize,
+    #[serde(default = "default_synthesis_batch_token_budget")]
+    batch_token_budget: usize,
+    #[serde(default = "default_synthesis_max_batches")]
+    max_batches: usize,
+}
+
+impl Default for FileSynthesisSettings {
+    fn default() -> Self {
+        Self {
+            retrieval_limit: default_synthesis_retrieval_limit(),
+            candidate_limit: default_synthesis_candidate_limit(),
+            max_chunks_per_document: default_synthesis_max_chunks_per_document(),
+            batch_token_budget: default_synthesis_batch_token_budget(),
+            max_batches: default_synthesis_max_batches(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileChronicleAccessSettings {
+    #[serde(default)]
+    gm_user_ids: Vec<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct ChronicleConfig {
@@ -12,25 +124,37 @@ pub struct ChronicleConfig {
     pub retrieval: RetrievalSettings,
     pub indexing: IndexingSettings,
     pub synthesis: SynthesisSettings,
+    pub access: ChronicleAccessSettings,
 }
 
 #[derive(Debug, Clone)]
 pub struct LlmSettings {
-    pub model: RepositoryFile,
-    pub tokenizer: RepositoryFile,
+    pub model: ModelSource,
+    pub tokenizer: TokenizerSource,
+    pub generation: GenerationSettings,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelSource {
+    pub repo: String,
+    pub revision: String,
+    pub file: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TokenizerSource {
+    pub repo: String,
+    pub file: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GenerationSettings {
     pub max_tokens: u32,
     pub context_limit: usize,
     pub temperature: f32,
     pub seed: u64,
     pub system_prompt: String,
     pub max_reply_length: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct RepositoryFile {
-    pub repo: String,
-    pub revision: String,
-    pub file: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,10 +169,21 @@ pub struct RetrievalSettings {
 
 #[derive(Debug, Clone)]
 pub struct IndexingSettings {
-    pub corpus_dir: std::path::PathBuf,
+    pub corpus_dir: PathBuf,
     pub max_chunk_tokens: usize,
     pub chunk_overlap_tokens: usize,
     pub excluded_note_ids: HashSet<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChronicleAccessSettings {
+    gm_user_ids: HashSet<UserId>,
+}
+
+impl ChronicleAccessSettings {
+    pub fn is_gm(&self, user_id: UserId) -> bool {
+        self.gm_user_ids.contains(&user_id)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,46 +208,50 @@ impl Default for SynthesisSettings {
 }
 
 impl ChronicleConfig {
-    pub(crate) fn from_raw(raw: RawChronicleConfig, project_root: &Path) -> Result<Self> {
+    pub(crate) fn from_file(file: FileChronicleConfig, project_root: &Path) -> Result<Self> {
         let config = Self {
             llm: LlmSettings {
-                model: RepositoryFile {
-                    repo: raw.llm_repo,
-                    revision: raw.llm_revision,
-                    file: raw.llm_model_file,
+                model: ModelSource {
+                    repo: file.llm.model.repo,
+                    revision: file.llm.model.revision,
+                    file: file.llm.model.file,
                 },
-                tokenizer: RepositoryFile {
-                    repo: raw.llm_tokenizer_repo,
-                    revision: String::new(),
-                    file: raw.llm_tokenizer_file,
+                tokenizer: TokenizerSource {
+                    repo: file.llm.tokenizer.repo,
+                    file: file.llm.tokenizer.file,
                 },
-                max_tokens: raw.llm_max_tokens,
-                context_limit: raw.llm_context_limit,
-                temperature: raw.llm_temperature,
-                seed: raw.llm_seed,
-                system_prompt: raw.llm_system_prompt,
-                max_reply_length: raw.llm_max_reply_length,
+                generation: GenerationSettings {
+                    max_tokens: file.llm.generation.max_tokens,
+                    context_limit: file.llm.generation.context_limit,
+                    temperature: file.llm.generation.temperature,
+                    seed: file.llm.generation.seed,
+                    system_prompt: file.llm.generation.system_prompt,
+                    max_reply_length: file.llm.generation.max_reply_length,
+                },
             },
             retrieval: RetrievalSettings {
-                limit: raw.retrieval_limit,
-                candidate_limit: raw.retrieval_candidate_limit,
-                distance_threshold: raw.retrieval_distance_threshold,
-                near_duplicate_threshold: raw.retrieval_near_duplicate_threshold,
-                max_chunks_per_document: raw.retrieval_max_chunks_per_document,
-                pagerank_weight: raw.pagerank_weight,
+                limit: file.retrieval.limit,
+                candidate_limit: file.retrieval.candidate_limit,
+                distance_threshold: file.retrieval.distance_threshold,
+                near_duplicate_threshold: file.retrieval.near_duplicate_threshold,
+                max_chunks_per_document: file.retrieval.max_chunks_per_document,
+                pagerank_weight: file.retrieval.pagerank_weight,
             },
             indexing: IndexingSettings {
-                corpus_dir: resolve_path(project_root, &raw.corpus_dir),
-                max_chunk_tokens: raw.max_chunk_tokens,
-                chunk_overlap_tokens: raw.chunk_overlap_tokens,
-                excluded_note_ids: parse_excluded_note_ids(raw.excluded_note_ids)?,
+                corpus_dir: resolve_path(project_root, &file.indexing.corpus_dir),
+                max_chunk_tokens: file.indexing.max_chunk_tokens,
+                chunk_overlap_tokens: file.indexing.chunk_overlap_tokens,
+                excluded_note_ids: parse_excluded_note_ids(file.indexing.excluded_note_ids)?,
             },
             synthesis: SynthesisSettings {
-                retrieval_limit: raw.synthesis_retrieval_limit,
-                candidate_limit: raw.synthesis_candidate_limit,
-                max_chunks_per_document: raw.synthesis_max_chunks_per_document,
-                batch_token_budget: raw.synthesis_batch_token_budget,
-                max_batches: raw.synthesis_max_batches,
+                retrieval_limit: file.synthesis.retrieval_limit,
+                candidate_limit: file.synthesis.candidate_limit,
+                max_chunks_per_document: file.synthesis.max_chunks_per_document,
+                batch_token_budget: file.synthesis.batch_token_budget,
+                max_batches: file.synthesis.max_batches,
+            },
+            access: ChronicleAccessSettings {
+                gm_user_ids: parse_gm_user_ids(file.access.gm_user_ids)?,
             },
         };
         config.validate()?;
@@ -124,9 +263,9 @@ impl ChronicleConfig {
         self.retrieval.validate()?;
         self.indexing.validate()?;
         self.synthesis.validate()?;
-        let max_tokens = usize::try_from(self.llm.max_tokens)
+        let max_tokens = usize::try_from(self.llm.generation.max_tokens)
             .context("Chronicle llm_max_tokens does not fit in usize")?;
-        let prompt_token_budget = self.llm.context_limit - max_tokens;
+        let prompt_token_budget = self.llm.generation.context_limit - max_tokens;
         if self.synthesis.batch_token_budget > prompt_token_budget {
             bail!(
                 "Chronicle synthesis_batch_token_budget must be between 1 and the available LLM prompt token budget ({prompt_token_budget})"
@@ -136,16 +275,8 @@ impl ChronicleConfig {
     }
 }
 
-impl LlmSettings {
+impl GenerationSettings {
     fn validate(&self) -> Result<()> {
-        if self.model.repo.trim().is_empty()
-            || self.model.revision.trim().is_empty()
-            || self.model.file.trim().is_empty()
-            || self.tokenizer.repo.trim().is_empty()
-            || self.tokenizer.file.trim().is_empty()
-        {
-            bail!("Chronicle LLM repository and file settings cannot be empty");
-        }
         if self.system_prompt.trim().is_empty() {
             bail!("Chronicle llm_system_prompt cannot be empty");
         }
@@ -166,6 +297,20 @@ impl LlmSettings {
             bail!("Chronicle llm_temperature must be finite and between 0.0 and 2.0");
         }
         Ok(())
+    }
+}
+
+impl LlmSettings {
+    fn validate(&self) -> Result<()> {
+        if self.model.repo.trim().is_empty()
+            || self.model.revision.trim().is_empty()
+            || self.model.file.trim().is_empty()
+            || self.tokenizer.repo.trim().is_empty()
+            || self.tokenizer.file.trim().is_empty()
+        {
+            bail!("Chronicle LLM repository and file settings cannot be empty");
+        }
+        self.generation.validate()
     }
 }
 
@@ -250,6 +395,22 @@ fn parse_excluded_note_ids(raw_note_ids: Vec<String>) -> Result<HashSet<String>>
         }
     }
     Ok(note_ids)
+}
+
+fn parse_gm_user_ids(raw_user_ids: Vec<String>) -> Result<HashSet<UserId>> {
+    let mut user_ids = HashSet::new();
+    for raw_user_id in raw_user_ids {
+        let id = raw_user_id
+            .parse::<u64>()
+            .with_context(|| format!("Invalid Chronicle GM user ID `{raw_user_id}`"))?;
+        if id == 0 {
+            bail!("Discord user ID cannot be zero");
+        }
+        if !user_ids.insert(UserId::new(id)) {
+            bail!("Duplicate Chronicle GM user ID `{raw_user_id}`");
+        }
+    }
+    Ok(user_ids)
 }
 
 pub(crate) fn default_llm_context_limit() -> usize {

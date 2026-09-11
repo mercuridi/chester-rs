@@ -123,7 +123,7 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
         config.chronicle.retrieval.max_chunks_per_document,
         config.chronicle.retrieval.pagerank_weight,
         config.chronicle.synthesis,
-        config.chronicle.llm.max_reply_length,
+        config.chronicle.llm.generation.max_reply_length,
     ))
 }
 
@@ -434,7 +434,7 @@ async fn run() -> Result<()> {
         corpus_dir = %config.chronicle.indexing.corpus_dir.display(),
         retrieval_limit = config.chronicle.retrieval.limit,
         max_chunk_tokens = config.chronicle.indexing.max_chunk_tokens,
-        max_reply_length = config.chronicle.llm.max_reply_length,
+        max_reply_length = config.chronicle.llm.generation.max_reply_length,
         "Loaded configuration"
     );
 

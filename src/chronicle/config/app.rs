@@ -39,7 +39,7 @@ impl Config {
         self.discord.guild_has_alias_group(guild_id, group_id)
     }
     pub fn is_chronicle_gm(&self, user_id: UserId) -> bool {
-        self.discord.is_chronicle_gm(user_id)
+        self.chronicle.access.is_gm(user_id)
     }
     pub(crate) fn new(
         database: DatabaseConfig,
