@@ -295,10 +295,10 @@ mod tests {
 
         let pcm = [0i16; 960];
         for index in 0..40 {
-            let mut encoded = [0u8; 4_000];
-            let encoded_len = encoder.encode(&pcm, &mut encoded)?;
+            let mut encoded_packet = [0u8; 4_000];
+            let encoded_len = encoder.encode(&pcm, &mut encoded_packet)?;
             writer.write_packet(
-                encoded[..encoded_len].to_vec(),
+                encoded_packet[..encoded_len].to_vec(),
                 serial,
                 if index == 39 {
                     PacketWriteEndInfo::EndStream
