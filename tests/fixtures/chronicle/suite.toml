@@ -11,7 +11,10 @@ candidate_limit = 12
 distance_threshold = 0.8
 
 [retrieval.fusion]
+vector_rrf_weight = 1.0
+lexical_rrf_weight = 1.0
 pagerank_weight = 0.15
+rrf_rank_constant = 60.0
 
 [retrieval.selection]
 near_duplicate_threshold = 0.85

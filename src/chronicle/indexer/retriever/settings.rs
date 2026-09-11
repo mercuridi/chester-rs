@@ -29,13 +29,9 @@ pub struct CandidatePoolPolicy {
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FusionPolicy {
-    #[serde(default = "default_rrf_weight")]
     pub vector_rrf_weight: f64,
-    #[serde(default = "default_rrf_weight")]
     pub lexical_rrf_weight: f64,
-    #[serde(default = "default_pagerank_weight")]
     pub pagerank_weight: f64,
-    #[serde(default = "default_rrf_rank_constant")]
     pub rrf_rank_constant: f64,
 }
 
@@ -45,16 +41,6 @@ pub struct FusionPolicy {
 pub struct SelectionPolicy {
     pub near_duplicate_threshold: f32,
     pub max_chunks_per_document: usize,
-}
-
-const fn default_pagerank_weight() -> f64 {
-    0.15
-}
-const fn default_rrf_weight() -> f64 {
-    1.0
-}
-const fn default_rrf_rank_constant() -> f64 {
-    60.0
 }
 
 impl SearchSettings {

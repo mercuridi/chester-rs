@@ -17,9 +17,7 @@ pub(crate) struct FileChronicleConfig {
     indexing: FileIndexingSettings,
     llm: FileLlmSettings,
     retrieval: FileRetrievalSettings,
-    #[serde(default)]
     synthesis: FileSynthesisSettings,
-    #[serde(default)]
     access: FileChronicleAccessSettings,
 }
 
@@ -29,7 +27,6 @@ struct FileIndexingSettings {
     corpus_dir: String,
     max_chunk_tokens: usize,
     chunk_overlap_tokens: usize,
-    #[serde(default)]
     excluded_note_ids: Vec<String>,
 }
 
@@ -60,7 +57,6 @@ struct FileTokenizerSource {
 #[serde(deny_unknown_fields)]
 struct FileGenerationSettings {
     max_tokens: u32,
-    #[serde(default = "default_llm_context_limit")]
     context_limit: usize,
     temperature: f32,
     seed: u64,
@@ -72,49 +68,26 @@ struct FileGenerationSettings {
 #[serde(deny_unknown_fields)]
 struct FileRetrievalSettings {
     limit: usize,
-    #[serde(default = "default_retrieval_candidate_limit")]
     candidate_limit: usize,
-    #[serde(default = "default_retrieval_distance_threshold")]
     distance_threshold: f32,
-    #[serde(default = "default_retrieval_near_duplicate_threshold")]
     near_duplicate_threshold: f32,
-    #[serde(default = "default_retrieval_max_chunks_per_document")]
     max_chunks_per_document: usize,
-    #[serde(default = "default_pagerank_weight")]
     pagerank_weight: f64,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileSynthesisSettings {
-    #[serde(default = "default_synthesis_retrieval_limit")]
     retrieval_limit: usize,
-    #[serde(default = "default_synthesis_candidate_limit")]
     candidate_limit: usize,
-    #[serde(default = "default_synthesis_max_chunks_per_document")]
     max_chunks_per_document: usize,
-    #[serde(default = "default_synthesis_batch_token_budget")]
     batch_token_budget: usize,
-    #[serde(default = "default_synthesis_max_batches")]
     max_batches: usize,
 }
 
-impl Default for FileSynthesisSettings {
-    fn default() -> Self {
-        Self {
-            retrieval_limit: default_synthesis_retrieval_limit(),
-            candidate_limit: default_synthesis_candidate_limit(),
-            max_chunks_per_document: default_synthesis_max_chunks_per_document(),
-            batch_token_budget: default_synthesis_batch_token_budget(),
-            max_batches: default_synthesis_max_batches(),
-        }
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileChronicleAccessSettings {
-    #[serde(default)]
     gm_user_ids: Vec<String>,
 }
 
@@ -193,18 +166,6 @@ pub struct SynthesisSettings {
     pub max_chunks_per_document: usize,
     pub batch_token_budget: usize,
     pub max_batches: usize,
-}
-
-impl Default for SynthesisSettings {
-    fn default() -> Self {
-        Self {
-            retrieval_limit: default_synthesis_retrieval_limit(),
-            candidate_limit: default_synthesis_candidate_limit(),
-            max_chunks_per_document: default_synthesis_max_chunks_per_document(),
-            batch_token_budget: default_synthesis_batch_token_budget(),
-            max_batches: default_synthesis_max_batches(),
-        }
-    }
 }
 
 impl ChronicleConfig {
@@ -411,38 +372,4 @@ fn parse_gm_user_ids(raw_user_ids: Vec<String>) -> Result<HashSet<UserId>> {
         }
     }
     Ok(user_ids)
-}
-
-pub(crate) fn default_llm_context_limit() -> usize {
-    8_192
-}
-pub(crate) fn default_retrieval_candidate_limit() -> usize {
-    15
-}
-pub(crate) fn default_retrieval_distance_threshold() -> f32 {
-    0.8
-}
-pub(crate) fn default_retrieval_near_duplicate_threshold() -> f32 {
-    0.85
-}
-pub(crate) fn default_retrieval_max_chunks_per_document() -> usize {
-    2
-}
-pub(crate) fn default_pagerank_weight() -> f64 {
-    0.15
-}
-pub(crate) fn default_synthesis_retrieval_limit() -> usize {
-    12
-}
-pub(crate) fn default_synthesis_candidate_limit() -> usize {
-    40
-}
-pub(crate) fn default_synthesis_max_chunks_per_document() -> usize {
-    3
-}
-pub(crate) fn default_synthesis_batch_token_budget() -> usize {
-    1_800
-}
-pub(crate) fn default_synthesis_max_batches() -> usize {
-    6
 }

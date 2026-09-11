@@ -16,6 +16,7 @@ chronicle = "sqlite://data/chronicle.sqlite3?mode=rwc"
 
 [chronicle.indexing]
 corpus_dir = "corpus"
+excluded_note_ids = []
 max_chunk_tokens = 480
 chunk_overlap_tokens = 48
 
@@ -38,6 +39,21 @@ max_reply_length = 1900
 
 [chronicle.retrieval]
 limit = 5
+candidate_limit = 15
+distance_threshold = 0.8
+near_duplicate_threshold = 0.85
+max_chunks_per_document = 2
+pagerank_weight = 0.15
+
+[chronicle.synthesis]
+retrieval_limit = 12
+candidate_limit = 40
+max_chunks_per_document = 3
+batch_token_budget = 1800
+max_batches = 6
+
+[chronicle.access]
+gm_user_ids = []
 
 [discord.alias_groups.party]
 name = "Party"
@@ -74,11 +90,8 @@ fn checked_in_example_uses_the_only_supported_schema() -> Result<()> {
 }
 
 #[test]
-fn loads_nested_settings_with_defaults_and_domain_ownership() -> Result<()> {
-    let config = load(&CONFIG.replace(
-        "[chronicle.retrieval]",
-        "[chronicle.access]\ngm_user_ids = [\"99\"]\n\n[chronicle.retrieval]",
-    ))?;
+fn loads_complete_nested_settings_and_domain_ownership() -> Result<()> {
+    let config = load(&CONFIG.replace("gm_user_ids = []", "gm_user_ids = [\"99\"]"))?;
     assert_eq!(config.chronicle.llm.model.repo, "owner/model");
     assert_eq!(config.chronicle.llm.generation.context_limit, 4096);
     assert_eq!(config.chronicle.retrieval.candidate_limit, 15);
@@ -94,12 +107,41 @@ fn loads_nested_settings_with_defaults_and_domain_ownership() -> Result<()> {
 }
 
 #[test]
-fn applies_nested_setting_defaults() -> Result<()> {
-    let config = load(&CONFIG.replace("context_limit = 4096\n", ""))?;
-    assert_eq!(config.chronicle.llm.generation.context_limit, 8_192);
-    assert_eq!(config.chronicle.retrieval.candidate_limit, 15);
-    assert_eq!(config.chronicle.synthesis.batch_token_budget, 1_800);
-    Ok(())
+fn requires_all_chronicle_settings() {
+    for missing in [
+        "excluded_note_ids = []\n",
+        "context_limit = 4096\n",
+        "candidate_limit = 15\n",
+        "distance_threshold = 0.8\n",
+        "near_duplicate_threshold = 0.85\n",
+        "max_chunks_per_document = 2\n",
+        "pagerank_weight = 0.15\n",
+        "retrieval_limit = 12\n",
+        "candidate_limit = 40\n",
+        "max_chunks_per_document = 3\n",
+        "batch_token_budget = 1800\n",
+        "max_batches = 6\n",
+        "gm_user_ids = []\n",
+    ] {
+        assert!(
+            load(&CONFIG.replace(missing, "")).is_err(),
+            "{missing} must be required"
+        );
+    }
+
+    let synthesis = "[chronicle.synthesis]\nretrieval_limit = 12\ncandidate_limit = 40\nmax_chunks_per_document = 3\nbatch_token_budget = 1800\nmax_batches = 6\n\n";
+    assert!(load(&CONFIG.replace(synthesis, "")).is_err());
+}
+
+#[test]
+fn requires_explicit_discord_maps_and_collections() {
+    let empty_discord = "[discord.alias_groups.party]\nname = \"Party\"\n\n[discord.alias_groups.party.aliases]\n\"10\" = \"Alice\"\n\"20\" = \"Bob\"\n\n[discord.guilds.\"30\"]\nalias_groups = [\"party\"]\n";
+    assert!(load(&CONFIG.replace(empty_discord, "")).is_err());
+
+    let empty_aliases =
+        "[discord.alias_groups.party.aliases]\n\"10\" = \"Alice\"\n\"20\" = \"Bob\"\n\n";
+    assert!(load(&CONFIG.replace(empty_aliases, "")).is_err());
+    assert!(load(&CONFIG.replace("alias_groups = [\"party\"]", "")).is_err());
 }
 
 #[test]

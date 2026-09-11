@@ -4,12 +4,10 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serenity::all::{GuildId, UserId};
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct FileDiscordConfig {
-    #[serde(default)]
     alias_groups: HashMap<String, FileAliasGroup>,
-    #[serde(default)]
     guilds: HashMap<String, FileGuildConfig>,
 }
 
@@ -17,14 +15,12 @@ pub(crate) struct FileDiscordConfig {
 #[serde(deny_unknown_fields)]
 struct FileAliasGroup {
     name: String,
-    #[serde(default)]
     aliases: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FileGuildConfig {
-    #[serde(default)]
     alias_groups: Vec<String>,
 }
 

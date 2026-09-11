@@ -16,7 +16,6 @@ use super::{
 struct FileConfig {
     database: FileDatabaseConfig,
     chronicle: super::chronicle::FileChronicleConfig,
-    #[serde(default)]
     discord: super::discord::FileDiscordConfig,
 }
 

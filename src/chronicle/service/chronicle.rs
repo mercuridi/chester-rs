@@ -115,6 +115,7 @@ impl Chronicle {
         retrieval_near_duplicate_threshold: f32,
         retrieval_max_chunks_per_document: usize,
         pagerank_weight: f64,
+        synthesis: SynthesisSettings,
         max_reply_length: usize,
     ) -> Self {
         Self {
@@ -129,7 +130,7 @@ impl Chronicle {
             retrieval_near_duplicate_threshold,
             retrieval_max_chunks_per_document,
             pagerank_weight,
-            synthesis: SynthesisSettings::default(),
+            synthesis,
             max_reply_length,
             lifecycle: tokio::sync::Mutex::new(()),
             last_synthesis_diagnostics: std::sync::Mutex::new(None),
@@ -501,11 +502,10 @@ impl Chronicle {
 #[allow(clippy::type_complexity, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::super::retrieval_answer::truncate_to_char_limit;
-    use super::Chronicle;
-    use crate::chronicle::indexer::db::repository::facade::IndexerDb;
+    use super::{Chronicle, SynthesisSettings};
     use crate::chronicle::{
         indexer::{
-            db::repository::facade::SearchResult,
+            db::repository::facade::{IndexerDb, SearchResult},
             retriever::{
                 api::{RetrievalOutcome, RetrieverApi},
                 settings::SearchSettings,
@@ -532,6 +532,14 @@ mod tests {
         NoResult,
         Error,
     }
+
+    const SYNTHESIS_SETTINGS: SynthesisSettings = SynthesisSettings {
+        retrieval_limit: 12,
+        candidate_limit: 40,
+        max_chunks_per_document: 3,
+        batch_token_budget: 1_800,
+        max_batches: 6,
+    };
 
     struct FakeRetriever {
         outcome: FakeOutcome,
@@ -792,6 +800,7 @@ mod tests {
             0.85,
             2,
             0.15,
+            SYNTHESIS_SETTINGS,
             max_reply_length,
         );
         Ok((chronicle, retriever, llm))
@@ -1377,8 +1386,19 @@ mod tests {
         let mut model = FakeLlm::new(runtime.clone(), ["unused"]);
         model.fail_count = true;
         let llm = Arc::new(model);
-        let chronicle =
-            Chronicle::with_dependencies(retriever, llm, runtime, 5, 15, 0.8, 0.85, 2, 0.15, 100);
+        let chronicle = Chronicle::with_dependencies(
+            retriever,
+            llm,
+            runtime,
+            5,
+            15,
+            0.8,
+            0.85,
+            2,
+            0.15,
+            SYNTHESIS_SETTINGS,
+            100,
+        );
         assert!(
             chronicle
                 .ask("question")
@@ -1405,6 +1425,7 @@ mod tests {
             0.85,
             2,
             0.15,
+            SYNTHESIS_SETTINGS,
             100,
         );
         chronicle.start_llm().await?;
@@ -1435,6 +1456,7 @@ mod tests {
             0.85,
             2,
             0.15,
+            SYNTHESIS_SETTINGS,
             100,
         );
         assert!(chronicle.start_llm().await.is_err());

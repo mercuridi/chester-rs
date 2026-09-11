@@ -52,8 +52,12 @@ max_batches = 6
 [chronicle.access]
 gm_user_ids = []
 
-# Optional: map Discord users to names used in transcripts.
-#
+# Map Discord users to names used in transcripts.
+[discord]
+alias_groups = {}
+guilds = {}
+
+# To add mappings, replace the empty maps above with tables such as:
 # [discord.alias_groups.main]
 # name = "Main names"
 #
