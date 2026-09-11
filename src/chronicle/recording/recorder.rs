@@ -25,7 +25,9 @@ use tokio::{
 };
 
 use crate::{
-    chronicle::recording::constants::{RING_BUFFER_CAPACITY, SILENCE_FRAME},
+    chronicle::recording::constants::{
+        RING_BUFFER_CAPACITY, RecordedFrame, SILENCE_FRAME, STEREO_FRAME_SAMPLES,
+    },
     chronicle::recording::encoder::run_encoder,
     discord::context::Error,
 };
@@ -283,8 +285,8 @@ pub fn recover_recording_manifest(
 
 pub struct UserRecording {
     pub path: PathBuf,
-    pub producer: Producer<i16>,
-    pub stop_tx: oneshot::Sender<()>,
+    pub producer: Producer<RecordedFrame>,
+    pub stop_tx: oneshot::Sender<u64>,
     pub encoder: JoinHandle<Result<(), Error>>,
 }
 
@@ -529,6 +531,7 @@ impl Recorder {
         manifest.participant_failures.clear();
         manifest.finalized_recordings = Some(Vec::new());
         manifest.save_atomically(&session.manifest_path)?;
+        let final_tick = session.tick;
 
         let encoder_drains =
             session
@@ -543,7 +546,7 @@ impl Recorder {
                     } = user_recording;
 
                     // Tell the encoder that no more data should be expected.
-                    let _ = stop_tx.send(());
+                    let _ = stop_tx.send(final_tick);
 
                     // The producer must remain alive while the encoder drains the
                     // samples already committed to the ring buffer. Once the
@@ -631,7 +634,7 @@ impl Recorder {
         session_name: &str,
         initial_silence_ticks: u64,
     ) -> UserRecording {
-        let (producer, consumer) = RingBuffer::<i16>::new(RING_BUFFER_CAPACITY);
+        let (producer, consumer) = RingBuffer::<RecordedFrame>::new(RING_BUFFER_CAPACITY);
 
         let (stop_tx, stop_rx) = oneshot::channel();
 
@@ -782,7 +785,7 @@ impl EventHandler for Recorder {
                 for (&user_id, user_recording) in &mut session.users {
                     let audio = tick_audio.get(&user_id).copied().unwrap_or(&SILENCE_FRAME);
 
-                    write_pcm(&mut user_recording.producer, audio, user_id);
+                    write_pcm(&mut user_recording.producer, session.tick, audio, user_id);
                 }
 
                 // Advance our recording timeline by one 20 ms tick.
@@ -796,26 +799,31 @@ impl EventHandler for Recorder {
     }
 }
 
-fn write_pcm(producer: &mut Producer<i16>, samples: &[i16], user_id: UserId) {
-    if producer.slots() < samples.len() {
+fn write_pcm(producer: &mut Producer<RecordedFrame>, tick: u64, samples: &[i16], user_id: UserId) {
+    if producer.slots() == 0 {
         tracing::warn!(
             ?user_id,
+            tick,
             available = producer.slots(),
-            required = samples.len(),
             "Recording ring buffer full; dropping PCM frame"
         );
         return;
     }
 
-    match producer.write_chunk(samples.len()) {
+    let mut frame = RecordedFrame {
+        tick,
+        ..RecordedFrame::default()
+    };
+    let sample_count = samples.len().min(STEREO_FRAME_SAMPLES);
+    frame.samples[..sample_count].copy_from_slice(&samples[..sample_count]);
+
+    match producer.write_chunk(1) {
         Ok(mut chunk) => {
             let (first, second) = chunk.as_mut_slices();
-            let first_len = first.len();
-
-            first.copy_from_slice(&samples[..first_len]);
-
-            if !second.is_empty() {
-                second.copy_from_slice(&samples[first_len..]);
+            if let Some(slot) = first.first_mut() {
+                *slot = frame;
+            } else if let Some(slot) = second.first_mut() {
+                *slot = frame;
             }
 
             chunk.commit_all();
@@ -824,6 +832,7 @@ fn write_pcm(producer: &mut Producer<i16>, samples: &[i16], user_id: UserId) {
         Err(error) => {
             tracing::warn!(
                 ?user_id,
+                tick,
                 ?error,
                 "Failed to write PCM to recording ring buffer"
             );
@@ -971,9 +980,10 @@ pub async fn notify_recording_user(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        Clock, FinalizedRecording, ManifestStatus, Recorder, RecorderManager, RecordingManifest,
-        default_manifest_status, recording_directory, recording_path, recover_recording_manifest,
-        resolve_finalized_recordings, scan_incomplete_manifests, validate_scene_name, write_pcm,
+        Clock, FinalizedRecording, ManifestStatus, RecordedFrame, Recorder, RecorderManager,
+        RecordingManifest, default_manifest_status, recording_directory, recording_path,
+        recover_recording_manifest, resolve_finalized_recordings, scan_incomplete_manifests,
+        validate_scene_name, write_pcm,
     };
     use chrono::{DateTime, Local, TimeZone};
     use rtrb::RingBuffer;
@@ -1112,16 +1122,25 @@ mod tests {
     }
 
     #[test]
-    fn write_pcm_commits_complete_samples_and_drops_oversized_frames() -> anyhow::Result<()> {
-        let (mut producer, mut consumer) = RingBuffer::<i16>::new(4);
-        write_pcm(&mut producer, &[1, 2, 3], UserId::new(1));
+    fn write_pcm_commits_timestamped_frames_and_drops_when_full() -> anyhow::Result<()> {
+        let (mut producer, mut consumer) = RingBuffer::<RecordedFrame>::new(1);
+        write_pcm(&mut producer, 7, &[1, 2, 3], UserId::new(1));
         let chunk = consumer
-            .read_chunk(3)
+            .read_chunk(1)
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        assert_eq!(chunk.as_slices().0, &[1, 2, 3]);
+        let frame = &chunk.as_slices().0[0];
+        assert_eq!(frame.tick, 7);
+        assert_eq!(&frame.samples[..3], &[1, 2, 3]);
+        assert!(frame.samples[3..].iter().all(|sample| *sample == 0));
         chunk.commit_all();
 
-        write_pcm(&mut producer, &[1, 2, 3, 4, 5], UserId::new(1));
+        write_pcm(&mut producer, 8, &[4, 5], UserId::new(1));
+        write_pcm(&mut producer, 9, &[6, 7], UserId::new(1));
+        let frame = consumer
+            .read_chunk(1)
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(frame.as_slices().0[0].tick, 8);
+        frame.commit_all();
         assert!(consumer.read_chunk(1).is_err());
         Ok(())
     }

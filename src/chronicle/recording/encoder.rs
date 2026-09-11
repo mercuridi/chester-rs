@@ -7,6 +7,7 @@ use serenity::all::UserId;
 use tokio::sync::oneshot;
 
 use crate::{
+    chronicle::recording::constants::RecordedFrame,
     chronicle::recording::constants::{
         MAX_OPUS_PACKET_SIZE, MONO_FRAME_SAMPLES, OPUS_SAMPLE_RATE, PCM_CHANNELS,
         STEREO_FRAME_SAMPLES,
@@ -17,8 +18,8 @@ use crate::{
 pub fn run_encoder(
     user_id: UserId,
     path: &Path,
-    mut consumer: Consumer<i16>,
-    mut stop_rx: oneshot::Receiver<()>,
+    mut consumer: Consumer<RecordedFrame>,
+    mut stop_rx: oneshot::Receiver<u64>,
     initial_silence_ticks: u64,
 ) -> Result<(), Error> {
     let file = File::create(path)?;
@@ -30,10 +31,10 @@ pub fn run_encoder(
         Application::Audio,
     )?;
 
-    let mut stereo_buffer = Vec::<i16>::with_capacity(STEREO_FRAME_SAMPLES);
     let mut mono_buffer = [0i16; MONO_FRAME_SAMPLES];
 
     let mut opus_packet = [0u8; MAX_OPUS_PACKET_SIZE];
+    let mut encoded_packets = Vec::<(Vec<u8>, u64)>::new();
 
     let mut granule_position = 0u64;
     let serial = rand::random::<u32>();
@@ -49,73 +50,71 @@ pub fn run_encoder(
     )?;
 
     for _ in 0..initial_silence_ticks {
-        mono_buffer.fill(0);
-
-        let encoded_len = opus.encode(&mono_buffer, &mut opus_packet)?;
-
-        if encoded_len > 0 {
-            let packet = opus_packet[..encoded_len].to_vec();
-
-            granule_position += MONO_FRAME_SAMPLES as u64;
-
-            ogg.write_packet(
-                packet,
-                serial,
-                PacketWriteEndInfo::NormalPacket,
-                granule_position,
-            )?;
-        }
+        encode_silence_frame(
+            &mut opus,
+            &mut mono_buffer,
+            &mut opus_packet,
+            &mut granule_position,
+            &mut encoded_packets,
+        )?;
     }
 
     let mut stopping = false;
+    let mut final_tick = None;
+    let mut next_tick = initial_silence_ticks;
 
     loop {
-        while stereo_buffer.len() < STEREO_FRAME_SAMPLES {
-            match consumer.read_chunk(STEREO_FRAME_SAMPLES - stereo_buffer.len()) {
-                Ok(chunk) => {
-                    let (first, second) = chunk.as_slices();
+        while let Ok(chunk) = consumer.read_chunk(1) {
+            let (first, second) = chunk.as_slices();
+            let frame = first.first().copied().or_else(|| second.first().copied());
+            chunk.commit_all();
 
-                    stereo_buffer.extend_from_slice(first);
-                    stereo_buffer.extend_from_slice(second);
+            let Some(frame) = frame else {
+                continue;
+            };
 
-                    chunk.commit_all();
-                }
-
-                Err(_) => break,
-            }
-        }
-
-        while stereo_buffer.len() >= STEREO_FRAME_SAMPLES {
-            let frame = &stereo_buffer[..STEREO_FRAME_SAMPLES];
-
-            downmix_stereo_frame(frame, &mut mono_buffer);
-
-            let encoded_len = opus.encode(&mono_buffer, &mut opus_packet)?;
-
-            if encoded_len > 0 {
-                let packet = opus_packet[..encoded_len].to_vec();
-
-                granule_position += MONO_FRAME_SAMPLES as u64;
-
-                ogg.write_packet(
-                    packet,
-                    serial,
-                    PacketWriteEndInfo::NormalPacket,
-                    granule_position,
+            while next_tick < frame.tick {
+                encode_silence_frame(
+                    &mut opus,
+                    &mut mono_buffer,
+                    &mut opus_packet,
+                    &mut granule_position,
+                    &mut encoded_packets,
                 )?;
+                next_tick += 1;
             }
 
-            stereo_buffer.drain(..STEREO_FRAME_SAMPLES);
+            if frame.tick < next_tick {
+                tracing::warn!(
+                    ?user_id,
+                    frame_tick = frame.tick,
+                    expected_tick = next_tick,
+                    "Ignoring out-of-order recording frame"
+                );
+                continue;
+            }
+
+            downmix_stereo_frame(&frame.samples, &mut mono_buffer);
+            encode_mono_frame(
+                &mut opus,
+                &mut mono_buffer,
+                &mut opus_packet,
+                &mut granule_position,
+                &mut encoded_packets,
+            )?;
+            next_tick += 1;
         }
 
         if stopping {
-            // Producer has stopped, so no more samples can arrive.
-            // We've drained everything available.
             break;
         }
 
         match stop_rx.try_recv() {
-            Ok(()) | Err(oneshot::error::TryRecvError::Closed) => {
+            Ok(tick) => {
+                final_tick = Some(tick);
+                stopping = true;
+            }
+            Err(oneshot::error::TryRecvError::Closed) => {
                 stopping = true;
             }
 
@@ -125,16 +124,66 @@ pub fn run_encoder(
         }
     }
 
-    // At this point, stop has been requested and the producer is no
-    // longer supplying data. Any complete frames already in the ring
-    // have been processed above.
-    //
-    // We intentionally discard an incomplete final frame because
-    // Opus requires a valid frame size.
+    if let Some(final_tick) = final_tick {
+        while next_tick < final_tick {
+            encode_silence_frame(
+                &mut opus,
+                &mut mono_buffer,
+                &mut opus_packet,
+                &mut granule_position,
+                &mut encoded_packets,
+            )?;
+            next_tick += 1;
+        }
+    }
+
+    let packet_count = encoded_packets.len();
+    for (index, (packet, granule_position)) in encoded_packets.into_iter().enumerate() {
+        let end_info = if index + 1 == packet_count {
+            PacketWriteEndInfo::EndStream
+        } else {
+            PacketWriteEndInfo::NormalPacket
+        };
+        ogg.write_packet(packet, serial, end_info, granule_position)?;
+    }
 
     tracing::info!(?user_id, ?path, "Finished recording");
 
     Ok(())
+}
+
+fn encode_mono_frame(
+    opus: &mut OpusEncoder,
+    mono_buffer: &mut [i16; MONO_FRAME_SAMPLES],
+    opus_packet: &mut [u8; MAX_OPUS_PACKET_SIZE],
+    granule_position: &mut u64,
+    encoded_packets: &mut Vec<(Vec<u8>, u64)>,
+) -> Result<(), Error> {
+    let encoded_len = opus.encode(mono_buffer, opus_packet)?;
+
+    if encoded_len > 0 {
+        *granule_position += MONO_FRAME_SAMPLES as u64;
+        encoded_packets.push((opus_packet[..encoded_len].to_vec(), *granule_position));
+    }
+
+    Ok(())
+}
+
+fn encode_silence_frame(
+    opus: &mut OpusEncoder,
+    mono_buffer: &mut [i16; MONO_FRAME_SAMPLES],
+    opus_packet: &mut [u8; MAX_OPUS_PACKET_SIZE],
+    granule_position: &mut u64,
+    encoded_packets: &mut Vec<(Vec<u8>, u64)>,
+) -> Result<(), Error> {
+    mono_buffer.fill(0);
+    encode_mono_frame(
+        opus,
+        mono_buffer,
+        opus_packet,
+        granule_position,
+        encoded_packets,
+    )
 }
 
 fn downmix_stereo_frame(interleaved: &[i16], mono: &mut [i16; MONO_FRAME_SAMPLES]) {
@@ -193,8 +242,16 @@ fn write_opus_headers<W: std::io::Write>(
 
 #[cfg(test)]
 mod tests {
-    use super::downmix_stereo_frame;
-    use crate::chronicle::recording::constants::{MONO_FRAME_SAMPLES, STEREO_FRAME_SAMPLES};
+    use super::{downmix_stereo_frame, run_encoder};
+    use crate::chronicle::recording::constants::{
+        MONO_FRAME_SAMPLES, RecordedFrame, STEREO_FRAME_SAMPLES,
+    };
+    use ogg::PacketReader;
+    use rtrb::RingBuffer;
+    use serenity::all::UserId;
+    use std::{fs::File, io::BufReader};
+    use tempfile::tempdir;
+    use tokio::sync::oneshot;
 
     #[test]
     fn downmixes_stereo_pairs_with_midpoint() {
@@ -213,5 +270,81 @@ mod tests {
         assert_eq!(mono[1], -200);
         assert_eq!(mono[2], 0);
         assert!(mono[3..].iter().all(|sample| *sample == 0));
+    }
+
+    fn frame(tick: u64, value: i16) -> RecordedFrame {
+        let mut samples = [0; STEREO_FRAME_SAMPLES];
+        samples[0] = value;
+        samples[1] = value;
+        RecordedFrame { tick, samples }
+    }
+
+    fn encode_test_file(frames: &[RecordedFrame], final_tick: u64) -> anyhow::Result<usize> {
+        let directory = tempdir()?;
+        let path = directory.path().join("recording.opus");
+        let (mut producer, consumer) = RingBuffer::new(frames.len().max(1));
+
+        for frame in frames {
+            let mut chunk = producer.write_chunk(1)?;
+            let (first, second) = chunk.as_mut_slices();
+            if let Some(slot) = first.first_mut() {
+                *slot = *frame;
+            } else if let Some(slot) = second.first_mut() {
+                *slot = *frame;
+            }
+            chunk.commit_all();
+        }
+
+        let (stop_tx, stop_rx) = oneshot::channel();
+        stop_tx
+            .send(final_tick)
+            .map_err(|tick| anyhow::anyhow!("failed to send final tick {tick}"))?;
+        run_encoder(UserId::new(1), &path, consumer, stop_rx, 0)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+        let mut packets = PacketReader::new(BufReader::new(File::open(path)?));
+        let mut audio_packets = 0;
+        while let Some(packet) = packets.read_packet()? {
+            if !packet.data.starts_with(b"OpusHead") && !packet.data.starts_with(b"OpusTags") {
+                audio_packets += 1;
+            }
+        }
+
+        Ok(audio_packets)
+    }
+
+    #[test]
+    fn fills_interior_dropped_ticks_with_silence() -> anyhow::Result<()> {
+        let samples = encode_test_file(&[frame(0, 100), frame(2, 200)], 3)?;
+
+        assert_eq!(samples, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn pads_trailing_dropped_ticks_until_session_end() -> anyhow::Result<()> {
+        let samples = encode_test_file(&[frame(0, 100)], 3)?;
+
+        assert_eq!(samples, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn participants_with_different_drops_keep_equal_timelines() -> anyhow::Result<()> {
+        let participant_with_drop = encode_test_file(&[frame(0, 100), frame(4, 200)], 5)?;
+        let participant_without_drop = encode_test_file(
+            &[
+                frame(0, 100),
+                frame(1, 100),
+                frame(2, 100),
+                frame(3, 100),
+                frame(4, 200),
+            ],
+            5,
+        )?;
+
+        assert_eq!(participant_with_drop, participant_without_drop);
+        assert_eq!(participant_with_drop, 5);
+        Ok(())
     }
 }
