@@ -4,7 +4,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use serenity::model::id::UserId;
 
-use super::{audio::load_opus, whisper::transcriber::WhisperTranscriber};
+use super::{
+    audio::{AudioSource, open_opus},
+    whisper::transcriber::WhisperTranscriber,
+};
 use crate::chronicle::runtime::{GpuRuntime, report_cuda_oom};
 use tracing::{debug, info, instrument};
 
@@ -24,9 +27,9 @@ fn user_id_from_recording_path(path: &std::path::Path) -> Result<UserId> {
 }
 
 pub trait Transcriber: Send {
-    fn transcribe(
+    fn transcribe_stream(
         &mut self,
-        audio: &super::audio::Audio,
+        audio: &mut dyn AudioSource,
     ) -> Result<Vec<super::whisper::transcriber::TranscriptSegment>>;
 }
 
@@ -90,8 +93,8 @@ impl TranscriptionService {
 
             for path in recordings {
                 debug!(path = %path.display(), "Transcribing recording");
-                let audio = load_opus(&path)?;
-                let segments = transcriber.transcribe(&audio)?;
+                let mut audio = open_opus(&path)?;
+                let segments = transcriber.transcribe_stream(&mut audio)?;
 
                 let user_id = user_id_from_recording_path(&path)?;
 
@@ -141,9 +144,9 @@ mod tests {
     struct NoopTranscriber;
 
     impl super::Transcriber for NoopTranscriber {
-        fn transcribe(
+        fn transcribe_stream(
             &mut self,
-            _audio: &super::super::audio::Audio,
+            _audio: &mut dyn super::super::audio::AudioSource,
         ) -> Result<Vec<super::super::whisper::transcriber::TranscriptSegment>> {
             Ok(Vec::new())
         }

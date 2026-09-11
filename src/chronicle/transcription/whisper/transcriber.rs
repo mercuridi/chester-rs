@@ -1,9 +1,11 @@
+use std::collections::VecDeque;
+
 use anyhow::{Context, Result, anyhow};
 use candle_core::{Device, Tensor};
 use candle_transformers::models::whisper::{self as m, audio};
 use tokenizers::Tokenizer;
 
-use crate::chronicle::transcription::audio::Audio;
+use crate::chronicle::transcription::audio::AudioSource;
 use crate::chronicle::transcription::constants::MODEL_SAMPLE_RATE;
 use crate::chronicle::transcription::whisper::model::Model;
 
@@ -39,109 +41,46 @@ impl WhisperTranscriber {
         Self::load(device)
     }
 
-    /// Transcribe already-decoded 16 kHz mono audio.
-    pub fn transcribe(&mut self, audio: &Audio) -> Result<Vec<TranscriptSegment>> {
-        if audio.sample_rate != MODEL_SAMPLE_RATE {
-            return Err(anyhow!(
-                "Whisper expects {} Hz audio, got {} Hz",
-                MODEL_SAMPLE_RATE,
-                audio.sample_rate
-            ));
-        }
-
-        if audio.samples.is_empty() {
-            return Ok(Vec::new());
-        }
-
+    /// Transcribe a bounded stream of mono 16 kHz audio.
+    pub fn transcribe_stream(
+        &mut self,
+        source: &mut dyn AudioSource,
+    ) -> Result<Vec<TranscriptSegment>> {
         let mel_filters = load_mel_filters()?;
 
-        let mel = audio::pcm_to_mel(self.model.config(), &audio.samples, &mel_filters);
+        const WINDOW_SAMPLES: usize = 30 * MODEL_SAMPLE_RATE as usize;
+        const ADVANCE_SAMPLES: usize = 25 * MODEL_SAMPLE_RATE as usize;
+        const OVERLAP_SAMPLES: usize = WINDOW_SAMPLES - ADVANCE_SAMPLES;
 
-        let mel_len = mel.len();
-
-        let mel = Tensor::from_vec(
-            mel,
-            (
-                1,
-                self.model.config().num_mel_bins,
-                mel_len / self.model.config().num_mel_bins,
-            ),
-            &self.device,
-        )?;
-
-        self.decode_mel(&mel)
-    }
-
-    fn decode_mel(&mut self, mel: &Tensor) -> Result<Vec<TranscriptSegment>> {
-        let stride_frames = 25 * m::SAMPLE_RATE / m::HOP_LENGTH;
-        let sample_rate = f64::from(u32::try_from(m::SAMPLE_RATE)?);
-        let hop_length = f64::from(u32::try_from(m::HOP_LENGTH)?);
-
-        let (_, _, content_frames) = mel.dims3()?;
-
-        let mut seek = 0;
+        let mut buffer = VecDeque::with_capacity(WINDOW_SAMPLES + 16_000);
+        let mut window_start = 0usize;
+        let mut eof = false;
         let mut segments = Vec::new();
 
-        while seek < content_frames {
-            let segment_size = usize::min(content_frames - seek, m::N_FRAMES);
-
-            let mel_segment = self.pad_mel_segment(mel, segment_size, seek)?;
-
-            let segment_start = f64::from(u32::try_from(seek)?) * hop_length / sample_rate;
-
-            let segment_duration =
-                f64::from(u32::try_from(segment_size)?) * hop_length / sample_rate;
-
-            let decoded = self.decode_segment(&mel_segment)?;
-
-            if decoded.no_speech_prob > m::NO_SPEECH_THRESHOLD
-                && decoded.avg_logprob < m::LOGPROB_THRESHOLD
-            {
-                // Advance past rejected windows as well. Otherwise a silent
-                // window causes the decoder to process the same window forever.
-                if segment_size == content_frames - seek {
-                    break;
+        loop {
+            while buffer.len() < WINDOW_SAMPLES && !eof {
+                match source.next_chunk()? {
+                    Some(chunk) => buffer.extend(chunk),
+                    None => eof = true,
                 }
-
-                seek += stride_frames;
-                continue;
             }
 
-            let timestamp_segments =
-                self.extract_timestamp_segments(&decoded.tokens, segment_start, segment_duration)?;
-            // tracing::info!(
-            //     timestamp_segment_count = timestamp_segments.len(),
-            //     "Whisper timestamp extraction"
-            // );
-
-            // for segment in &timestamp_segments {
-            //     tracing::info!(
-            //         start = segment.start,
-            //         end = segment.end,
-            //         text = %segment.text,
-            //         "Whisper timestamp segment"
-            //     );
-            // }
-
-            if timestamp_segments.is_empty() {
-                let text = decoded.text.trim();
-
-                if !text.is_empty() {
-                    segments.push(TranscriptSegment {
-                        start: segment_start,
-                        end: segment_start + segment_duration,
-                        text: text.to_owned(),
-                    });
-                }
-            } else {
-                segments.extend(timestamp_segments);
-            }
-
-            if segment_size == content_frames - seek {
+            if buffer.is_empty() || (eof && window_start > 0 && buffer.len() <= OVERLAP_SAMPLES) {
                 break;
             }
 
-            seek += stride_frames;
+            let sample_count = buffer.len().min(WINDOW_SAMPLES);
+            let samples: Vec<f32> = buffer.iter().take(sample_count).copied().collect();
+            segments.extend(self.decode_window(&samples, window_start, &mel_filters)?);
+
+            if eof {
+                break;
+            }
+
+            for _ in 0..ADVANCE_SAMPLES {
+                buffer.pop_front();
+            }
+            window_start += ADVANCE_SAMPLES;
         }
 
         let mut segments = deduplicate_segments(segments);
@@ -154,13 +93,62 @@ impl WhisperTranscriber {
         Ok(segments)
     }
 
+    fn decode_window(
+        &mut self,
+        samples: &[f32],
+        window_start_samples: usize,
+        mel_filters: &[f32],
+    ) -> Result<Vec<TranscriptSegment>> {
+        let mel = audio::pcm_to_mel(self.model.config(), samples, mel_filters);
+        let mel_len = mel.len();
+        let mel = Tensor::from_vec(
+            mel,
+            (
+                1,
+                self.model.config().num_mel_bins,
+                mel_len / self.model.config().num_mel_bins,
+            ),
+            &self.device,
+        )?;
+
+        let (_, _, content_frames) = mel.dims3()?;
+        let mel_segment = self.pad_mel_segment(&mel, content_frames)?;
+        let decoded = self.decode_segment(&mel_segment)?;
+        if decoded.no_speech_prob > m::NO_SPEECH_THRESHOLD
+            && decoded.avg_logprob < m::LOGPROB_THRESHOLD
+        {
+            return Ok(Vec::new());
+        }
+
+        let sample_rate = f64::from(u32::try_from(m::SAMPLE_RATE)?);
+        let hop_length = f64::from(u32::try_from(m::HOP_LENGTH)?);
+        let segment_start = window_start_samples as f64 / f64::from(MODEL_SAMPLE_RATE);
+        let segment_duration = f64::from(u32::try_from(content_frames)?) * hop_length / sample_rate;
+        let timestamp_segments =
+            self.extract_timestamp_segments(&decoded.tokens, segment_start, segment_duration)?;
+
+        if timestamp_segments.is_empty() {
+            let text = decoded.text.trim();
+            if text.is_empty() {
+                Ok(Vec::new())
+            } else {
+                Ok(vec![TranscriptSegment {
+                    start: segment_start,
+                    end: segment_start + segment_duration,
+                    text: text.to_owned(),
+                }])
+            }
+        } else {
+            Ok(timestamp_segments)
+        }
+    }
+
     pub fn is_timestamp_token(&self, token: u32) -> bool {
         token > self.no_timestamps_token
     }
 
-    fn pad_mel_segment(&self, mel: &Tensor, segment_size: usize, seek: usize) -> Result<Tensor> {
-        let mel_segment = mel.narrow(2, seek, segment_size)?;
-
+    fn pad_mel_segment(&self, mel: &Tensor, segment_size: usize) -> Result<Tensor> {
+        let mel_segment = mel.clone();
         if segment_size >= m::N_FRAMES {
             return Ok(mel_segment);
         }
@@ -180,8 +168,8 @@ impl WhisperTranscriber {
 }
 
 impl crate::chronicle::transcription::service::Transcriber for WhisperTranscriber {
-    fn transcribe(&mut self, audio: &Audio) -> Result<Vec<TranscriptSegment>> {
-        Self::transcribe(self, audio)
+    fn transcribe_stream(&mut self, audio: &mut dyn AudioSource) -> Result<Vec<TranscriptSegment>> {
+        Self::transcribe_stream(self, audio)
     }
 }
 

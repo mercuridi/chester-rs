@@ -1,140 +1,206 @@
 use std::{
+    collections::VecDeque,
     fs::File,
     io::{BufReader, Read, Seek},
     path::Path,
 };
 
+use crate::chronicle::recording::constants::OPUS_SAMPLE_RATE;
 use anyhow::{Result, anyhow};
 use ogg::PacketReader;
 use opus::{Channels, Decoder as OpusDecoder};
 use rubato::{FftFixedIn, Resampler};
 
-use crate::chronicle::recording::constants::OPUS_SAMPLE_RATE;
-
 const WHISPER_SAMPLE_RATE: usize = 16_000;
 
-/// Decoded audio ready for Whisper.
-pub struct Audio {
-    pub samples: Vec<f32>,
-    pub sample_rate: u32,
+const RESAMPLER_CHUNK: usize = 1024;
+const OUTPUT_CHUNK: usize = 16_000;
+
+/// A bounded stream of mono 16 kHz PCM decoded from an Ogg/Opus recording.
+pub struct OpusAudioStream<R: Read + Seek> {
+    packets: PacketReader<R>,
+    decoder: Option<OpusDecoder>,
+    resampler: FftFixedIn<f32>,
+    pre_skip_remaining: usize,
+    input_buffer: Vec<f32>,
+    pending_output: VecDeque<f32>,
+    output_delay_remaining: usize,
+    expected_output: usize,
+    input_samples: usize,
+    raw_output_samples: usize,
+    output_emitted: usize,
+    end_of_input: bool,
+    finished: bool,
 }
 
-/// Decode an Ogg/Opus recording into mono 16 kHz f32 PCM.
-///
-/// The returned samples are suitable for Candle Whisper.
-pub fn load_opus(path: impl AsRef<Path>) -> Result<Audio> {
+pub fn open_opus(path: impl AsRef<Path>) -> Result<OpusAudioStream<BufReader<File>>> {
     let file = File::open(path)?;
 
-    decode_ogg_opus(BufReader::new(file))
+    OpusAudioStream::new(BufReader::new(file))
 }
 
-fn decode_ogg_opus<R>(reader: R) -> Result<Audio>
+impl<R> OpusAudioStream<R>
 where
     R: Read + Seek,
 {
-    let mut packets = PacketReader::new(reader);
+    fn new(reader: R) -> Result<Self> {
+        Ok(Self {
+            packets: PacketReader::new(reader),
+            decoder: None,
+            resampler: FftFixedIn::new(
+                OPUS_SAMPLE_RATE,
+                WHISPER_SAMPLE_RATE,
+                RESAMPLER_CHUNK,
+                1,
+                1,
+            )?,
+            pre_skip_remaining: 0,
+            input_buffer: Vec::with_capacity(RESAMPLER_CHUNK),
+            pending_output: VecDeque::with_capacity(OUTPUT_CHUNK * 2),
+            output_delay_remaining: 0,
+            expected_output: 0,
+            input_samples: 0,
+            raw_output_samples: 0,
+            output_emitted: 0,
+            end_of_input: false,
+            finished: false,
+        })
+    }
 
-    let mut decoder: Option<OpusDecoder> = None;
-    let mut pre_skip = 0usize;
-    let mut decoded_samples = Vec::<f32>::new();
+    /// Return the next bounded chunk of 16 kHz PCM, or `None` at EOF.
+    pub fn next_chunk(&mut self) -> Result<Option<Vec<f32>>> {
+        while self.pending_output.len() < OUTPUT_CHUNK && !self.finished {
+            self.fill_output()?;
+        }
 
-    while let Some(packet) = packets.read_packet()? {
-        let data = packet.data.as_slice();
+        if self.pending_output.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(self.pending_output.drain(..).collect()))
+        }
+    }
 
-        if data.starts_with(b"OpusHead") {
-            let header = parse_opus_head(data)?;
+    fn fill_output(&mut self) -> Result<()> {
+        if self.finished {
+            return Ok(());
+        }
 
-            if header.channels != 1 {
-                return Err(anyhow!(
-                    "Expected mono Opus recording, got {} channels",
-                    header.channels
-                ));
+        if !self.end_of_input {
+            let Some(packet) = self.packets.read_packet()? else {
+                self.end_of_input = true;
+                return self.flush_resampler();
+            };
+
+            let data = packet.data.as_slice();
+
+            if data.starts_with(b"OpusHead") {
+                let header = parse_opus_head(data)?;
+                if header.channels != 1 {
+                    return Err(anyhow!(
+                        "Expected mono Opus recording, got {} channels",
+                        header.channels
+                    ));
+                }
+                self.pre_skip_remaining = header.pre_skip as usize;
+                self.output_delay_remaining = self.resampler.output_delay();
+                self.decoder = Some(OpusDecoder::new(
+                    u32::try_from(OPUS_SAMPLE_RATE)?,
+                    Channels::Mono,
+                )?);
+                return Ok(());
             }
 
-            pre_skip = header.pre_skip as usize;
+            if data.starts_with(b"OpusTags") {
+                return Ok(());
+            }
 
-            decoder = Some(OpusDecoder::new(
-                u32::try_from(OPUS_SAMPLE_RATE)?,
-                Channels::Mono,
-            )?);
+            let decoder = self
+                .decoder
+                .as_mut()
+                .ok_or_else(|| anyhow!("Encountered Opus audio packet before OpusHead"))?;
+            let mut pcm = [0i16; OPUS_SAMPLE_RATE * 120 / 1000];
+            let samples = decoder.decode(data, &mut pcm, false)?;
 
-            continue;
+            let skip = self.pre_skip_remaining.min(samples);
+            self.pre_skip_remaining -= skip;
+            self.input_buffer.extend(
+                pcm[skip..samples]
+                    .iter()
+                    .map(|&sample| f32::from(sample) / 32768.0),
+            );
+            self.input_samples = self.input_samples.saturating_add(samples - skip);
+            self.expected_output = self.input_samples * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE;
+
+            self.process_full_input()
+        } else {
+            self.flush_resampler()
+        }
+    }
+
+    fn process_full_input(&mut self) -> Result<()> {
+        while self.input_buffer.len() >= RESAMPLER_CHUNK {
+            let input: Vec<f32> = self.input_buffer.drain(..RESAMPLER_CHUNK).collect();
+            let result = self.resampler.process(&[input], None)?;
+            self.append_output(&result[0]);
+        }
+        Ok(())
+    }
+
+    fn flush_resampler(&mut self) -> Result<()> {
+        if self.decoder.is_none() {
+            return Err(anyhow!("Ogg stream does not contain an OpusHead"));
+        }
+        if self.pre_skip_remaining > 0 {
+            return Err(anyhow!(
+                "Opus pre-skip ({}) exceeds decoded audio length",
+                self.pre_skip_remaining
+            ));
         }
 
-        if data.starts_with(b"OpusTags") {
-            continue;
+        self.expected_output = self.input_samples * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE;
+
+        if !self.input_buffer.is_empty() {
+            let input = std::mem::take(&mut self.input_buffer);
+            let result = self.resampler.process_partial(Some(&[input]), None)?;
+            self.append_output(&result[0]);
         }
 
-        let Some(decoder) = decoder.as_mut() else {
-            return Err(anyhow!("Encountered Opus audio packet before OpusHead"));
-        };
+        while self.raw_output_samples < self.expected_output + self.output_delay_remaining {
+            let result = self.resampler.process_partial::<Vec<f32>>(None, None)?;
+            if result[0].is_empty() {
+                return Err(anyhow!("Resampler produced no output while flushing"));
+            }
+            self.append_output(&result[0]);
+        }
 
-        // Opus permits up to 120 ms per packet at 48 kHz.
-        let mut pcm = [0i16; OPUS_SAMPLE_RATE * 120 / 1000];
-        let samples = decoder.decode(data, &mut pcm, false)?;
-
-        decoded_samples.extend(
-            pcm[..samples]
-                .iter()
-                .map(|&sample| f32::from(sample) / 32768.0),
-        );
+        self.finished = true;
+        Ok(())
     }
 
-    if decoder.is_none() {
-        return Err(anyhow!("Ogg stream does not contain an OpusHead"));
+    fn append_output(&mut self, output: &[f32]) {
+        self.raw_output_samples += output.len();
+        for &sample in output {
+            if self.output_delay_remaining > 0 {
+                self.output_delay_remaining -= 1;
+            } else if self.output_emitted < self.expected_output {
+                self.pending_output.push_back(sample);
+                self.output_emitted += 1;
+            }
+        }
     }
+}
 
-    // OpusHead's pre-skip is expressed in samples at the decoder's
-    // 48 kHz output rate.
-    if pre_skip > decoded_samples.len() {
-        return Err(anyhow!(
-            "Opus pre-skip ({pre_skip}) exceeds decoded audio length ({})",
-            decoded_samples.len()
-        ));
+pub trait AudioSource {
+    fn next_chunk(&mut self) -> Result<Option<Vec<f32>>>;
+}
+
+impl<R> AudioSource for OpusAudioStream<R>
+where
+    R: Read + Seek,
+{
+    fn next_chunk(&mut self) -> Result<Option<Vec<f32>>> {
+        OpusAudioStream::next_chunk(self)
     }
-
-    decoded_samples.drain(..pre_skip);
-
-    // tracing::debug!(
-    //     first = ?decoded.iter().take(10).collect::<Vec<_>>(),
-    //     peak = decoded
-    //         .iter()
-    //         .copied()
-    //         .map(f32::abs)
-    //         .fold(0.0, f32::max),
-    //     "Audio before resampling"
-    // );
-
-    let samples = if OPUS_SAMPLE_RATE == WHISPER_SAMPLE_RATE {
-        decoded_samples
-    } else {
-        resample_48k_to_16k(&decoded_samples)?
-    };
-
-    // {
-    //     let min = samples.iter().copied().fold(f32::INFINITY, f32::min);
-    //     let max = samples.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    //     let rms = (
-    //         samples
-    //             .iter()
-    //             .map(|x| (*x as f64) * (*x as f64))
-    //             .sum::<f64>()
-    //             / samples.len().max(1) as f64
-    //     ).sqrt();
-
-    //     tracing::debug!(
-    //         samples = samples.len(),
-    //         min,
-    //         max,
-    //         rms,
-    //         "Audio after resampling"
-    //     );
-    // }
-
-    Ok(Audio {
-        samples,
-        sample_rate: u32::try_from(WHISPER_SAMPLE_RATE)?,
-    })
 }
 
 struct OpusHead {
@@ -159,51 +225,14 @@ fn parse_opus_head(data: &[u8]) -> Result<OpusHead> {
     Ok(OpusHead { channels, pre_skip })
 }
 
-fn resample_48k_to_16k(input: &[f32]) -> Result<Vec<f32>> {
-    if input.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut resampler = FftFixedIn::<f32>::new(OPUS_SAMPLE_RATE, WHISPER_SAMPLE_RATE, 1024, 1, 1)?;
-    let output_delay = resampler.output_delay();
-
-    let mut output = Vec::with_capacity(input.len() * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE);
-
-    let mut offset = 0;
-
-    while offset < input.len() {
-        let remaining = input.len() - offset;
-        let chunk_len = remaining.min(1024);
-
-        let mut chunk = vec![0.0f32; 1024];
-        chunk[..chunk_len].copy_from_slice(&input[offset..offset + chunk_len]);
-
-        let result = resampler.process(&[chunk], None)?;
-
-        output.extend_from_slice(&result[0]);
-
-        offset += chunk_len;
-    }
-
-    // Flush enough zero-padded frames to recover samples held by the FFT overlap.
-    let expected_len = input.len() * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE;
-    while output.len() < output_delay + expected_len {
-        let result = resampler.process_partial::<Vec<f32>>(None, None)?;
-        if result[0].is_empty() {
-            return Err(anyhow!("Resampler produced no output while flushing"));
-        }
-        output.extend_from_slice(&result[0]);
-    }
-
-    output.drain(..output_delay);
-    output.truncate(expected_len);
-
-    Ok(output)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{parse_opus_head, resample_48k_to_16k};
+    use std::io::Cursor;
+
+    use ogg::{PacketWriteEndInfo, PacketWriter};
+    use opus::{Application, Channels, Encoder};
+
+    use super::{OpusAudioStream, parse_opus_head};
 
     fn header(version: u8, channels: u8, pre_skip: u16) -> Vec<u8> {
         let mut bytes = b"OpusHead".to_vec();
@@ -244,24 +273,63 @@ mod tests {
     }
 
     #[test]
-    fn resampling_empty_audio_is_empty() -> anyhow::Result<()> {
-        assert!(resample_48k_to_16k(&[])?.is_empty());
-        Ok(())
-    }
+    fn streams_opus_in_bounded_chunks_and_applies_pre_skip() -> anyhow::Result<()> {
+        let mut encoder = Encoder::new(48_000, Channels::Mono, Application::Audio)?;
+        let pre_skip = u16::try_from(encoder.get_lookahead()?)?;
+        let mut bytes = Vec::new();
+        let mut writer = PacketWriter::new(Cursor::new(&mut bytes));
+        let serial = 7;
 
-    #[test]
-    fn resampling_produces_exact_one_third_length() -> anyhow::Result<()> {
-        for length in [3072, 4096] {
-            let input = vec![0.0; length];
-            assert_eq!(resample_48k_to_16k(&input)?.len(), length / 3);
+        writer.write_packet(
+            opus_head(pre_skip),
+            serial,
+            PacketWriteEndInfo::NormalPacket,
+            0,
+        )?;
+        writer.write_packet(
+            b"OpusTags\x00\x00".to_vec(),
+            serial,
+            PacketWriteEndInfo::NormalPacket,
+            0,
+        )?;
+
+        let pcm = [0i16; 960];
+        for index in 0..40 {
+            let mut encoded = [0u8; 4_000];
+            let encoded_len = encoder.encode(&pcm, &mut encoded)?;
+            writer.write_packet(
+                encoded[..encoded_len].to_vec(),
+                serial,
+                if index == 39 {
+                    PacketWriteEndInfo::EndStream
+                } else {
+                    PacketWriteEndInfo::NormalPacket
+                },
+                u64::try_from((index + 1) * pcm.len())?,
+            )?;
         }
+        drop(writer);
+
+        let mut stream = OpusAudioStream::new(Cursor::new(bytes))?;
+        let mut output = Vec::new();
+        while let Some(chunk) = stream.next_chunk()? {
+            assert!(chunk.len() <= 16_000);
+            output.extend(chunk);
+        }
+
+        let expected = (40 * 960 - usize::from(pre_skip)) / 3;
+        assert_eq!(output.len(), expected);
+        assert!(stream.next_chunk()?.is_none());
         Ok(())
     }
 
-    #[test]
-    fn resampling_silence_remains_silent() -> anyhow::Result<()> {
-        let output = resample_48k_to_16k(&vec![0.0; 3072])?;
-        assert!(output.iter().all(|sample| sample.abs() < f32::EPSILON));
-        Ok(())
+    fn opus_head(pre_skip: u16) -> Vec<u8> {
+        let mut bytes = b"OpusHead".to_vec();
+        bytes.extend([1, 1]);
+        bytes.extend_from_slice(&pre_skip.to_le_bytes());
+        bytes.extend_from_slice(&48_000u32.to_le_bytes());
+        bytes.extend_from_slice(&0i16.to_le_bytes());
+        bytes.push(0);
+        bytes
     }
 }
