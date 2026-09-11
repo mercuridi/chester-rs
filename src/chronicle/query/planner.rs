@@ -177,17 +177,6 @@ fn wrap_wikilink_if_required(
     }
 }
 
-pub fn parse_for_question(question: &str, response: &str) -> Result<Plan> {
-    if is_definitely_unsupported_structured_request(question) {
-        return Ok(Plan::Unsupported {});
-    }
-    let plan = parse(response)?;
-    if has_unsupported_structured_modifier(question) && plan.is_structured() {
-        return Ok(Plan::Unsupported {});
-    }
-    Ok(plan)
-}
-
 pub fn parse_structured_for_question(
     question: &str,
     response: &str,
@@ -353,26 +342,21 @@ mod tests {
     fn question_safety_gate_rejects_unsafe_structured_plans() -> Result<()> {
         let structured =
             r#"{"operation":"list","note_type":"character","filters":{"life_status":"alive"}}"#;
-        assert_eq!(
-            parse_for_question("List characters who are not dead.", structured)?,
-            Plan::Unsupported {}
-        );
-        assert_eq!(
-            parse_for_question("How many draft NPCs are recorded?", structured)?,
-            Plan::Unsupported {}
-        );
-        assert_eq!(
-            parse_for_question("List characters who are not dead.", "not valid JSON")?,
-            Plan::Unsupported {}
-        );
-        assert_eq!(
-            parse_for_question("How many NPCs were alive last year?", "not valid JSON")?,
-            Plan::Unsupported {}
-        );
-        assert!(matches!(
-            parse_for_question("How many living NPCs are recorded?", structured)?,
-            Plan::List { .. } | Plan::Count { .. }
+        assert!(is_definitely_unsupported_structured_request(
+            "List characters who are not dead."
         ));
+        assert!(is_definitely_unsupported_structured_request(
+            "How many draft NPCs are recorded?"
+        ));
+        assert_eq!(
+            parse_structured_for_question(
+                "How many living NPCs are recorded?",
+                structured,
+                StructuredOperation::List,
+            )?
+            .operation()?,
+            StructuredOperation::List
+        );
         Ok(())
     }
 
@@ -390,20 +374,8 @@ mod tests {
         assert!(!is_definitely_unsupported_structured_request(
             "Give an overview of the aftermath of the rebellion."
         ));
-        assert_eq!(
-            parse_for_question(
-                "Why did the rebellion not succeed?",
-                r#"{"operation":"search"}"#
-            )?,
-            Plan::Search {}
-        );
-        assert_eq!(
-            parse_for_question(
-                "Give an overview of the aftermath of the rebellion.",
-                r#"{"operation":"synthesis"}"#
-            )?,
-            Plan::Synthesis {}
-        );
+        assert_eq!(parse(r#"{"operation":"search"}"#)?, Plan::Search {});
+        assert_eq!(parse(r#"{"operation":"synthesis"}"#)?, Plan::Synthesis {});
         Ok(())
     }
 
@@ -505,12 +477,14 @@ mod tests {
             ),
         ];
         for (question, response, expected) in cases {
-            assert_eq!(
-                parse_for_question(question, response)?,
-                expected,
-                "{question}"
-            );
+            assert_eq!(parse(response)?, expected, "{question}");
         }
+        let structured = parse_structured_for_question(
+            "How many living NPCs are recorded?",
+            r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"},{"field":"life_status","operator":"equals","value":"alive"}]}}"#,
+            StructuredOperation::Count,
+        )?;
+        assert_eq!(structured.operation()?, StructuredOperation::Count);
         Ok(())
     }
 
@@ -550,11 +524,7 @@ mod tests {
                 Plan::Clarify {} => r#"{"operation":"clarify"}"#,
                 _ => continue,
             };
-            assert_eq!(
-                parse_for_question(question, response)?,
-                expected,
-                "{question}"
-            );
+            assert_eq!(parse(response)?, expected, "{question}");
         }
         Ok(())
     }

@@ -201,86 +201,6 @@ enum Resolution {
     Ambiguous,
 }
 
-/// Resolve every frontmatter and Markdown-body wikilink in an eligible corpus.
-///
-/// `root` establishes vault-relative path aliases. Call this after scanning and
-/// configured exclusion, so excluded notes cannot be graph destinations.
-pub fn resolve(root: &Path, documents: &[Document]) -> Result<LinkResolution> {
-    let catalogue = catalogue(root, documents)?;
-    let mut outcome = LinkResolution::default();
-
-    for document in documents {
-        let source_note_id = document.metadata.id.clone();
-        let frontmatter_visibility = document_visibility(document);
-        for (field_name, value) in &document.metadata.fields {
-            for raw in frontmatter_links(value) {
-                record(
-                    &mut outcome,
-                    &catalogue,
-                    &source_note_id,
-                    LinkOrigin::Frontmatter {
-                        field_name: field_name.clone(),
-                    },
-                    frontmatter_visibility,
-                    raw,
-                );
-            }
-        }
-
-        let public_visibility = document_visibility(document);
-        for raw in extract_wikilinks(&document.public_body) {
-            record(
-                &mut outcome,
-                &catalogue,
-                &source_note_id,
-                LinkOrigin::Body,
-                public_visibility,
-                raw,
-            );
-        }
-        for secret_body in &document.secret_bodies {
-            for raw in extract_wikilinks(secret_body) {
-                record(
-                    &mut outcome,
-                    &catalogue,
-                    &source_note_id,
-                    LinkOrigin::Body,
-                    LinkVisibility::Secret,
-                    raw,
-                );
-            }
-        }
-    }
-    Ok(outcome)
-}
-
-fn catalogue(root: &Path, documents: &[Document]) -> Result<Catalogue> {
-    let mut catalogue = Catalogue::default();
-    for document in documents {
-        let note_id = &document.metadata.id;
-        Catalogue::insert(&mut catalogue.ids, identity_key(note_id), note_id);
-        let relative = document.path.strip_prefix(root).with_context(|| {
-            format!(
-                "Indexed document {} is outside corpus root {}",
-                document.path.display(),
-                root.display()
-            )
-        })?;
-        Catalogue::insert(
-            &mut catalogue.paths,
-            path_key(&relative.to_string_lossy()),
-            note_id,
-        );
-        if let Some(title) = document.path.file_stem().and_then(|title| title.to_str()) {
-            Catalogue::insert(&mut catalogue.titles, identity_key(title), note_id);
-        }
-        for alias in &document.metadata.aliases {
-            Catalogue::insert(&mut catalogue.aliases, identity_key(alias), note_id);
-        }
-    }
-    Ok(catalogue)
-}
-
 fn record(
     outcome: &mut LinkResolution,
     catalogue: &Catalogue,
@@ -444,6 +364,26 @@ mod tests {
         }
     }
 
+    fn resolve_documents(root: &Path, documents: &[Document]) -> Result<LinkResolution> {
+        let candidates = documents
+            .iter()
+            .map(|document| DocumentCandidate {
+                path: document.path.clone(),
+                metadata: document.metadata.clone(),
+                content_hash: document.content_hash.clone(),
+            })
+            .collect::<Vec<_>>();
+        let catalogue = catalogue_from_candidates(root, &candidates)?;
+        let mut outcome = LinkResolution::default();
+        for document in documents {
+            let resolved = resolve_document(&catalogue, document)?;
+            outcome.resolved.extend(resolved.resolved);
+            outcome.dangling.extend(resolved.dangling);
+            outcome.ambiguous.extend(resolved.ambiguous);
+        }
+        Ok(outcome)
+    }
+
     #[test]
     fn normalizes_alias_heading_block_and_vault_path_links() -> Result<()> {
         let root = Path::new("/vault");
@@ -469,7 +409,7 @@ mod tests {
                 "",
             ),
         ];
-        let outcome = resolve(root, &documents)?;
+        let outcome = resolve_documents(root, &documents)?;
         assert_eq!(outcome.resolved.len(), 3);
         assert!(
             outcome
@@ -521,7 +461,7 @@ mod tests {
                 "",
             ),
         ];
-        let outcome = resolve(root, &documents)?;
+        let outcome = resolve_documents(root, &documents)?;
         assert_eq!(outcome.resolved.len(), 1);
         assert_eq!(outcome.resolved[0].target_note_id, "moon");
         assert_eq!(outcome.ambiguous.len(), 1);
@@ -544,7 +484,7 @@ mod tests {
                 "location: '[[Target]]'\n",
             ),
         ];
-        let outcome = resolve(root, &documents)?;
+        let outcome = resolve_documents(root, &documents)?;
         assert_eq!(outcome.resolved.len(), 3);
         assert!(outcome.resolved.iter().any(|link| matches!(
             &link.origin,
@@ -571,7 +511,7 @@ mod tests {
             vec![],
             "",
         )];
-        let outcome = resolve(root, &documents)?;
+        let outcome = resolve_documents(root, &documents)?;
         assert!(outcome.resolved.is_empty());
         assert_eq!(outcome.dangling.len(), 1);
         assert_eq!(outcome.dangling[0].raw, "[[Missing]]");

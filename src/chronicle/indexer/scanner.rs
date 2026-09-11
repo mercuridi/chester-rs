@@ -23,12 +23,6 @@ pub struct DocumentCandidate {
     pub content_hash: String,
 }
 
-pub fn discover_directory_with_stats(
-    root: impl AsRef<Path>,
-) -> Result<(Vec<DocumentCandidate>, CorpusStats)> {
-    discover_directory_with_stats_excluding(root, &HashSet::new())
-}
-
 pub fn discover_directory_with_stats_excluding(
     root: impl AsRef<Path>,
     excluded_note_ids: &HashSet<String>,

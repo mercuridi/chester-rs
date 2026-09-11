@@ -1,15 +1,29 @@
 use anyhow::{Context, Result};
 use sqlx::Row;
-use std::{collections::HashSet, fs};
+use std::{collections::HashSet, fs, path::Path};
 
 use super::facade::{versioned_database_url, *};
 use crate::chronicle::indexer::link_resolver::{
     self, LinkOrigin, LinkResolution, LinkVisibility, ResolvedLink,
 };
+use crate::chronicle::indexer::scanner::{self, DocumentCandidate};
 use tempfile::tempdir;
 
 fn embedding(value: f32) -> Vec<f32> {
     vec![value; crate::chronicle::indexer::embedder::EMBEDDING_DIMENSIONS]
+}
+
+fn resolve_candidates(root: &Path, candidates: &[DocumentCandidate]) -> Result<LinkResolution> {
+    let catalogue = link_resolver::catalogue_from_candidates(root, candidates)?;
+    let mut outcome = LinkResolution::default();
+    for candidate in candidates {
+        let document = scanner::load_document(candidate)?;
+        let resolved = link_resolver::resolve_document(&catalogue, &document)?;
+        outcome.resolved.extend(resolved.resolved);
+        outcome.dangling.extend(resolved.dangling);
+        outcome.ambiguous.extend(resolved.ambiguous);
+    }
+    Ok(outcome)
 }
 
 fn chunks() -> Vec<IndexedChunk> {
@@ -213,10 +227,12 @@ async fn resolver_output_persists_body_and_frontmatter_provenance_with_visibilit
         "---\nid: source\ntype: character\nstatus: canon\nvisibility: mixed\ncreated: 2026-09-07\nupdated: 2026-09-07\nlocation: '[[Target]]'\n---\nPublic [[Target]].\n\n> [!secret] Private\n> Secret [[Target#Hidden]].\n",
     )?;
 
-    let (documents, _) = crate::chronicle::indexer::scanner::scan_directory_with_stats(&corpus)?;
-    let resolution = link_resolver::resolve(&corpus, &documents)?;
+    let (candidates, _) =
+        scanner::discover_directory_with_stats_excluding(&corpus, &HashSet::new())?;
+    let resolution = resolve_candidates(&corpus, &candidates)?;
     assert_eq!(resolution.resolved.len(), 3);
-    for document in &documents {
+    for candidate in &candidates {
+        let document = scanner::load_document(candidate)?;
         db.replace_note(
             &document.path.to_string_lossy(),
             &document.content_hash,
@@ -281,14 +297,13 @@ async fn excluded_dangling_and_ambiguous_links_persist_no_graph_edge() -> Result
     }
 
     let excluded = HashSet::from(["excluded".to_owned()]);
-    let (documents, _) = crate::chronicle::indexer::scanner::scan_directory_with_stats_excluding(
-        &corpus, &excluded,
-    )?;
-    let resolution = link_resolver::resolve(&corpus, &documents)?;
+    let (candidates, _) = scanner::discover_directory_with_stats_excluding(&corpus, &excluded)?;
+    let resolution = resolve_candidates(&corpus, &candidates)?;
     assert!(resolution.resolved.is_empty());
     assert_eq!(resolution.dangling.len(), 2);
     assert_eq!(resolution.ambiguous.len(), 1);
-    for document in &documents {
+    for candidate in &candidates {
+        let document = scanner::load_document(candidate)?;
         db.replace_note(
             &document.path.to_string_lossy(),
             &document.content_hash,

@@ -67,7 +67,6 @@ impl From<&crate::chronicle::config::paths::AppPaths> for DownloadConfig {
 
 #[derive(Clone, Debug)]
 pub struct DownloadedArtifact {
-    pub id: VideoId,
     pub audio_path: PathBuf,
     pub metadata: Option<Value>,
 }
@@ -149,7 +148,6 @@ impl Downloader {
                 .cloned()
                 .flatten();
             return Ok(DownloadedArtifact {
-                id,
                 audio_path: final_path,
                 metadata,
             });
@@ -173,7 +171,6 @@ impl Downloader {
             .await
             .insert(id.clone(), metadata.clone());
         Ok(DownloadedArtifact {
-            id,
             audio_path: final_path,
             metadata,
         })

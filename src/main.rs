@@ -605,6 +605,7 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
     .context("Failed to synchronize the audio library")?;
 
     info!(
+        total_tracks = sync_stats.total_tracks,
         downloaded = sync_stats.downloaded,
         failed = sync_stats.failed,
         skipped = sync_stats.skipped,
