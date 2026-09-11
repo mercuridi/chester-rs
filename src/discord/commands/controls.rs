@@ -108,7 +108,7 @@ pub async fn mix(
     for track in tracks {
         ctx.data()
             .player
-            .enqueue(guild_id, call.clone(), track, ctx.author().id, false)
+            .enqueue(guild_id, call.clone(), track, false)
             .await?;
     }
 
@@ -174,7 +174,7 @@ pub async fn queue_add(
     let started = ctx
         .data()
         .player
-        .enqueue(guild_id, call, track_info.clone(), ctx.author().id, false)
+        .enqueue(guild_id, call, track_info.clone(), false)
         .await?;
     ctx.say(if started {
         play_message(&track_info)
@@ -196,7 +196,7 @@ pub async fn queue_next(
     let started = ctx
         .data()
         .player
-        .enqueue(guild_id, call, track_info.clone(), ctx.author().id, true)
+        .enqueue(guild_id, call, track_info.clone(), true)
         .await?;
     ctx.say(if started {
         play_message(&track_info)

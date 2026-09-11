@@ -1,19 +1,11 @@
 use std::collections::VecDeque;
 
-use poise::serenity_prelude::UserId;
-
 use crate::jester::track::types::TrackInfo;
-
-/// Identifies one explicit queue insertion within a guild.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct QueueEntryId(pub u64);
 
 /// A track explicitly submitted to the guild queue.
 #[derive(Clone, Debug)]
 pub struct QueueEntry {
-    pub id: QueueEntryId,
     pub track: TrackInfo,
-    pub requested_by: Option<UserId>,
 }
 
 /// Distinguishes an immediate `/play` from an entry submitted to the queue.
@@ -71,7 +63,6 @@ pub struct HistoryEntry {
 /// Describes a state transition that may require the playback adapter to act.
 #[derive(Clone, Debug, Default)]
 pub struct QueueTransition {
-    pub previous: Option<PlaybackItem>,
     pub current: Option<PlaybackItem>,
 }
 
@@ -106,7 +97,6 @@ pub struct GuildQueue {
     repeat_cycle: VecDeque<QueueEntry>,
     history: VecDeque<HistoryEntry>,
     repeat_mode: RepeatMode,
-    next_entry_id: u64,
     history_capacity: usize,
 }
 
@@ -118,7 +108,6 @@ impl GuildQueue {
             repeat_cycle: VecDeque::new(),
             history: VecDeque::new(),
             repeat_mode: RepeatMode::Off,
-            next_entry_id: 1,
             history_capacity,
         }
     }
@@ -151,24 +140,19 @@ impl GuildQueue {
         }
 
         QueueTransition {
-            previous,
             current: self.current.clone(),
         }
     }
 
     /// Appends a track to the explicit queue, starting it when the player is idle.
-    pub fn enqueue(&mut self, track: TrackInfo, requested_by: Option<UserId>) -> QueueTransition {
-        let entry = self.new_entry(track, requested_by);
+    pub fn enqueue(&mut self, track: TrackInfo) -> QueueTransition {
+        let entry = self.new_entry(track);
         self.insert(entry, false)
     }
 
     /// Inserts a track after the current item, starting it when the player is idle.
-    pub fn enqueue_next(
-        &mut self,
-        track: TrackInfo,
-        requested_by: Option<UserId>,
-    ) -> QueueTransition {
-        let entry = self.new_entry(track, requested_by);
+    pub fn enqueue_next(&mut self, track: TrackInfo) -> QueueTransition {
+        let entry = self.new_entry(track);
         self.insert(entry, true)
     }
 
@@ -182,7 +166,6 @@ impl GuildQueue {
         if self.repeat_mode == RepeatMode::Track {
             self.current.clone_from(&previous);
             return QueueTransition {
-                previous,
                 current: self.current.clone(),
             };
         }
@@ -196,7 +179,6 @@ impl GuildQueue {
 
         self.start_next();
         QueueTransition {
-            previous,
             current: self.current.clone(),
         }
     }
@@ -214,7 +196,6 @@ impl GuildQueue {
         self.start_next();
 
         Ok(QueueTransition {
-            previous,
             current: self.current.clone(),
         })
     }
@@ -228,7 +209,6 @@ impl GuildQueue {
         }
         self.start_next();
         QueueTransition {
-            previous,
             current: self.current.clone(),
         }
     }
@@ -267,21 +247,14 @@ impl GuildQueue {
         shuffle(contiguous);
     }
 
-    fn new_entry(&mut self, track: TrackInfo, requested_by: Option<UserId>) -> QueueEntry {
-        let entry = QueueEntry {
-            id: QueueEntryId(self.next_entry_id),
-            track,
-            requested_by,
-        };
-        self.next_entry_id = self.next_entry_id.wrapping_add(1).max(1);
-        entry
+    fn new_entry(&self, track: TrackInfo) -> QueueEntry {
+        QueueEntry { track }
     }
 
     fn insert(&mut self, entry: QueueEntry, next: bool) -> QueueTransition {
         if self.current.is_none() {
             self.current = Some(PlaybackItem::queued(entry));
             return QueueTransition {
-                previous: None,
                 current: self.current.clone(),
             };
         }
@@ -355,10 +328,9 @@ mod tests {
     fn first_queued_track_starts_and_later_entries_remain_upcoming() {
         let mut queue = GuildQueue::default();
 
-        let first = queue.enqueue(track("first"), None);
-        let second = queue.enqueue(track("second"), None);
+        let first = queue.enqueue(track("first"));
+        let second = queue.enqueue(track("second"));
 
-        assert!(first.previous.is_none());
         assert_eq!(first.current.as_ref().unwrap().track.title, "first");
         assert!(second.current.is_none());
         assert_eq!(current_title(&queue), Some("first"));
@@ -368,9 +340,9 @@ mod tests {
     #[test]
     fn enqueue_next_inserts_before_existing_upcoming_tracks() {
         let mut queue = GuildQueue::default();
-        queue.enqueue(track("current"), None);
-        queue.enqueue(track("later"), None);
-        queue.enqueue_next(track("next"), None);
+        queue.enqueue(track("current"));
+        queue.enqueue(track("later"));
+        queue.enqueue_next(track("next"));
 
         assert_eq!(upcoming_titles(&queue), vec!["next", "later"]);
     }
@@ -378,12 +350,11 @@ mod tests {
     #[test]
     fn play_now_replaces_current_records_it_and_preserves_the_queue() {
         let mut queue = GuildQueue::default();
-        queue.enqueue(track("queued current"), None);
-        queue.enqueue(track("queued next"), None);
+        queue.enqueue(track("queued current"));
+        queue.enqueue(track("queued next"));
 
-        let transition = queue.play_now(track("direct"));
+        queue.play_now(track("direct"));
 
-        assert_eq!(transition.previous.unwrap().track.title, "queued current");
         assert_eq!(current_title(&queue), Some("direct"));
         assert_eq!(upcoming_titles(&queue), vec!["queued next"]);
         assert_eq!(queue.history().len(), 1);
@@ -394,15 +365,13 @@ mod tests {
     #[test]
     fn completing_tracks_advances_then_becomes_idle_when_repeat_is_off() {
         let mut queue = GuildQueue::default();
-        queue.enqueue(track("first"), None);
-        queue.enqueue(track("second"), None);
+        queue.enqueue(track("first"));
+        queue.enqueue(track("second"));
 
         let first_completion = queue.complete_current();
         let second_completion = queue.complete_current();
 
-        assert_eq!(first_completion.previous.unwrap().track.title, "first");
         assert_eq!(first_completion.current.unwrap().track.title, "second");
-        assert_eq!(second_completion.previous.unwrap().track.title, "second");
         assert!(second_completion.current.is_none());
         assert!(queue.current().is_none());
         assert_eq!(
@@ -418,13 +387,12 @@ mod tests {
     #[test]
     fn repeat_track_restarts_without_writing_history_or_advancing() {
         let mut queue = GuildQueue::default();
-        queue.enqueue(track("first"), None);
-        queue.enqueue(track("second"), None);
+        queue.enqueue(track("first"));
+        queue.enqueue(track("second"));
         queue.set_repeat_mode(RepeatMode::Track);
 
         let transition = queue.complete_current();
 
-        assert_eq!(transition.previous.unwrap().track.title, "first");
         assert_eq!(transition.current.unwrap().track.title, "first");
         assert_eq!(upcoming_titles(&queue), vec!["second"]);
         assert!(queue.history().is_empty());
@@ -433,8 +401,8 @@ mod tests {
     #[test]
     fn repeat_queue_cycles_only_completed_explicit_queue_entries() {
         let mut queue = GuildQueue::default();
-        queue.enqueue(track("first"), None);
-        queue.enqueue(track("second"), None);
+        queue.enqueue(track("first"));
+        queue.enqueue(track("second"));
         queue.set_repeat_mode(RepeatMode::Queue);
 
         queue.play_now(track("direct interruption"));
@@ -453,7 +421,7 @@ mod tests {
     #[test]
     fn skip_requires_an_upcoming_track_and_does_not_mutate_when_absent() {
         let mut queue = GuildQueue::default();
-        queue.enqueue(track("only"), None);
+        queue.enqueue(track("only"));
 
         assert!(matches!(queue.skip(), Err(QueueError::NoQueuedTrackToSkip)));
         assert_eq!(current_title(&queue), Some("only"));
@@ -463,13 +431,12 @@ mod tests {
     #[test]
     fn skip_bypasses_repeat_track_and_records_the_skipped_item() {
         let mut queue = GuildQueue::default();
-        queue.enqueue(track("first"), None);
-        queue.enqueue(track("second"), None);
+        queue.enqueue(track("first"));
+        queue.enqueue(track("second"));
         queue.set_repeat_mode(RepeatMode::Track);
 
         let transition = queue.skip().unwrap();
 
-        assert_eq!(transition.previous.unwrap().track.title, "first");
         assert_eq!(transition.current.unwrap().track.title, "second");
         assert_eq!(current_title(&queue), Some("second"));
         assert_eq!(queue.history()[0].outcome, HistoryOutcome::Skipped);
@@ -478,12 +445,11 @@ mod tests {
     #[test]
     fn failed_current_is_recorded_and_advances_to_the_next_item() {
         let mut queue = GuildQueue::default();
-        queue.enqueue(track("failed"), None);
-        queue.enqueue(track("next"), None);
+        queue.enqueue(track("failed"));
+        queue.enqueue(track("next"));
 
         let transition = queue.fail_current();
 
-        assert_eq!(transition.previous.unwrap().track.title, "failed");
         assert_eq!(transition.current.unwrap().track.title, "next");
         assert_eq!(current_title(&queue), Some("next"));
         assert_eq!(queue.history()[0].outcome, HistoryOutcome::Failed);
@@ -492,10 +458,10 @@ mod tests {
     #[test]
     fn remove_and_move_use_one_based_upcoming_positions() {
         let mut queue = GuildQueue::default();
-        queue.enqueue(track("current"), None);
-        queue.enqueue(track("one"), None);
-        queue.enqueue(track("two"), None);
-        queue.enqueue(track("three"), None);
+        queue.enqueue(track("current"));
+        queue.enqueue(track("one"));
+        queue.enqueue(track("two"));
+        queue.enqueue(track("three"));
 
         queue.move_entry(3, 1).unwrap();
         let removed = queue.remove(2).unwrap();
@@ -515,9 +481,9 @@ mod tests {
     #[test]
     fn clear_and_shuffle_apply_to_upcoming_tracks_only() {
         let mut queue = GuildQueue::default();
-        queue.enqueue(track("current"), None);
-        queue.enqueue(track("one"), None);
-        queue.enqueue(track("two"), None);
+        queue.enqueue(track("current"));
+        queue.enqueue(track("one"));
+        queue.enqueue(track("two"));
 
         queue.shuffle_with(|entries| entries.reverse());
         assert_eq!(current_title(&queue), Some("current"));

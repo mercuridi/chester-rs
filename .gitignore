@@ -9,29 +9,23 @@ logs/
 *.log
 tmp/
 
-# rebuild roadmaps
-docs/rebuild-plan
-docs/tech-debt-audit-2026-09-11.md
-
-# chronicle
-docs/chronicle/
+# Runtime data
+/.chronicle/
 /data/*.sqlite3
 /data/*.sqlite3-*
+/audio/
 corpus/*
 
-config.toml
-manifest.toml
-transcript.md
+/config.toml
+/manifest.toml
+/transcript.md
 .env
 *.dca
 *.m4a
 *.mp3
 *.mp4
-*.json
 *.webm
 *.opus
-*.txt
-!/scripts/requirements-taxonomy.txt
 .venv
 
 libs

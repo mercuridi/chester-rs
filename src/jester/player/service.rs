@@ -8,7 +8,7 @@ use std::{
     },
 };
 
-use poise::serenity_prelude::{GuildId, UserId};
+use poise::serenity_prelude::GuildId;
 use songbird::{
     Call, Event, EventContext, EventHandler, TrackEvent,
     driver::Bitrate,
@@ -160,16 +160,15 @@ impl PlayerService {
         guild_id: GuildId,
         call: Arc<Mutex<Call>>,
         track: TrackInfo,
-        requested_by: UserId,
         next: bool,
     ) -> Result<bool> {
         let state = self.player_state(guild_id).await;
         let mut state = state.lock().await;
         state.call = Some(call);
         let transition = if next {
-            state.queue.enqueue_next(track, Some(requested_by))
+            state.queue.enqueue_next(track)
         } else {
-            state.queue.enqueue(track, Some(requested_by))
+            state.queue.enqueue(track)
         };
         let started = transition.current.is_some();
         self.start_transition(guild_id, &mut state, transition)
@@ -459,13 +458,7 @@ mod tests {
         let guild_id = GuildId::new(2);
         assert!(
             player
-                .enqueue(
-                    guild_id,
-                    call(guild_id),
-                    track("missing"),
-                    UserId::new(1),
-                    false
-                )
+                .enqueue(guild_id, call(guild_id), track("missing"), false)
                 .await
                 .is_err()
         );
