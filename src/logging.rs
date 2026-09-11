@@ -122,7 +122,7 @@ pub fn build_writer(directory: &Path, _log_level: &str) -> Result<LogWriter> {
     let worker_state = Arc::clone(&state);
     let worker = thread::Builder::new()
         .name("chester-log-writer".into())
-        .spawn(move || write_loop(worker_state, appender))
+        .spawn(move || write_loop(worker_state.as_ref(), appender))
         .context("Failed to start logfile writer")?;
     Ok(LogWriter {
         writer: QueueMakeWriter {
@@ -133,10 +133,10 @@ pub fn build_writer(directory: &Path, _log_level: &str) -> Result<LogWriter> {
     })
 }
 
-fn write_loop(state: Arc<(Mutex<QueueState>, Condvar)>, mut appender: RollingFileAppender) {
+fn write_loop(state: &(Mutex<QueueState>, Condvar), mut appender: RollingFileAppender) {
     loop {
         let item = {
-            let (lock, notify) = &*state;
+            let (lock, notify) = state;
             let mut state = match lock.lock() {
                 Ok(state) => state,
                 Err(_) => return,

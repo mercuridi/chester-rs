@@ -194,7 +194,7 @@ impl Indexer {
         let mut link_resolution = link_resolver::LinkResolution::default();
         for candidate in &candidates {
             let document = scanner::load_document(candidate)?;
-            let resolved = link_resolver::resolve_document(&resolver_catalogue, &document)?;
+            let resolved = link_resolver::resolve_document(&resolver_catalogue, &document);
             link_resolution.resolved.extend(resolved.resolved);
             link_resolution.dangling.extend(resolved.dangling);
             link_resolution.ambiguous.extend(resolved.ambiguous);

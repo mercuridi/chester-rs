@@ -146,13 +146,13 @@ impl GuildQueue {
 
     /// Appends a track to the explicit queue, starting it when the player is idle.
     pub fn enqueue(&mut self, track: TrackInfo) -> QueueTransition {
-        let entry = self.new_entry(track);
+        let entry = Self::new_entry(track);
         self.insert(entry, false)
     }
 
     /// Inserts a track after the current item, starting it when the player is idle.
     pub fn enqueue_next(&mut self, track: TrackInfo) -> QueueTransition {
-        let entry = self.new_entry(track);
+        let entry = Self::new_entry(track);
         self.insert(entry, true)
     }
 
@@ -247,7 +247,7 @@ impl GuildQueue {
         shuffle(contiguous);
     }
 
-    fn new_entry(&self, track: TrackInfo) -> QueueEntry {
+    fn new_entry(track: TrackInfo) -> QueueEntry {
         QueueEntry { track }
     }
 

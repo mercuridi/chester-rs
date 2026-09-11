@@ -121,10 +121,7 @@ pub fn catalogue_from_candidates(
     Ok(ResolverCatalogue(catalogue))
 }
 
-pub fn resolve_document(
-    catalogue: &ResolverCatalogue,
-    document: &Document,
-) -> Result<LinkResolution> {
+pub fn resolve_document(catalogue: &ResolverCatalogue, document: &Document) -> LinkResolution {
     let mut outcome = LinkResolution::default();
     let source_note_id = document.metadata.id.clone();
     let visibility = document_visibility(document);
@@ -164,7 +161,7 @@ pub fn resolve_document(
             );
         }
     }
-    Ok(outcome)
+    outcome
 }
 
 impl Catalogue {
@@ -376,7 +373,7 @@ mod tests {
         let catalogue = catalogue_from_candidates(root, &candidates)?;
         let mut outcome = LinkResolution::default();
         for document in documents {
-            let resolved = resolve_document(&catalogue, document)?;
+            let resolved = resolve_document(&catalogue, document);
             outcome.resolved.extend(resolved.resolved);
             outcome.dangling.extend(resolved.dangling);
             outcome.ambiguous.extend(resolved.ambiguous);

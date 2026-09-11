@@ -18,7 +18,7 @@ fn resolve_candidates(root: &Path, candidates: &[DocumentCandidate]) -> Result<L
     let mut outcome = LinkResolution::default();
     for candidate in candidates {
         let document = scanner::load_document(candidate)?;
-        let resolved = link_resolver::resolve_document(&catalogue, &document)?;
+        let resolved = link_resolver::resolve_document(&catalogue, &document);
         outcome.resolved.extend(resolved.resolved);
         outcome.dangling.extend(resolved.dangling);
         outcome.ambiguous.extend(resolved.ambiguous);
