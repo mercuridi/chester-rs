@@ -1,13 +1,11 @@
+use anyhow::{Context, Result, anyhow};
 use std::fmt::Write as _;
 
 use sqlx::SqlitePool;
 
-use crate::{
-    discord::context::Error,
-    jester::{
-        db::taxonomy::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES},
-        track::types::{TrackInfo, VideoId},
-    },
+use crate::jester::{
+    db::taxonomy::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES},
+    track::types::{TrackInfo, VideoId},
 };
 
 pub const MIX_LIMIT: usize = 25;
@@ -28,7 +26,7 @@ pub struct MixFilter {
     pub exclude: Vec<MixTag>,
 }
 
-pub fn parse_filter(input: Option<&str>) -> Result<Vec<MixTag>, Error> {
+pub fn parse_filter(input: Option<&str>) -> Result<Vec<MixTag>> {
     input
         .unwrap_or_default()
         .split(',')
@@ -38,13 +36,13 @@ pub fn parse_filter(input: Option<&str>) -> Result<Vec<MixTag>, Error> {
         .collect()
 }
 
-pub fn parse_tag(raw: &str) -> Result<MixTag, Error> {
+pub fn parse_tag(raw: &str) -> Result<MixTag> {
     let (namespace, value) = raw
         .split_once('=')
         .map_or((None, raw), |(namespace, value)| (Some(namespace), value));
     let value = value.trim().to_lowercase();
     if value.is_empty() {
-        return Err(format!("Empty mix tag in `{raw}`.").into());
+        return Err(anyhow!("Empty mix tag in `{raw}`."));
     }
 
     let namespace = match namespace.map(str::trim) {
@@ -65,16 +63,14 @@ pub fn parse_tag(raw: &str) -> Result<MixTag, Error> {
         Some("environment") if ENVIRONMENTS.contains(&value.as_str()) => MixTag::Environment(value),
         Some("label") => MixTag::Label(value),
         Some(_namespace) => {
-            return Err(format!(
+            return Err(anyhow!(
                 "Unknown or invalid mix tag `{raw}`. Use mood, intensity, function, texture, environment, or label."
-            )
-            .into());
+            ));
         }
         None => {
-            return Err(format!(
+            return Err(anyhow!(
                 "Unknown mix tag `{raw}`. Custom labels must use the `label=` prefix."
-            )
-            .into());
+            ));
         }
     };
 
@@ -85,7 +81,7 @@ pub async fn fetch_mix_tracks(
     db_pool: &SqlitePool,
     filter: &MixFilter,
     limit: usize,
-) -> Result<Vec<TrackInfo>, Error> {
+) -> Result<Vec<TrackInfo>> {
     let mut sql = String::from(
         "SELECT tracks.id, tracks.track_title, artists.artist, origins.origin
          FROM tracks
@@ -105,16 +101,16 @@ pub async fn fetch_mix_tracks(
     }
     sql.push_str(" ORDER BY RANDOM() LIMIT ?");
 
-    let mut query = sqlx::query_as::<_, (String, String, String, String)>(&sql);
+    let mut query = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(&sql);
     for value in values {
         query = query.bind(value);
     }
-    query = query.bind(i64::try_from(limit).map_err(|_| "Mix size is too large.")?);
+    query = query.bind(i64::try_from(limit).map_err(|_| anyhow!("Mix size is too large."))?);
 
     Ok(query
         .fetch_all(db_pool)
         .await
-        .map_err(|error| format!("Mix query failed: {error}"))?
+        .context("Mix query failed")?
         .into_iter()
         .map(|(id, title, artist, origin)| TrackInfo {
             id: VideoId::from(id),

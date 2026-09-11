@@ -1,3 +1,4 @@
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::SqlitePool;
@@ -8,7 +9,6 @@ use std::{
 };
 
 use crate::{
-    discord::context::Error,
     jester::db::repository::{insert_new_track_with_metadata, lookup_track},
     jester::track::{
         metadata::process_ytdlp_json_at,
@@ -59,7 +59,7 @@ pub async fn download_track(
     track_origin: Option<String>,
     track_title: Option<String>,
     config: DownloadConfig,
-) -> Result<TrackInfo, Error> {
+) -> Result<TrackInfo> {
     download_track_with(
         db_pool,
         yt_link,
@@ -80,8 +80,9 @@ pub async fn download_track_with(
     track_title: Option<String>,
     executor: Arc<dyn DownloadExecutor>,
     config: DownloadConfig,
-) -> Result<TrackInfo, Error> {
-    let video_id = VideoId::from(get_youtube_id(&yt_link).ok_or("Invalid YouTube link")?);
+) -> Result<TrackInfo> {
+    let video_id =
+        VideoId::from(get_youtube_id(&yt_link).ok_or_else(|| anyhow!("Invalid YouTube link"))?);
     info!(track_id = %video_id.as_str(), "Starting track download");
 
     // Guard against duplicate downloads
@@ -109,41 +110,38 @@ pub async fn download_track_with(
     let output = executor
         .output(&config.ytdlp_path.to_string_lossy(), &args)
         .await
-        .map_err(|e| format!("Failed to execute yt-dlp: {e}"))?;
+        .context("Failed to execute yt-dlp")?;
 
     if !output.status.success() {
         warn!(track_id = %video_id.as_str(), stderr = %String::from_utf8_lossy(&output.stderr), "yt-dlp returned non-zero exit");
-        return Err(format!(
+        return Err(anyhow!(
             "yt-dlp failed with error: {}",
             String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
+        ));
     }
 
     let staged_id = format!("{}.part", video_id.as_str());
-    let staged_audio = config.audio_dir.join(format!("{}.mp3", staged_id));
+    let staged_audio = config.audio_dir.join(format!("{staged_id}.mp3"));
     let final_audio = config.audio_dir.join(format!("{}.mp3", video_id.as_str()));
 
     let slim = match process_ytdlp_json_at(&config.audio_dir, &staged_id) {
         Ok(slim) => slim,
         Err(error) => {
             cleanup_staged_download(&config.audio_dir, &staged_id).await;
-            return Err(format!(
+            return Err(anyhow!(
                 "Failed to process metadata JSON for video ID {}: {}",
                 video_id.as_str(),
                 error
-            )
-            .into());
+            ));
         }
     };
 
     if !tokio::fs::try_exists(&staged_audio).await.unwrap_or(false) {
         cleanup_staged_download(&config.audio_dir, &staged_id).await;
-        return Err(format!(
+        return Err(anyhow!(
             "Downloaded audio file was not found for video ID {}",
             video_id.as_str()
-        )
-        .into());
+        ));
     }
 
     let title = track_title.unwrap_or_else(|| {
@@ -153,12 +151,15 @@ pub async fn download_track_with(
             .to_string()
     });
 
-    let artist = track_artist.unwrap_or_else(|| "No artist provided".to_string());
-
-    let origin = track_origin.unwrap_or_else(|| "No origin provided".to_string());
-
-    if let Err(error) =
-        insert_new_track_with_metadata(db_pool, &video_id, &slim, &title, &artist, &origin).await
+    if let Err(error) = insert_new_track_with_metadata(
+        db_pool,
+        &video_id,
+        &slim,
+        &title,
+        track_artist.as_deref(),
+        track_origin.as_deref(),
+    )
+    .await
     {
         cleanup_staged_download(&config.audio_dir, &staged_id).await;
         return Err(error);
@@ -166,27 +167,26 @@ pub async fn download_track_with(
 
     if let Err(error) = tokio::fs::rename(&staged_audio, &final_audio).await {
         cleanup_staged_download(&config.audio_dir, &staged_id).await;
-        return Err(format!(
+        return Err(anyhow!(
             "Failed to finalize downloaded audio for video ID {}: {}",
             video_id.as_str(),
             error
-        )
-        .into());
+        ));
     }
 
-    info!(track_id = %video_id.as_str(), %title, %artist, %origin, "Track downloaded and added to library");
+    info!(track_id = %video_id.as_str(), %title, artist = ?track_artist, origin = ?track_origin, "Track downloaded and added to library");
 
     Ok(TrackInfo {
         id: video_id,
         title,
-        artist,
-        origin,
+        artist: track_artist,
+        origin: track_origin,
     })
 }
 
 async fn cleanup_staged_download(audio_dir: &std::path::Path, staged_id: &str) {
-    let _ = tokio::fs::remove_file(audio_dir.join(format!("{}.mp3", staged_id))).await;
-    let _ = tokio::fs::remove_file(audio_dir.join(format!("{}.info.json", staged_id))).await;
+    let _ = tokio::fs::remove_file(audio_dir.join(format!("{staged_id}.mp3"))).await;
+    let _ = tokio::fs::remove_file(audio_dir.join(format!("{staged_id}.info.json"))).await;
 }
 
 #[cfg(test)]
@@ -414,8 +414,8 @@ mod tests {
         .await?;
 
         assert_eq!(track.title, "Source title");
-        assert_eq!(track.artist, "Artist");
-        assert_eq!(track.origin, "Origin");
+        assert_eq!(track.artist.as_deref(), Some("Artist"));
+        assert_eq!(track.origin.as_deref(), Some("Origin"));
         assert!(!directory.path().join("dQw4w9WgXcQ.part.info.json").exists());
         assert!(directory.path().join("dQw4w9WgXcQ.mp3").exists());
         assert!(!directory.path().join("dQw4w9WgXcQ.part.mp3").exists());

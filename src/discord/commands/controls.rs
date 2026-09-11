@@ -23,7 +23,9 @@ pub fn pause_message(resumed: bool) -> &'static str {
 fn play_message(track: &crate::jester::track::types::TrackInfo) -> String {
     format!(
         "Now playing: `{}` by `{}`, from `{}`.",
-        track.title, track.artist, track.origin
+        track.title,
+        track.artist.as_deref().unwrap_or("unknown artist"),
+        track.origin.as_deref().unwrap_or("unknown origin")
     )
 }
 
@@ -33,7 +35,9 @@ fn now_playing_message(track: Option<&crate::jester::track::types::TrackInfo>) -
         |track| {
             format!(
                 "Now Playing:\n**Title:** {}\n**Artist:** {}\n**Origin:** {}",
-                track.title, track.artist, track.origin
+                track.title,
+                track.artist.as_deref().unwrap_or("unknown artist"),
+                track.origin.as_deref().unwrap_or("unknown origin")
             )
         },
     )
@@ -97,7 +101,13 @@ pub async fn mix(
     let count = tracks.len();
     let next_track = tracks
         .first()
-        .map(|track| format!("`{}` by `{}`", track.title, track.artist))
+        .map(|track| {
+            format!(
+                "`{}` by `{}`",
+                track.title,
+                track.artist.as_deref().unwrap_or("unknown artist")
+            )
+        })
         .ok_or("Mix unexpectedly contained no tracks.")?;
     for track in tracks {
         ctx.data()

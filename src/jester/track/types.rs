@@ -3,8 +3,8 @@
 pub struct TrackInfo {
     pub id: VideoId,
     pub title: String,
-    pub artist: String,
-    pub origin: String,
+    pub artist: Option<String>,
+    pub origin: Option<String>,
 }
 
 // Domain types - semantic safety to prevent mixing incompatible values

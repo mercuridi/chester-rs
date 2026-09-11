@@ -15,8 +15,8 @@ CREATE TABLE IF NOT EXISTS tracks (
     upload_date TEXT NOT NULL,
     yt_title TEXT NOT NULL,
     track_title TEXT NOT NULL,
-    artist_id INTEGER NOT NULL,
-    origin_id INTEGER NOT NULL,
+    artist_id INTEGER,
+    origin_id INTEGER,
     mood TEXT CHECK (mood IS NULL OR mood IN (
         'serene', 'warm', 'playful', 'whimsical', 'hopeful', 'wistful',
         'somber', 'mysterious', 'eerie', 'ominous', 'menacing', 'tense',
@@ -70,6 +70,3 @@ CREATE INDEX IF NOT EXISTS idx_tracks_lower_title ON tracks(LOWER(track_title));
 CREATE INDEX IF NOT EXISTS idx_tracks_mood_intensity ON tracks(mood, intensity);
 CREATE INDEX IF NOT EXISTS idx_track_environments_environment ON track_environments(environment);
 CREATE INDEX IF NOT EXISTS idx_track_labels_lower ON track_labels(LOWER(label));
-
-INSERT OR IGNORE INTO artists (artist) VALUES ('No artist provided');
-INSERT OR IGNORE INTO origins (origin) VALUES ('No origin provided');

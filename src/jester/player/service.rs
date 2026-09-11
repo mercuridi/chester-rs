@@ -1,3 +1,4 @@
+use anyhow::{Result, anyhow};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -17,14 +18,11 @@ use songbird::{
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
-use crate::{
-    discord::context::Error,
-    jester::{
-        player::queue::{
-            GuildQueue, HistoryEntry, PlaybackItem, QueueEntry, QueueTransition, RepeatMode,
-        },
-        track::types::TrackInfo,
+use crate::jester::{
+    player::queue::{
+        GuildQueue, HistoryEntry, PlaybackItem, QueueEntry, QueueTransition, RepeatMode,
     },
+    track::types::TrackInfo,
 };
 
 struct ActivePlayback {
@@ -65,7 +63,7 @@ impl PlayerService {
         guild_id: GuildId,
         call: Arc<Mutex<Call>>,
         track: TrackInfo,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let _operation = self.operation_lock.lock().await;
         self.calls.lock().await.insert(guild_id, call.clone());
         self.stop_active(guild_id).await;
@@ -86,7 +84,7 @@ impl PlayerService {
         track: TrackInfo,
         requested_by: UserId,
         next: bool,
-    ) -> Result<bool, Error> {
+    ) -> Result<bool> {
         let _operation = self.operation_lock.lock().await;
         self.calls.lock().await.insert(guild_id, call.clone());
         let transition = {
@@ -103,7 +101,7 @@ impl PlayerService {
         Ok(started)
     }
 
-    pub async fn skip(self: &Arc<Self>, guild_id: GuildId) -> Result<TrackInfo, Error> {
+    pub async fn skip(self: &Arc<Self>, guild_id: GuildId) -> Result<TrackInfo> {
         let _operation = self.operation_lock.lock().await;
         let call = self
             .calls
@@ -111,7 +109,7 @@ impl PlayerService {
             .await
             .get(&guild_id)
             .cloned()
-            .ok_or("No track is currently playing.")?;
+            .ok_or_else(|| anyhow!("No track is currently playing."))?;
         let transition = self
             .queues
             .lock()
@@ -122,7 +120,7 @@ impl PlayerService {
         let next = transition
             .current
             .as_ref()
-            .ok_or("No queued track is available to skip to.")?
+            .ok_or_else(|| anyhow!("No queued track is available to skip to."))?
             .track
             .clone();
         self.stop_active(guild_id).await;
@@ -155,7 +153,7 @@ impl PlayerService {
         &self,
         guild_id: GuildId,
         position: usize,
-    ) -> Result<TrackInfo, Error> {
+    ) -> Result<TrackInfo> {
         Ok(self
             .queues
             .lock()
@@ -165,12 +163,7 @@ impl PlayerService {
             .remove(position)?
             .track)
     }
-    pub async fn move_queue_entry(
-        &self,
-        guild_id: GuildId,
-        from: usize,
-        to: usize,
-    ) -> Result<(), Error> {
+    pub async fn move_queue_entry(&self, guild_id: GuildId, from: usize, to: usize) -> Result<()> {
         self.queues
             .lock()
             .await
@@ -205,11 +198,11 @@ impl PlayerService {
             .set_repeat_mode(mode);
     }
 
-    pub async fn pause(&self, guild_id: GuildId) -> Result<bool, Error> {
+    pub async fn pause(&self, guild_id: GuildId) -> Result<bool> {
         let handles = self.handles.lock().await;
         let active = handles
             .get(&guild_id)
-            .ok_or("No track is currently playing.")?;
+            .ok_or_else(|| anyhow!("No track is currently playing."))?;
         let state = active.handle.get_info().await?;
         if state.playing == songbird::tracks::PlayMode::Play {
             active.handle.pause()?;
@@ -239,7 +232,7 @@ impl PlayerService {
         guild_id: GuildId,
         call: Arc<Mutex<Call>>,
         transition: QueueTransition,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         if let Some(item) = transition.current {
             self.start_item(guild_id, call, item).await?;
             info!(?guild_id, "Started playback");
@@ -252,7 +245,7 @@ impl PlayerService {
         guild_id: GuildId,
         call: Arc<Mutex<Call>>,
         item: PlaybackItem,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let path = self
             .audio_dir
             .join(format!("{}.mp3", item.track.id.as_str()));
@@ -287,11 +280,7 @@ impl PlayerService {
         }
     }
 
-    async fn handle_track_end(
-        self: &Arc<Self>,
-        guild_id: GuildId,
-        playback_id: u64,
-    ) -> Result<(), Error> {
+    async fn handle_track_end(self: &Arc<Self>, guild_id: GuildId, playback_id: u64) -> Result<()> {
         let _operation = self.operation_lock.lock().await;
         let is_current = self
             .handles

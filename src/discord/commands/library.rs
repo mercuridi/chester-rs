@@ -2,8 +2,8 @@ use crate::discord::constants::{ELLIPSIS, MAX_RESULTS_PER_PAGE, META_MAX_CHARS, 
 
 use crate::discord::context::{Error, PoiseContext};
 use crate::jester::db::repository::{
-    fetch_library_all, fetch_library_by_artist, fetch_library_by_incomplete,
-    fetch_library_by_origin, fetch_library_by_tag,
+    LibraryGroupEntry, LibraryTrack, fetch_library_all, fetch_library_by_artist,
+    fetch_library_by_incomplete, fetch_library_by_origin, fetch_library_by_tag,
 };
 
 /// Top-level library command
@@ -51,24 +51,30 @@ async fn incomplete(ctx: PoiseContext<'_>) -> Result<(), Error> {
 async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error> {
     let db_pool = &ctx.data().db_pool;
 
-    let (raw_data, grouped) = match mode {
-        "artist" => (fetch_library_by_artist(db_pool).await?, true),
-        "origin" => (fetch_library_by_origin(db_pool).await?, true),
-        "taxonomy" => (fetch_library_by_tag(db_pool).await?, true),
-        "incomplete" => (fetch_library_by_incomplete(db_pool).await?, false),
-        _ => (fetch_library_all(db_pool).await?, false),
+    let (lines, page_mode) = match mode {
+        "artist" => (
+            format_grouped(fetch_library_by_artist(db_pool).await?),
+            "grouped",
+        ),
+        "origin" => (
+            format_grouped(fetch_library_by_origin(db_pool).await?),
+            "grouped",
+        ),
+        "taxonomy" => (
+            format_grouped(fetch_library_by_tag(db_pool).await?),
+            "grouped",
+        ),
+        "incomplete" => (
+            format_flat(fetch_library_by_incomplete(db_pool).await?),
+            "flat",
+        ),
+        _ => (format_flat(fetch_library_all(db_pool).await?), "flat"),
     };
 
-    if raw_data.is_empty() {
+    if lines.is_empty() {
         poise::say_reply(ctx, "No results found.").await?;
         return Ok(());
     }
-
-    let (lines, page_mode) = if grouped {
-        (format_grouped(raw_data), "grouped")
-    } else {
-        (format_flat(raw_data), "flat")
-    };
 
     let pages = paginate(&lines, page_mode);
     let page_refs: Vec<&str> = pages.iter().map(String::as_str).collect();
@@ -91,12 +97,12 @@ fn trunc(s: &str, max: usize) -> String {
 }
 
 /// Join non-empty, non-placeholder parts with " · ".
-fn meta_line(parts: &[&str]) -> String {
-    let placeholders = ["No artist provided", "No origin provided", "No tags", ""];
+fn meta_line(parts: impl IntoIterator<Item = Option<String>>) -> String {
     parts
-        .iter()
-        .filter(|&&p| !placeholders.contains(&p))
-        .map(|&p| trunc(p, META_MAX_CHARS))
+        .into_iter()
+        .flatten()
+        .filter(|p| !p.is_empty())
+        .map(|p| trunc(&p, META_MAX_CHARS))
         .collect::<Vec<_>>()
         .join(" · ")
 }
@@ -109,21 +115,14 @@ fn meta_line(parts: &[&str]) -> String {
 /// 1. Track Title
 ///    Artist · Origin · tag1, tag2
 /// ```
-fn format_flat(rows: Vec<Vec<String>>) -> Vec<String> {
+fn format_flat(rows: Vec<LibraryTrack>) -> Vec<String> {
     let num_width = rows.len().to_string().len();
     rows.into_iter()
         .enumerate()
-        .map(|(i, cols)| {
-            // cols: [title, artist, origin, tags?]  or  [title, artist, origin]
+        .map(|(i, row)| {
             let num = format!("{:>width$}.", i + 1, width = num_width);
-            let title = trunc(cols.first().map_or("—", String::as_str), TITLE_MAX_CHARS);
-            let meta_parts: Vec<&str> = cols
-                .get(1..)
-                .unwrap_or_default()
-                .iter()
-                .map(String::as_str)
-                .collect();
-            let meta = meta_line(&meta_parts);
+            let title = trunc(&row.title, TITLE_MAX_CHARS);
+            let meta = meta_line([row.artist, row.origin, row.taxonomy]);
             let indent = " ".repeat(num_width + 2 + 2); // lines up under the title plus two more spaces for visual separation
             if meta.is_empty() {
                 format!("{num} {title}\n")
@@ -141,8 +140,7 @@ fn format_flat(rows: Vec<Vec<String>>) -> Vec<String> {
 ///  1. Track Title
 ///  2. Another Title
 /// ```
-fn format_grouped(rows: Vec<Vec<String>>) -> Vec<String> {
-    // rows: [group_key, title]
+fn format_grouped(rows: Vec<LibraryGroupEntry>) -> Vec<String> {
     // We number tracks globally and emit a group header whenever the key changes.
     let total = rows.len();
     let num_width = total.to_string().len();
@@ -151,9 +149,9 @@ fn format_grouped(rows: Vec<Vec<String>>) -> Vec<String> {
     let mut last_key = String::new();
     let mut global_idx = 0usize;
 
-    for cols in rows {
-        let key = cols.first().map_or("—", String::as_str);
-        let title = trunc(cols.get(1).map_or("—", String::as_str), TITLE_MAX_CHARS);
+    for row in rows {
+        let key = row.group_name.as_deref().unwrap_or("—");
+        let title = trunc(&row.title, TITLE_MAX_CHARS);
 
         if key != last_key {
             // Blank line before every group except the very first
@@ -202,6 +200,7 @@ fn paginate(lines: &[String], mode: &str) -> Vec<String> {
 mod tests {
     use super::{format_flat, format_grouped, meta_line, paginate, trunc};
     use crate::discord::constants::{MAX_RESULTS_PER_PAGE, META_MAX_CHARS, TITLE_MAX_CHARS};
+    use crate::jester::db::repository::{LibraryGroupEntry, LibraryTrack};
 
     #[test]
     fn truncates_unicode_and_reserves_room_for_ellipsis() {
@@ -213,16 +212,21 @@ mod tests {
     #[test]
     fn metadata_line_omits_placeholders_and_empty_values() {
         assert_eq!(
-            meta_line(&["Artist", "No origin provided", "", "tag"]),
+            meta_line([
+                Some("Artist".into()),
+                None,
+                Some(String::new()),
+                Some("tag".into())
+            ]),
             "Artist · tag"
         );
-        assert!(meta_line(&["No artist provided", "No tags"]).is_empty());
+        assert!(meta_line([None, None]).is_empty());
     }
 
     #[test]
     fn metadata_line_truncates_each_component_independently() {
         let value = "x".repeat(META_MAX_CHARS + 5);
-        let output = meta_line(&[&value, "tag"]);
+        let output = meta_line([Some(value.clone()), Some("tag".into())]);
         let first = output.split(" · ").next().unwrap_or_default();
         assert_eq!(first.chars().count(), META_MAX_CHARS);
         assert!(first.ends_with('…'));
@@ -231,12 +235,18 @@ mod tests {
     #[test]
     fn flat_rows_include_metadata_and_stable_numbering() {
         let rows = vec![
-            vec!["First".into(), "Artist".into(), "Origin".into()],
-            vec![
-                "Second".into(),
-                "No artist provided".into(),
-                "No origin provided".into(),
-            ],
+            LibraryTrack {
+                title: "First".into(),
+                artist: Some("Artist".into()),
+                origin: Some("Origin".into()),
+                taxonomy: None,
+            },
+            LibraryTrack {
+                title: "Second".into(),
+                artist: None,
+                origin: None,
+                taxonomy: None,
+            },
         ];
         let lines = format_flat(rows);
         assert_eq!(lines[0], "1. First\n     Artist · Origin\n");
@@ -245,25 +255,43 @@ mod tests {
 
     #[test]
     fn flat_rows_supply_a_fallback_for_missing_title() {
-        assert_eq!(format_flat(vec![Vec::new()]), vec!["1. —\n"]);
+        assert_eq!(
+            format_flat(vec![LibraryTrack {
+                title: String::new(),
+                artist: None,
+                origin: None,
+                taxonomy: None
+            }]),
+            vec!["1. \n"]
+        );
     }
 
     #[test]
     fn flat_rows_truncate_long_titles() {
-        let output = format_flat(
-            vec![vec!["x".repeat(TITLE_MAX_CHARS + 1)]]
-                .into_iter()
-                .collect(),
-        );
+        let output = format_flat(vec![LibraryTrack {
+            title: "x".repeat(TITLE_MAX_CHARS + 1),
+            artist: None,
+            origin: None,
+            taxonomy: None,
+        }]);
         assert!(output[0].contains('…'));
     }
 
     #[test]
     fn grouped_rows_emit_headers_separators_and_global_numbers() {
         let rows = vec![
-            vec!["A".into(), "One".into()],
-            vec!["A".into(), "Two".into()],
-            vec!["B".into(), "Three".into()],
+            LibraryGroupEntry {
+                group_name: Some("A".into()),
+                title: "One".into(),
+            },
+            LibraryGroupEntry {
+                group_name: Some("A".into()),
+                title: "Two".into(),
+            },
+            LibraryGroupEntry {
+                group_name: Some("B".into()),
+                title: "Three".into(),
+            },
         ];
         assert_eq!(
             format_grouped(rows),
@@ -273,7 +301,13 @@ mod tests {
 
     #[test]
     fn grouped_rows_supply_fallbacks_for_missing_columns() {
-        assert_eq!(format_grouped(vec![Vec::new()]), vec!["── —", "  1. —"]);
+        assert_eq!(
+            format_grouped(vec![LibraryGroupEntry {
+                group_name: None,
+                title: String::new()
+            }]),
+            vec!["── —", "  1. "]
+        );
     }
 
     #[test]

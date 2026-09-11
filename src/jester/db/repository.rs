@@ -1,49 +1,72 @@
+use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
-use sqlx::{Row, SqliteConnection, SqlitePool};
+use sqlx::{FromRow, SqliteConnection, SqlitePool};
 
 use crate::{
-    discord::context::Error,
     jester::db::metadata::MetadataKind,
     jester::track::types::{TrackInfo, VideoId},
 };
 
 const TAXONOMY_SUMMARY: &str = "TRIM(COALESCE(tracks.mood, '') || CASE WHEN tracks.intensity IS NULL THEN '' ELSE ', ' || tracks.intensity END || CASE WHEN tracks.function_tag IS NULL THEN '' ELSE ', ' || tracks.function_tag END || CASE WHEN EXISTS (SELECT 1 FROM track_environments WHERE track_id = tracks.id) THEN ', ' || (SELECT GROUP_CONCAT(environment, ', ') FROM track_environments WHERE track_id = tracks.id) ELSE '' END, ', ')";
 
+#[derive(Clone, Debug, PartialEq, Eq, FromRow)]
+pub struct LibraryTrack {
+    pub title: String,
+    pub artist: Option<String>,
+    pub origin: Option<String>,
+    pub taxonomy: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, FromRow)]
+pub struct LibraryGroupEntry {
+    pub group_name: Option<String>,
+    pub title: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, FromRow)]
+pub struct TrackSearchResult {
+    pub id: String,
+    pub title: String,
+    pub artist: Option<String>,
+    pub origin: Option<String>,
+    pub taxonomy: Option<String>,
+}
+
 #[allow(dead_code)]
 pub async fn get_or_insert_metadata_id(
     db_pool: &SqlitePool,
     kind: MetadataKind,
     value: &str,
-) -> Result<i64, Error> {
+) -> Result<i64> {
     sqlx::query(kind.upsert_sql())
         .bind(value)
         .execute(db_pool)
         .await
-        .map_err(|e| format!("Database metadata upsert failed: {e}"))?;
+        .context("Database metadata upsert failed")?;
 
     sqlx::query_scalar::<_, i64>(kind.select_sql())
         .bind(value)
         .fetch_one(db_pool)
         .await
-        .map_err(|e| format!("Database metadata lookup failed: {e}").into())
+        .context("Database metadata lookup failed")
 }
 
 async fn get_or_insert_metadata_id_on_connection(
     connection: &mut SqliteConnection,
     kind: MetadataKind,
     value: &str,
-) -> Result<i64, Error> {
+) -> Result<i64> {
     sqlx::query(kind.upsert_sql())
         .bind(value)
         .execute(&mut *connection)
         .await
-        .map_err(|e| format!("Database metadata upsert failed: {e}"))?;
+        .context("Database metadata upsert failed")?;
 
     sqlx::query_scalar::<_, i64>(kind.select_sql())
         .bind(value)
         .fetch_one(&mut *connection)
         .await
-        .map_err(|e| format!("Database metadata lookup failed: {e}").into())
+        .context("Database metadata lookup failed")
 }
 
 #[allow(dead_code)]
@@ -54,7 +77,7 @@ pub async fn insert_new_track(
     title: &str,
     artist_id: i64,
     origin_id: i64,
-) -> Result<(), Error> {
+) -> Result<()> {
     sqlx::query(
         "INSERT INTO tracks (
             id,
@@ -92,20 +115,28 @@ pub async fn insert_new_track_with_metadata(
     video_id: &VideoId,
     slim: &serde_json::Value,
     title: &str,
-    artist: &str,
-    origin: &str,
-) -> Result<(), Error> {
+    artist: Option<&str>,
+    origin: Option<&str>,
+) -> Result<()> {
     let mut transaction = db_pool
         .begin()
         .await
-        .map_err(|e| format!("Failed to begin track insert transaction: {e}"))?;
+        .context("Failed to begin track insert transaction")?;
 
-    let artist_id =
-        get_or_insert_metadata_id_on_connection(&mut transaction, MetadataKind::Artist, artist)
-            .await?;
-    let origin_id =
-        get_or_insert_metadata_id_on_connection(&mut transaction, MetadataKind::Origin, origin)
-            .await?;
+    let artist_id = match artist {
+        Some(value) => Some(
+            get_or_insert_metadata_id_on_connection(&mut transaction, MetadataKind::Artist, value)
+                .await?,
+        ),
+        None => None,
+    };
+    let origin_id = match origin {
+        Some(value) => Some(
+            get_or_insert_metadata_id_on_connection(&mut transaction, MetadataKind::Origin, value)
+                .await?,
+        ),
+        None => None,
+    };
 
     sqlx::query(
         "INSERT INTO tracks (
@@ -134,19 +165,20 @@ pub async fn insert_new_track_with_metadata(
     .bind(origin_id)
     .execute(&mut *transaction)
     .await
-    .map_err(|e| format!("Failed to insert track: {e}"))?;
+    .context("Failed to insert track")?;
 
     transaction
         .commit()
         .await
-        .map_err(|e| format!("Failed to commit track insert transaction: {e}"))?;
+        .context("Failed to commit track insert transaction")?;
 
     Ok(())
 }
 
-pub async fn fetch_library_all(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>, Error> {
-    let rows = sqlx::query(&format!(
-        "SELECT tracks.track_title, artists.artist, origins.origin, {TAXONOMY_SUMMARY} AS taxonomy
+pub async fn fetch_library_all(db_pool: &SqlitePool) -> Result<Vec<LibraryTrack>> {
+    sqlx::query_as(&format!(
+        "SELECT tracks.track_title AS title, artists.artist, origins.origin,
+                NULLIF({TAXONOMY_SUMMARY}, '') AS taxonomy
          FROM tracks
          LEFT JOIN artists ON tracks.artist_id = artists.id
          LEFT JOIN origins ON tracks.origin_id = origins.id
@@ -154,76 +186,36 @@ pub async fn fetch_library_all(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>,
     ))
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Database query failed: {e}"))?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            vec![
-                row.try_get::<String, _>(0)
-                    .unwrap_or_else(|_| "No title".to_string()),
-                row.try_get::<String, _>(1)
-                    .unwrap_or_else(|_| "No artist".to_string()),
-                row.try_get::<String, _>(2)
-                    .unwrap_or_else(|_| "No origin".to_string()),
-                row.try_get::<String, _>(3)
-                    .unwrap_or_else(|_| String::new()),
-            ]
-        })
-        .collect())
+    .context("Library query failed")
 }
 
-pub async fn fetch_library_by_artist(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>, Error> {
-    let rows = sqlx::query(
-        "SELECT artists.artist, tracks.track_title
+pub async fn fetch_library_by_artist(db_pool: &SqlitePool) -> Result<Vec<LibraryGroupEntry>> {
+    sqlx::query_as(
+        "SELECT artists.artist AS group_name, tracks.track_title AS title
          FROM tracks
          LEFT JOIN artists ON tracks.artist_id = artists.id
-         ORDER BY artists.artist",
+         ORDER BY artists.artist IS NULL, artists.artist",
     )
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Database query failed: {e}"))?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            vec![
-                row.try_get::<String, _>(0)
-                    .unwrap_or_else(|_| "No artist".to_string()),
-                row.try_get::<String, _>(1)
-                    .unwrap_or_else(|_| "No title".to_string()),
-            ]
-        })
-        .collect())
+    .context("Artist library query failed")
 }
 
-pub async fn fetch_library_by_origin(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>, Error> {
-    let rows = sqlx::query(
-        "SELECT origins.origin, tracks.track_title
+pub async fn fetch_library_by_origin(db_pool: &SqlitePool) -> Result<Vec<LibraryGroupEntry>> {
+    sqlx::query_as(
+        "SELECT origins.origin AS group_name, tracks.track_title AS title
          FROM tracks
          LEFT JOIN origins ON tracks.origin_id = origins.id
-         ORDER BY origins.origin",
+         ORDER BY origins.origin IS NULL, origins.origin",
     )
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Database query failed: {e}"))?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            vec![
-                row.try_get::<String, _>(0)
-                    .unwrap_or_else(|_| "No origin".to_string()),
-                row.try_get::<String, _>(1)
-                    .unwrap_or_else(|_| "No title".to_string()),
-            ]
-        })
-        .collect())
+    .context("Origin library query failed")
 }
 
-pub async fn fetch_library_by_tag(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>, Error> {
-    let rows = sqlx::query(
-        "SELECT tag, track_title FROM (
+pub async fn fetch_library_by_tag(db_pool: &SqlitePool) -> Result<Vec<LibraryGroupEntry>> {
+    sqlx::query_as(
+        "SELECT tag AS group_name, track_title AS title FROM (
              SELECT mood AS tag, track_title FROM tracks WHERE mood IS NOT NULL
              UNION ALL SELECT intensity, track_title FROM tracks WHERE intensity IS NOT NULL
              UNION ALL SELECT function_tag, track_title FROM tracks WHERE function_tag IS NOT NULL
@@ -236,59 +228,26 @@ pub async fn fetch_library_by_tag(db_pool: &SqlitePool) -> Result<Vec<Vec<String
                    AND NOT EXISTS (SELECT 1 FROM track_environments WHERE track_id = tracks.id)
                    AND NOT EXISTS (SELECT 1 FROM track_labels WHERE track_id = tracks.id)
          ) ORDER BY CASE WHEN tag = 'Unclassified' THEN 1 ELSE 0 END, tag, track_title",
-    )
-    .fetch_all(db_pool)
-    .await
-    .map_err(|e| format!("Database query failed: {e}"))?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            vec![
-                row.try_get::<String, _>(0)
-                    .unwrap_or_else(|_| "Unclassified".to_string()),
-                row.try_get::<String, _>(1)
-                    .unwrap_or_else(|_| "No title".to_string()),
-            ]
-        })
-        .collect())
+    ).fetch_all(db_pool).await.context("Taxonomy library query failed")
 }
 
-pub async fn fetch_library_by_incomplete(db_pool: &SqlitePool) -> Result<Vec<Vec<String>>, Error> {
-    let rows = sqlx::query(
-        "SELECT tracks.track_title, artists.artist, origins.origin
+pub async fn fetch_library_by_incomplete(db_pool: &SqlitePool) -> Result<Vec<LibraryTrack>> {
+    sqlx::query_as(
+        "SELECT tracks.track_title AS title, artists.artist, origins.origin, NULL AS taxonomy
             FROM tracks
             LEFT JOIN artists ON tracks.artist_id = artists.id
             LEFT JOIN origins ON tracks.origin_id = origins.id
-            WHERE artists.artist = 'No artist provided'
-            OR origins.origin = 'No origin provided'
+            WHERE tracks.artist_id IS NULL OR tracks.origin_id IS NULL
             ORDER BY artists.artist, origins.origin, tracks.track_title",
     )
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Database query failed: {e}"))?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            vec![
-                row.try_get::<String, _>(0)
-                    .unwrap_or_else(|_| "No title".to_string()),
-                row.try_get::<String, _>(1)
-                    .unwrap_or_else(|_| "No artist".to_string()),
-                row.try_get::<String, _>(2)
-                    .unwrap_or_else(|_| "No origin".to_string()),
-            ]
-        })
-        .collect())
+    .context("Incomplete library query failed")
 }
 
-pub async fn lookup_track(
-    db_pool: &SqlitePool,
-    video_id: &VideoId,
-) -> Result<Option<TrackInfo>, Error> {
-    let result: Option<(String, String, String)> = sqlx::query_as(
-        "SELECT tracks.track_title,
+pub async fn lookup_track(db_pool: &SqlitePool, video_id: &VideoId) -> Result<Option<TrackInfo>> {
+    let result: Option<(String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT tracks.id, tracks.track_title,
                 artists.artist,
                 origins.origin
          FROM tracks
@@ -298,20 +257,21 @@ pub async fn lookup_track(
     )
     .bind(video_id.as_str())
     .fetch_optional(db_pool)
-    .await?;
+    .await
+    .context("Track lookup failed")?;
 
-    Ok(result.map(|(title, artist, origin)| TrackInfo {
-        id: video_id.clone(),
+    Ok(result.map(|(id, title, artist, origin)| TrackInfo {
+        id: VideoId::from(id),
         title,
         artist,
         origin,
     }))
 }
 
-pub async fn require_track(db_pool: &SqlitePool, id: &VideoId) -> Result<TrackInfo, Error> {
+pub async fn require_track(db_pool: &SqlitePool, id: &VideoId) -> Result<TrackInfo> {
     lookup_track(db_pool, id)
         .await?
-        .ok_or_else(|| "Track could not be found in the database.".into())
+        .ok_or_else(|| anyhow!("Track could not be found in the database."))
 }
 
 pub async fn search_metadata(
@@ -319,7 +279,7 @@ pub async fn search_metadata(
     kind: MetadataKind,
     needle: &str,
     limit: i64,
-) -> Result<Vec<String>, Error> {
+) -> Result<Vec<String>> {
     let query = match kind {
         MetadataKind::Artist => {
             "SELECT DISTINCT artist FROM artists WHERE LOWER(artist) LIKE ?1 LIMIT ?2"
@@ -334,14 +294,10 @@ pub async fn search_metadata(
         .bind(limit)
         .fetch_all(db_pool)
         .await
-        .map_err(|e| format!("Autocomplete metadata query failed: {e}").into())
+        .context("Autocomplete metadata query failed")
 }
 
-pub async fn search_labels(
-    db_pool: &SqlitePool,
-    needle: &str,
-    limit: i64,
-) -> Result<Vec<String>, Error> {
+pub async fn search_labels(db_pool: &SqlitePool, needle: &str, limit: i64) -> Result<Vec<String>> {
     sqlx::query_scalar(
         "SELECT DISTINCT label
          FROM track_labels
@@ -353,23 +309,23 @@ pub async fn search_labels(
     .bind(limit)
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Autocomplete label query failed: {e}").into())
+    .context("Autocomplete label query failed")
 }
 
 pub async fn search_tracks(
     db_pool: &SqlitePool,
     needle: &str,
     limit: i64,
-) -> Result<Vec<(String, String, String, String, Option<String>)>, Error> {
+) -> Result<Vec<TrackSearchResult>> {
     sqlx::query_as(&format!(
-        "SELECT DISTINCT tracks.id, tracks.track_title, artists.artist, origins.origin,
-                {TAXONOMY_SUMMARY} AS taxonomy
+        "SELECT DISTINCT tracks.id, tracks.track_title AS title, artists.artist, origins.origin,
+                NULLIF({TAXONOMY_SUMMARY}, '') AS taxonomy
          FROM tracks
          LEFT JOIN artists ON tracks.artist_id = artists.id
          LEFT JOIN origins ON tracks.origin_id = origins.id
          WHERE LOWER(tracks.track_title) LIKE ?1
-            OR LOWER(artists.artist) LIKE ?1
-            OR LOWER(origins.origin) LIKE ?1
+            OR LOWER(COALESCE(artists.artist, '')) LIKE ?1
+            OR LOWER(COALESCE(origins.origin, '')) LIKE ?1
             OR LOWER(COALESCE(tracks.mood, '')) LIKE ?1
             OR LOWER(COALESCE(tracks.intensity, '')) LIKE ?1
             OR LOWER(COALESCE(tracks.function_tag, '')) LIKE ?1
@@ -382,25 +338,24 @@ pub async fn search_tracks(
     .bind(limit)
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Autocomplete track query failed: {e}").into())
+    .context("Autocomplete track query failed")
 }
 
 pub async fn search_incomplete_tracks(
     db_pool: &SqlitePool,
     needle: &str,
     limit: i64,
-) -> Result<Vec<(String, String, String, String, Option<String>)>, Error> {
+) -> Result<Vec<TrackSearchResult>> {
     sqlx::query_as(
-        "SELECT DISTINCT tracks.id, tracks.track_title, artists.artist, origins.origin,
+        "SELECT DISTINCT tracks.id, tracks.track_title AS title, artists.artist, origins.origin,
                 NULL AS taxonomy
          FROM tracks
          LEFT JOIN artists ON tracks.artist_id = artists.id
          LEFT JOIN origins ON tracks.origin_id = origins.id
-         WHERE (artists.artist = 'No artist provided'
-            OR origins.origin = 'No origin provided')
+         WHERE (tracks.artist_id IS NULL OR tracks.origin_id IS NULL)
            AND (LOWER(tracks.track_title) LIKE ?1
-            OR LOWER(artists.artist) LIKE ?1
-            OR LOWER(origins.origin) LIKE ?1)
+            OR LOWER(COALESCE(artists.artist, '')) LIKE ?1
+            OR LOWER(COALESCE(origins.origin, '')) LIKE ?1)
          GROUP BY tracks.id
          LIMIT ?2",
     )
@@ -408,14 +363,14 @@ pub async fn search_incomplete_tracks(
     .bind(limit)
     .fetch_all(db_pool)
     .await
-    .map_err(|e| format!("Incomplete track search query failed: {e}").into())
+    .context("Incomplete track search query failed")
 }
 
-pub async fn clear_track_taxonomy(db_pool: &SqlitePool, track_id: &VideoId) -> Result<(), Error> {
+pub async fn clear_track_taxonomy(db_pool: &SqlitePool, track_id: &VideoId) -> Result<()> {
     let mut transaction = db_pool
         .begin()
         .await
-        .map_err(|e| format!("Failed to begin taxonomy reset transaction: {e}"))?;
+        .context("Failed to begin taxonomy reset transaction")?;
 
     sqlx::query(
         "UPDATE tracks SET mood = NULL, intensity = NULL, function_tag = NULL WHERE id = ?1",
@@ -423,51 +378,32 @@ pub async fn clear_track_taxonomy(db_pool: &SqlitePool, track_id: &VideoId) -> R
     .bind(track_id.as_str())
     .execute(&mut *transaction)
     .await
-    .map_err(|e| {
-        format!(
-            "Failed to clear taxonomy for track {}: {}",
-            track_id.as_str(),
-            e
-        )
-    })?;
+    .with_context(|| format!("Failed to clear taxonomy for track {}", track_id.as_str()))?;
     sqlx::query("DELETE FROM track_textures WHERE track_id = ?1")
         .bind(track_id.as_str())
         .execute(&mut *transaction)
         .await
-        .map_err(|e| {
-            format!(
-                "Failed to clear textures for track {}: {}",
-                track_id.as_str(),
-                e
-            )
-        })?;
+        .with_context(|| format!("Failed to clear textures for track {}", track_id.as_str()))?;
     sqlx::query("DELETE FROM track_environments WHERE track_id = ?1")
         .bind(track_id.as_str())
         .execute(&mut *transaction)
         .await
-        .map_err(|e| {
+        .with_context(|| {
             format!(
-                "Failed to clear environments for track {}: {}",
-                track_id.as_str(),
-                e
+                "Failed to clear environments for track {}",
+                track_id.as_str()
             )
         })?;
     sqlx::query("DELETE FROM track_labels WHERE track_id = ?1")
         .bind(track_id.as_str())
         .execute(&mut *transaction)
         .await
-        .map_err(|e| {
-            format!(
-                "Failed to clear labels for track {}: {}",
-                track_id.as_str(),
-                e
-            )
-        })?;
+        .with_context(|| format!("Failed to clear labels for track {}", track_id.as_str()))?;
 
     transaction
         .commit()
         .await
-        .map_err(|e| format!("Failed to commit taxonomy reset transaction: {e}"))?;
+        .context("Failed to commit taxonomy reset transaction")?;
 
     Ok(())
 }
@@ -478,7 +414,7 @@ pub async fn set_track_taxonomy(
     mood: &str,
     intensity: &str,
     function_tag: Option<&str>,
-) -> Result<(), Error> {
+) -> Result<()> {
     sqlx::query("UPDATE tracks SET mood = ?1, intensity = ?2, function_tag = ?3 WHERE id = ?4")
         .bind(mood)
         .bind(intensity)
@@ -486,12 +422,7 @@ pub async fn set_track_taxonomy(
         .bind(track_id.as_str())
         .execute(db_pool)
         .await
-        .map_err(|e| {
-            format!(
-                "Failed to set taxonomy for track {}: {e}",
-                track_id.as_str()
-            )
-        })?;
+        .with_context(|| format!("Failed to set taxonomy for track {}", track_id.as_str()))?;
     Ok(())
 }
 
@@ -499,13 +430,13 @@ pub async fn insert_track_texture(
     db_pool: &SqlitePool,
     track_id: &VideoId,
     texture: &str,
-) -> Result<(), Error> {
+) -> Result<()> {
     sqlx::query("INSERT OR IGNORE INTO track_textures (track_id, texture) VALUES (?1, ?2)")
         .bind(track_id.as_str())
         .bind(texture)
         .execute(db_pool)
         .await
-        .map_err(|e| format!("Failed to add texture to track {}: {e}", track_id.as_str()))?;
+        .with_context(|| format!("Failed to add texture to track {}", track_id.as_str()))?;
     Ok(())
 }
 
@@ -513,18 +444,13 @@ pub async fn insert_track_environment(
     db_pool: &SqlitePool,
     track_id: &VideoId,
     environment: &str,
-) -> Result<(), Error> {
+) -> Result<()> {
     sqlx::query("INSERT OR IGNORE INTO track_environments (track_id, environment) VALUES (?1, ?2)")
         .bind(track_id.as_str())
         .bind(environment)
         .execute(db_pool)
         .await
-        .map_err(|e| {
-            format!(
-                "Failed to add environment to track {}: {e}",
-                track_id.as_str()
-            )
-        })?;
+        .with_context(|| format!("Failed to add environment to track {}", track_id.as_str()))?;
     Ok(())
 }
 
@@ -532,13 +458,13 @@ pub async fn insert_track_label(
     db_pool: &SqlitePool,
     track_id: &VideoId,
     label: &str,
-) -> Result<(), Error> {
+) -> Result<()> {
     sqlx::query("INSERT OR IGNORE INTO track_labels (track_id, label) VALUES (?1, ?2)")
         .bind(track_id.as_str())
         .bind(label)
         .execute(db_pool)
         .await
-        .map_err(|e| format!("Failed to add label to track {}: {e}", track_id.as_str()))?;
+        .with_context(|| format!("Failed to add label to track {}", track_id.as_str()))?;
     Ok(())
 }
 
@@ -549,11 +475,11 @@ pub async fn update_track_metadata(
     title: Option<&str>,
     artist: Option<&str>,
     origin: Option<&str>,
-) -> Result<(), Error> {
+) -> Result<()> {
     let mut transaction = db_pool
         .begin()
         .await
-        .map_err(|e| format!("Failed to begin track metadata transaction: {e}"))?;
+        .context("Failed to begin track metadata transaction")?;
 
     let artist_id = match artist {
         Some(value) => Some(
@@ -583,17 +509,12 @@ pub async fn update_track_metadata(
     .bind(track_id.as_str())
     .execute(&mut *transaction)
     .await
-    .map_err(|e| {
-        format!(
-            "Failed to update metadata for track {}: {e}",
-            track_id.as_str()
-        )
-    })?;
+    .with_context(|| format!("Failed to update metadata for track {}", track_id.as_str()))?;
 
     transaction
         .commit()
         .await
-        .map_err(|e| format!("Failed to commit track metadata transaction: {e}"))?;
+        .context("Failed to commit track metadata transaction")?;
 
     Ok(())
 }
@@ -649,8 +570,8 @@ mod tests {
             .await?
             .ok_or_else(|| std::io::Error::other("inserted track should be found"))?;
         assert_eq!(track.title, "Track title");
-        assert_eq!(track.artist, "The Band");
-        assert_eq!(track.origin, "Album");
+        assert_eq!(track.artist.as_deref(), Some("The Band"));
+        assert_eq!(track.origin.as_deref(), Some("Album"));
         assert!(
             lookup_track(&pool, &VideoId::from("missing"))
                 .await?
@@ -724,13 +645,13 @@ mod tests {
                 "title": "Duplicate"
             }),
             "Duplicate",
-            "Rolled Back Artist",
-            "Rolled Back Origin",
+            Some("Rolled Back Artist"),
+            Some("Rolled Back Origin"),
         )
         .await
         .unwrap_err();
 
-        assert!(error.to_string().contains("UNIQUE"));
+        assert!(format!("{error:?}").contains("UNIQUE"));
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM artists WHERE artist = 'Rolled Back Artist'",
@@ -760,7 +681,15 @@ mod tests {
     async fn library_views_and_taxonomy_updates_return_expected_rows() -> TestResult {
         let (_directory, pool) = test_pool().await?;
         add_track(&pool, "video-1", "Alpha", "Artist A", "Origin A").await?;
-        add_track(&pool, "video-2", "Beta", "No artist provided", "Origin B").await?;
+        insert_new_track_with_metadata(
+            &pool,
+            &VideoId::from("video-2"),
+            &serde_json::json!({}),
+            "Beta",
+            None,
+            Some("Origin B"),
+        )
+        .await?;
         let track_id = VideoId::from("video-1");
         set_track_taxonomy(
             &pool,
@@ -777,53 +706,84 @@ mod tests {
         assert_eq!(
             fetch_library_all(&pool).await?,
             vec![
-                vec![
-                    "Alpha".into(),
-                    "Artist A".into(),
-                    "Origin A".into(),
-                    "whimsical, subtle, investigative, forest".into()
-                ],
-                vec![
-                    "Beta".into(),
-                    "No artist provided".into(),
-                    "Origin B".into(),
-                    String::new()
-                ],
+                LibraryTrack {
+                    title: "Alpha".into(),
+                    artist: Some("Artist A".into()),
+                    origin: Some("Origin A".into()),
+                    taxonomy: Some("whimsical, subtle, investigative, forest".into())
+                },
+                LibraryTrack {
+                    title: "Beta".into(),
+                    artist: None,
+                    origin: Some("Origin B".into()),
+                    taxonomy: None
+                },
             ]
         );
         assert_eq!(
             fetch_library_by_artist(&pool).await?[0],
-            ["Artist A", "Alpha"]
+            LibraryGroupEntry {
+                group_name: Some("Artist A".into()),
+                title: "Alpha".into()
+            }
         );
         assert_eq!(
             fetch_library_by_origin(&pool).await?[0],
-            ["Origin A", "Alpha"]
+            LibraryGroupEntry {
+                group_name: Some("Origin A".into()),
+                title: "Alpha".into()
+            }
         );
         assert_eq!(
             fetch_library_by_tag(&pool).await?,
             vec![
-                vec![String::from("forest"), String::from("Alpha")],
-                vec![String::from("investigative"), String::from("Alpha")],
-                vec![String::from("live"), String::from("Alpha")],
-                vec![String::from("subtle"), String::from("Alpha")],
-                vec![String::from("synthetic"), String::from("Alpha")],
-                vec![String::from("whimsical"), String::from("Alpha")],
-                vec![String::from("Unclassified"), String::from("Beta")]
+                LibraryGroupEntry {
+                    group_name: Some("forest".into()),
+                    title: "Alpha".into()
+                },
+                LibraryGroupEntry {
+                    group_name: Some("investigative".into()),
+                    title: "Alpha".into()
+                },
+                LibraryGroupEntry {
+                    group_name: Some("live".into()),
+                    title: "Alpha".into()
+                },
+                LibraryGroupEntry {
+                    group_name: Some("subtle".into()),
+                    title: "Alpha".into()
+                },
+                LibraryGroupEntry {
+                    group_name: Some("synthetic".into()),
+                    title: "Alpha".into()
+                },
+                LibraryGroupEntry {
+                    group_name: Some("whimsical".into()),
+                    title: "Alpha".into()
+                },
+                LibraryGroupEntry {
+                    group_name: Some("Unclassified".into()),
+                    title: "Beta".into()
+                }
             ]
         );
         assert_eq!(
             fetch_library_by_incomplete(&pool).await?,
-            vec![vec![
-                String::from("Beta"),
-                String::from("No artist provided"),
-                String::from("Origin B")
-            ]]
+            vec![LibraryTrack {
+                title: "Beta".into(),
+                artist: None,
+                origin: Some("Origin B".into()),
+                taxonomy: None
+            }]
         );
 
         clear_track_taxonomy(&pool, &track_id).await?;
         assert_eq!(
             fetch_library_by_tag(&pool).await?[0],
-            ["Unclassified", "Alpha"]
+            LibraryGroupEntry {
+                group_name: Some("Unclassified".into()),
+                title: "Alpha".into()
+            }
         );
         Ok(())
     }
@@ -902,7 +862,15 @@ mod tests {
     async fn searches_are_case_insensitive_limited_and_include_taxonomy() -> TestResult {
         let (_directory, pool) = test_pool().await?;
         add_track(&pool, "video-1", "Northern Lights", "Aurora", "Winter").await?;
-        add_track(&pool, "video-2", "Summer Sun", "Sol", "No origin provided").await?;
+        insert_new_track_with_metadata(
+            &pool,
+            &VideoId::from("video-2"),
+            &serde_json::json!({}),
+            "Summer Sun",
+            Some("Sol"),
+            None,
+        )
+        .await?;
         let track_id = VideoId::from("video-1");
         set_track_taxonomy(&pool, &track_id, "mysterious", "subtle", None).await?;
         insert_track_texture(&pool, &track_id, "ambient").await?;
@@ -914,13 +882,16 @@ mod tests {
         );
         let tagged = search_tracks(&pool, "AMBI", 10).await?;
         assert_eq!(tagged.len(), 1);
-        assert_eq!(tagged[0].0, "video-1");
-        assert_eq!(tagged[0].4.as_deref(), Some("mysterious, subtle, tundra"));
+        assert_eq!(tagged[0].id, "video-1");
+        assert_eq!(
+            tagged[0].taxonomy.as_deref(),
+            Some("mysterious, subtle, tundra")
+        );
         let environmental = search_tracks(&pool, "TUND", 10).await?;
-        assert_eq!(environmental[0].0, "video-1");
+        assert_eq!(environmental[0].id, "video-1");
         let incomplete = search_incomplete_tracks(&pool, "summer", 1).await?;
         assert_eq!(incomplete.len(), 1);
-        assert_eq!(incomplete[0].0, "video-2");
+        assert_eq!(incomplete[0].id, "video-2");
         Ok(())
     }
 
@@ -941,7 +912,11 @@ mod tests {
         let track = require_track(&pool, &track_id).await?;
         assert_eq!(
             (track.title, track.artist, track.origin),
-            ("After".into(), "Artist B".into(), "Origin B".into())
+            (
+                "After".into(),
+                Some("Artist B".into()),
+                Some("Origin B".into())
+            )
         );
         Ok(())
     }

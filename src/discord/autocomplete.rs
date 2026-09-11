@@ -7,7 +7,7 @@ use crate::discord::context::PoiseContext;
 use crate::discord::voice::require_guild;
 use crate::jester::db::metadata::MetadataKind;
 use crate::jester::db::repository::{
-    search_incomplete_tracks, search_labels, search_metadata, search_tracks,
+    TrackSearchResult, search_incomplete_tracks, search_labels, search_metadata, search_tracks,
 };
 use crate::jester::db::taxonomy::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES};
 use crate::utils::format::{build_autocomplete_display, lightweight_trim};
@@ -181,14 +181,7 @@ pub async fn autocomplete_track(
         }
     };
 
-    let mut choices: Vec<(String, String)> = results
-        .into_iter()
-        .map(|(id, title, artist, origin, tags)| {
-            let tags_display = tags.unwrap_or_else(|| "No tags".to_string());
-            let display = build_autocomplete_display(vec![title, artist, origin, tags_display]);
-            (display, id)
-        })
-        .collect();
+    let mut choices: Vec<(String, String)> = results.into_iter().map(format_track_choice).collect();
 
     choices.sort_unstable_by(|(d1, _), (d2, _)| d1.cmp(d2));
 
@@ -226,8 +219,14 @@ pub async fn autocomplete_queue_position(
                 "{position}. {}",
                 build_autocomplete_display(vec![
                     entry.track.title,
-                    entry.track.artist,
-                    entry.track.origin
+                    entry
+                        .track
+                        .artist
+                        .unwrap_or_else(|| "unknown artist".into()),
+                    entry
+                        .track
+                        .origin
+                        .unwrap_or_else(|| "unknown origin".into())
                 ])
             );
             (needle.is_empty()
@@ -255,14 +254,7 @@ pub async fn autocomplete_incomplete_track(
         }
     };
 
-    let mut choices: Vec<(String, String)> = results
-        .into_iter()
-        .map(|(id, title, artist, origin, tags)| {
-            let tags_display = tags.unwrap_or_else(|| "No tags".to_string());
-            let display = build_autocomplete_display(vec![title, artist, origin, tags_display]);
-            (display, id)
-        })
-        .collect();
+    let mut choices: Vec<(String, String)> = results.into_iter().map(format_track_choice).collect();
 
     choices.sort_unstable_by(|(d1, _), (d2, _)| d1.cmp(d2));
 
@@ -271,6 +263,17 @@ pub async fn autocomplete_incomplete_track(
         .map(|(display, video_id)| AutocompleteChoice::new(display, video_id))
         .collect::<Vec<_>>()
         .into_iter()
+}
+
+fn format_track_choice(track: TrackSearchResult) -> (String, String) {
+    let fields = [
+        Some(track.title),
+        track.artist,
+        track.origin,
+        track.taxonomy,
+    ];
+    let display = build_autocomplete_display(fields.into_iter().flatten().collect());
+    (display, track.id)
 }
 
 pub async fn autocomplete_existing_transcript(

@@ -318,8 +318,8 @@ mod tests {
         TrackInfo {
             id: VideoId::from(title),
             title: title.into(),
-            artist: "artist".into(),
-            origin: "origin".into(),
+            artist: Some("artist".into()),
+            origin: Some("origin".into()),
         }
     }
 

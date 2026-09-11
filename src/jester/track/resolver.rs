@@ -1,5 +1,4 @@
 use crate::{
-    discord::context::Error,
     jester::db::repository::lookup_track,
     jester::track::{
         download::{DownloadConfig, download_track},
@@ -7,6 +6,7 @@ use crate::{
         youtube::get_youtube_id,
     },
 };
+use anyhow::Result;
 use sqlx::SqlitePool;
 use tracing::{debug, info, instrument};
 
@@ -20,7 +20,7 @@ pub async fn resolve_track(
     db_pool: &SqlitePool,
     input: String,
     download_config: DownloadConfig,
-) -> Result<TrackInfo, Error> {
+) -> Result<TrackInfo> {
     let video_id = normalise_track_input(&input);
     debug!(track_id = %video_id.as_str(), "Resolving track");
 

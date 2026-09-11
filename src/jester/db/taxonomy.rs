@@ -1,4 +1,4 @@
-use crate::discord::context::Error;
+use anyhow::{Result, bail};
 
 pub const MOODS: &[&str] = &[
     "serene",
@@ -66,10 +66,10 @@ pub const ENVIRONMENTS: &[&str] = &[
     "infernal",
 ];
 
-pub fn require_value(values: &[&str], value: &str, kind: &str) -> Result<(), Error> {
+pub fn require_value(values: &[&str], value: &str, kind: &str) -> Result<()> {
     if values.contains(&value) {
         Ok(())
     } else {
-        Err(format!("Unknown {kind} `{value}`").into())
+        bail!("Unknown {kind} `{value}`")
     }
 }
