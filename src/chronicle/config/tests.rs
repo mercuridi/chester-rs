@@ -116,6 +116,53 @@ fn rejects_legacy_flat_chronicle_and_top_level_discord_keys() {
 }
 
 #[test]
+fn rejects_retired_indexing_keys_with_parse_context() {
+    let legacy = CONFIG.replace("max_chunk_tokens = 480", "max_chunk_length = 480");
+    let error = load(&legacy).expect_err("retired key must not be accepted");
+    let message = format!("{error:#}");
+
+    assert!(message.contains("Failed to parse config file"));
+    assert!(message.contains("max_chunk_length"));
+}
+
+#[test]
+fn validates_current_chronicle_numeric_boundaries_and_required_strings() {
+    for invalid in [
+        CONFIG.replace("max_chunk_tokens = 480", "max_chunk_tokens = 2"),
+        CONFIG.replace("chunk_overlap_tokens = 48", "chunk_overlap_tokens = 480"),
+        CONFIG.replace("limit = 5", "limit = 0"),
+        CONFIG.replace("max_tokens = 512", "max_tokens = 32769"),
+        CONFIG.replace(
+            "system_prompt = \"Answer from the corpus.\"",
+            "system_prompt = \"\"",
+        ),
+    ] {
+        assert!(load(&invalid).is_err());
+    }
+}
+
+#[test]
+fn rejects_invalid_discord_ids_and_unknown_guild_alias_groups() {
+    let invalid_user_id = CONFIG.replace("\"10\" = \"Alice\"", "\"0\" = \"Alice\"");
+    assert!(load(&invalid_user_id).is_err());
+
+    let unknown_group =
+        CONFIG.replace("alias_groups = [\"party\"]", "alias_groups = [\"missing\"]");
+    assert!(load(&unknown_group).is_err());
+}
+
+#[test]
+fn participant_validation_reports_missing_aliases() -> Result<()> {
+    let config = load(CONFIG)?;
+    let error = config
+        .validate_participants("party", [&UserId::new(10), &UserId::new(99)])
+        .expect_err("unknown participant must require an alias");
+
+    assert!(error.to_string().contains("99"));
+    Ok(())
+}
+
+#[test]
 fn rejects_cross_setting_synthesis_budget_overflow() {
     let invalid = format!("{CONFIG}\n[chronicle.synthesis]\nbatch_token_budget = 3585\n");
     assert!(load(&invalid).is_err());
