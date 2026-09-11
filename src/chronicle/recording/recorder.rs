@@ -59,6 +59,24 @@ pub struct RecordingManifest {
     pub scenes: Vec<SceneEvent>,
     #[serde(default)]
     pub finalization_error: Option<String>,
+    #[serde(default)]
+    pub participant_failures: Vec<ParticipantFailure>,
+    #[serde(default)]
+    pub finalized_recordings: Option<Vec<FinalizedRecording>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ParticipantFailure {
+    pub participant: UserId,
+    pub recording: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FinalizedRecording {
+    pub participant: UserId,
+    pub path: String,
+    pub byte_length: u64,
 }
 
 /// A session directory name supplied by a user or Discord.
@@ -161,9 +179,110 @@ impl RecordingManifest {
         std::fs::rename(&temp_path, path)?;
         Ok(())
     }
+
+    pub fn is_finalized(&self) -> bool {
+        self.status == ManifestStatus::Complete
+            && self.ended_at.is_some()
+            && self.finalized_recordings.is_some()
+    }
+}
+
+pub fn resolve_finalized_recordings(
+    manifest: &RecordingManifest,
+    recording_dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
+    if !manifest.is_finalized() {
+        return Err("This recording is not finalized; recover it before transcribing.".to_string());
+    }
+
+    manifest
+        .finalized_recordings
+        .as_ref()
+        .expect("is_finalized guarantees finalized recordings")
+        .iter()
+        .map(|recording| {
+            let path = recording_dir.join(&recording.path);
+            let canonical = path
+                .canonicalize()
+                .map_err(|error| format!("Failed to resolve finalized recording: {error}"))?;
+            if !canonical.starts_with(recording_dir) || !canonical.is_file() {
+                return Err("Finalized recording is outside the recording session.".to_string());
+            }
+            let metadata = std::fs::metadata(&canonical)
+                .map_err(|error| format!("Failed to inspect finalized recording: {error}"))?;
+            if metadata.len() != recording.byte_length {
+                return Err(format!(
+                    "Finalized recording `{}` changed after finalization.",
+                    recording.path
+                ));
+            }
+            Ok(canonical)
+        })
+        .collect()
+}
+
+pub fn recover_recording_manifest(
+    manifest_path: &Path,
+    recording_dir: &Path,
+    guild_id: GuildId,
+) -> anyhow::Result<RecordingManifest> {
+    let mut manifest = RecordingManifest::load(manifest_path)?;
+    if manifest.guild_id != guild_id {
+        anyhow::bail!("Recording manifest belongs to a different guild.");
+    }
+    if manifest.status == ManifestStatus::Recording {
+        anyhow::bail!("The recording is still active and cannot be recovered yet.");
+    }
+
+    let mut artifacts = Vec::new();
+    for entry in std::fs::read_dir(recording_dir)? {
+        let path = entry?.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("opus") {
+            continue;
+        }
+        let canonical = path.canonicalize()?;
+        if !canonical.starts_with(recording_dir) || !canonical.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(participant) = name
+            .strip_prefix("recording-")
+            .and_then(|name| name.strip_suffix(".opus"))
+            .and_then(|id| id.parse::<u64>().ok())
+            .map(UserId::new)
+        else {
+            continue;
+        };
+        let metadata = std::fs::metadata(&canonical)?;
+        artifacts.push(FinalizedRecording {
+            participant,
+            path: name.to_string(),
+            byte_length: metadata.len(),
+        });
+    }
+    if artifacts.is_empty() {
+        anyhow::bail!("No recoverable Opus recordings were found.");
+    }
+
+    manifest.participants = artifacts
+        .iter()
+        .map(|artifact| artifact.participant)
+        .collect();
+    manifest.participants.sort_unstable_by_key(|id| id.get());
+    manifest.participants.dedup();
+    manifest.finalized_recordings = Some(artifacts);
+    manifest.participant_failures.clear();
+    manifest.finalization_error = None;
+    manifest.status = ManifestStatus::Complete;
+    manifest.ended_at.get_or_insert_with(|| Local::now());
+    manifest.save_atomically(manifest_path)?;
+    Ok(manifest)
 }
 
 pub struct UserRecording {
+    pub path: PathBuf,
     pub producer: Producer<i16>,
     pub stop_tx: oneshot::Sender<()>,
     pub encoder: JoinHandle<Result<(), Error>>,
@@ -317,6 +436,8 @@ impl Recorder {
             participants: Vec::new(),
             scenes: Vec::new(),
             finalization_error: None,
+            participant_failures: Vec::new(),
+            finalized_recordings: None,
         };
 
         if let Some(name) = initial_scene {
@@ -405,48 +526,84 @@ impl Recorder {
         manifest.status = ManifestStatus::Finalizing;
         manifest.participants = participants.clone();
         manifest.finalization_error = None;
+        manifest.participant_failures.clear();
+        manifest.finalized_recordings = Some(Vec::new());
         manifest.save_atomically(&session.manifest_path)?;
 
-        let encoder_drains = session
-            .users
-            .into_values()
-            .map(|user_recording| async move {
-                let UserRecording {
-                    producer,
-                    stop_tx,
-                    encoder,
-                } = user_recording;
+        let encoder_drains =
+            session
+                .users
+                .into_iter()
+                .map(|(participant, user_recording)| async move {
+                    let UserRecording {
+                        path,
+                        producer,
+                        stop_tx,
+                        encoder,
+                    } = user_recording;
 
-                // Tell the encoder that no more data should be expected.
-                let _ = stop_tx.send(());
+                    // Tell the encoder that no more data should be expected.
+                    let _ = stop_tx.send(());
 
-                // The producer must remain alive while the encoder drains the
-                // samples already committed to the ring buffer. Once the
-                // encoder has been told to stop, dropping the producer is safe.
-                drop(producer);
-                encoder.await
-            });
+                    // The producer must remain alive while the encoder drains the
+                    // samples already committed to the ring buffer. Once the
+                    // encoder has been told to stop, dropping the producer is safe.
+                    drop(producer);
+                    (participant, path, encoder.await)
+                });
         let encoder_results = join_all(encoder_drains).await;
-        let failures: Vec<String> = encoder_results
-            .into_iter()
-            .filter_map(|result| match result {
-                Ok(Ok(())) => None,
-                Ok(Err(error)) => Some(error.to_string()),
-                Err(error) => Some(error.to_string()),
-            })
-            .collect();
+        let mut failures = Vec::new();
+        let mut finalized_recordings = Vec::new();
+        for (participant, path, result) in encoder_results {
+            match result {
+                Ok(Ok(())) => match std::fs::metadata(&path) {
+                    Ok(metadata) => finalized_recordings.push(FinalizedRecording {
+                        participant,
+                        path: path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        byte_length: metadata.len(),
+                    }),
+                    Err(error) => failures.push(ParticipantFailure {
+                        participant,
+                        recording: path.display().to_string(),
+                        error: error.to_string(),
+                    }),
+                },
+                Ok(Err(error)) => failures.push(ParticipantFailure {
+                    participant,
+                    recording: path.display().to_string(),
+                    error: error.to_string(),
+                }),
+                Err(error) => failures.push(ParticipantFailure {
+                    participant,
+                    recording: path.display().to_string(),
+                    error: error.to_string(),
+                }),
+            }
+        }
 
         manifest.ended_at = Some(self.clock.now());
         manifest.status = if failures.is_empty() {
             ManifestStatus::Complete
         } else {
-            manifest.finalization_error = Some(failures.join("; "));
+            manifest.finalization_error = Some(
+                failures
+                    .iter()
+                    .map(|failure| format!("{}: {}", failure.participant, failure.error))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
             ManifestStatus::Partial
         };
+        manifest.participant_failures = failures.clone();
+        manifest.finalized_recordings = Some(finalized_recordings);
         manifest.save_atomically(&session.manifest_path)?;
 
-        for error in &failures {
-            warn!(%error, "User recording encoder failed");
+        for failure in &failures {
+            warn!(participant = %failure.participant, error = %failure.error, "User recording encoder failed");
         }
 
         if !failures.is_empty() {
@@ -486,11 +643,19 @@ impl Recorder {
             started_at,
         );
 
+        let encoder_path = path.clone();
         let encoder = tokio::task::spawn_blocking(move || {
-            run_encoder(user_id, &path, consumer, stop_rx, initial_silence_ticks)
+            run_encoder(
+                user_id,
+                &encoder_path,
+                consumer,
+                stop_rx,
+                initial_silence_ticks,
+            )
         });
 
         UserRecording {
+            path,
             producer,
             stop_tx,
             encoder,
@@ -806,9 +971,9 @@ pub async fn notify_recording_user(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        Clock, ManifestStatus, Recorder, RecorderManager, RecordingManifest,
-        default_manifest_status, recording_directory, recording_path, scan_incomplete_manifests,
-        validate_scene_name, write_pcm,
+        Clock, FinalizedRecording, ManifestStatus, Recorder, RecorderManager, RecordingManifest,
+        default_manifest_status, recording_directory, recording_path, recover_recording_manifest,
+        resolve_finalized_recordings, scan_incomplete_manifests, validate_scene_name, write_pcm,
     };
     use chrono::{DateTime, Local, TimeZone};
     use rtrb::RingBuffer;
@@ -841,12 +1006,50 @@ mod tests {
             participants: vec![UserId::new(20)],
             scenes: Vec::new(),
             finalization_error: None,
+            participant_failures: Vec::new(),
+            finalized_recordings: None,
         })
     }
 
     #[test]
     fn default_manifest_status_is_complete_for_legacy_manifests() {
         assert_eq!(default_manifest_status(), ManifestStatus::Complete);
+    }
+
+    #[test]
+    fn finalized_recordings_require_complete_manifest_and_unchanged_files() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("recording-20.opus");
+        fs::write(&path, [1, 2, 3])?;
+        let mut manifest = manifest()?;
+        manifest.status = ManifestStatus::Complete;
+        manifest.ended_at = Some(fixed_time()?);
+        manifest.finalized_recordings = Some(vec![FinalizedRecording {
+            participant: UserId::new(20),
+            path: "recording-20.opus".into(),
+            byte_length: 3,
+        }]);
+
+        assert_eq!(
+            resolve_finalized_recordings(&manifest, directory.path())
+                .map_err(anyhow::Error::msg)?
+                .len(),
+            1
+        );
+        fs::write(&path, [1, 2])?;
+        assert!(resolve_finalized_recordings(&manifest, directory.path()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_rejects_active_manifest() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let manifest_path = directory.path().join("manifest.toml");
+        manifest()?.save_atomically(&manifest_path)?;
+        assert!(
+            recover_recording_manifest(&manifest_path, directory.path(), GuildId::new(10)).is_err()
+        );
+        Ok(())
     }
 
     #[test]

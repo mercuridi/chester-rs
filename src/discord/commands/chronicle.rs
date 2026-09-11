@@ -9,7 +9,8 @@ use crate::{
     chronicle::{
         config::{app::Config, discord::AliasGroup},
         recording::recorder::{
-            RecordingManifest, SessionId, notify_recording_user, resolve_session_directory,
+            RecordingManifest, SessionId, notify_recording_user, recover_recording_manifest,
+            resolve_finalized_recordings, resolve_session_directory,
         },
         transcription::{
             service::{TranscribedSegment, TranscriptionService},
@@ -228,7 +229,7 @@ pub async fn stop(ctx: PoiseContext<'_>) -> Result<(), Error> {
 }
 
 /// Top-level transcript command
-#[poise::command(slash_command, subcommands("show", "generate"))]
+#[poise::command(slash_command, subcommands("show", "generate", "recover"))]
 #[allow(clippy::unused_async)]
 pub async fn transcript(_ctx: PoiseContext<'_>) -> Result<(), Error> {
     Ok(())
@@ -265,13 +266,17 @@ pub async fn show(
         }
     };
 
-    let _manifest = match load_recording_manifest(&recording_dir, guild_id, &session) {
+    let manifest = match load_recording_manifest(&recording_dir, guild_id, &session) {
         Ok(manifest) => manifest,
         Err(message) => {
             ctx.say(message).await?;
             return Ok(());
         }
     };
+    if let Err(message) = resolve_finalized_recordings(&manifest, &recording_dir) {
+        ctx.say(message).await?;
+        return Ok(());
+    }
 
     let transcript_path = transcript_path(&recording_dir);
     let transcript_path = match canonical_contained_file(&recording_dir, &transcript_path) {
@@ -348,7 +353,13 @@ pub async fn generate(
         }
     };
 
-    let recordings = find_recordings(&recording_dir)?;
+    let recordings = match resolve_finalized_recordings(&manifest, &recording_dir) {
+        Ok(recordings) => recordings,
+        Err(message) => {
+            ctx.say(message).await?;
+            return Ok(());
+        }
+    };
     debug!(
         recording_count = recordings.len(),
         "Located session recordings"
@@ -399,6 +410,50 @@ pub async fn generate(
 
     display_transcript(ctx, &transcript).await?;
 
+    Ok(())
+}
+
+/// Explicitly recover a stopped or partially finalized recording.
+#[poise::command(slash_command)]
+pub async fn recover(
+    ctx: PoiseContext<'_>,
+    #[description = "The session to recover"] session: String,
+) -> Result<(), Error> {
+    if !ctx.data().config.is_chronicle_gm(ctx.author().id) {
+        ctx.say("Only a Chronicle GM can recover recording sessions.")
+            .await?;
+        return Ok(());
+    }
+    let guild_id = require_guild(ctx)?;
+    let session = match SessionId::parse(session) {
+        Ok(session) => session,
+        Err(error) => {
+            ctx.say(error).await?;
+            return Ok(());
+        }
+    };
+    let recording_dir = match resolve_session_directory(
+        &ctx.data().config.paths.recordings_dir,
+        guild_id,
+        &session,
+    ) {
+        Ok(path) => path,
+        Err(message) => {
+            ctx.say(message).await?;
+            return Ok(());
+        }
+    };
+    let manifest_path = recording_dir.join("manifest.toml");
+    match recover_recording_manifest(&manifest_path, &recording_dir, guild_id) {
+        Ok(manifest) => {
+            ctx.say(format!(
+                "Recovered `{session}` with {} recording(s).",
+                manifest.finalized_recordings.as_ref().map_or(0, Vec::len)
+            ))
+            .await?
+        }
+        Err(error) => ctx.say(error.to_string()).await?,
+    };
     Ok(())
 }
 
@@ -534,6 +589,7 @@ fn canonical_contained_file(recording_dir: &Path, path: &Path) -> Result<PathBuf
     Ok(canonical)
 }
 
+#[cfg(test)]
 fn find_recordings(recording_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut recordings = Vec::new();
 
@@ -855,6 +911,8 @@ mod tests {
             ended_at: Some(time()? + Duration::seconds(10)),
             participants: vec![UserId::new(2)],
             finalization_error: None,
+            participant_failures: Vec::new(),
+            finalized_recordings: None,
             scenes: vec![
                 SceneEvent {
                     name: "Later".into(),

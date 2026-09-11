@@ -345,7 +345,10 @@ pub async fn autocomplete_existing_transcript(
         let Ok(manifest) = RecordingManifest::load(manifest_path) else {
             continue;
         };
-        if manifest.guild_id != guild_id || !safe_child_file(&canonical_path, "transcript.md") {
+        if manifest.guild_id != guild_id
+            || !manifest.is_finalized()
+            || !safe_child_file(&canonical_path, "transcript.md")
+        {
             continue;
         }
         let title = manifest.session_title;
@@ -441,7 +444,7 @@ pub async fn autocomplete_recording_session(
         let Ok(manifest) = RecordingManifest::load(manifest_path) else {
             continue;
         };
-        if manifest.guild_id != guild_id {
+        if manifest.guild_id != guild_id || !manifest.is_finalized() {
             continue;
         }
         let title = manifest.session_title;
