@@ -173,8 +173,7 @@ fn expire_logs(directory: &Path) -> Result<()> {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = entry.path();
-            let name = path.file_name()?.to_str()?;
-            (name.starts_with("chester.") && name.ends_with(".log")).then_some(path)
+            is_chester_log(&path).then_some(path)
         })
         .filter_map(|path| Some((path.clone(), fs::metadata(path).ok()?.modified().ok()?)))
         .collect();
@@ -186,6 +185,16 @@ fn expire_logs(directory: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn is_chester_log(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    name.starts_with("chester.")
+        && path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("log"))
 }
 
 #[cfg(test)]
@@ -230,5 +239,14 @@ mod tests {
             BUFFER_LINES.to_string().as_bytes()
         );
         Ok(())
+    }
+
+    #[test]
+    fn identifies_chester_logs_with_case_insensitive_extensions() {
+        assert!(is_chester_log(Path::new("chester.2026-09-11.log")));
+        assert!(is_chester_log(Path::new("chester.2026-09-11.LOG")));
+        assert!(is_chester_log(Path::new("chester.2026-09-11.LoG")));
+        assert!(!is_chester_log(Path::new("other.2026-09-11.log")));
+        assert!(!is_chester_log(Path::new("chester.2026-09-11.txt")));
     }
 }
