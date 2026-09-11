@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, hash_map::Entry},
-    path::{Path, PathBuf},
+    fmt,
+    path::{Component, Path, PathBuf},
     sync::Arc,
     time::Instant,
 };
@@ -55,6 +56,65 @@ pub struct RecordingManifest {
     pub participants: Vec<UserId>,
     #[serde(default)]
     pub scenes: Vec<SceneEvent>,
+}
+
+/// A session directory name supplied by a user or Discord.
+///
+/// Keeping this as a single normal path component prevents the session value
+/// from changing the meaning of the recordings root or guild directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionId(String);
+
+impl SessionId {
+    pub fn parse(value: impl Into<String>) -> Result<Self, String> {
+        let value = value.into();
+        let path = Path::new(&value);
+        let mut components = path.components();
+
+        match (components.next(), components.next()) {
+            (Some(Component::Normal(_)), None) if !value.is_empty() => Ok(Self(value)),
+            _ => Err("Invalid session identifier.".to_string()),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for SessionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+pub fn resolve_session_directory(
+    recordings_dir: &Path,
+    guild_id: GuildId,
+    session: &SessionId,
+) -> Result<PathBuf, String> {
+    let recordings_dir = recordings_dir
+        .canonicalize()
+        .map_err(|error| format!("Failed to access recordings directory: {error}"))?;
+    let guild_dir = recordings_dir.join(guild_id.to_string());
+    let canonical_guild_dir = guild_dir
+        .canonicalize()
+        .map_err(|_| format!("Recording guild directory not found: `{guild_id}`"))?;
+
+    if !canonical_guild_dir.starts_with(&recordings_dir) {
+        return Err("Recording guild directory is outside the recordings directory.".to_string());
+    }
+
+    let session_dir = canonical_guild_dir.join(session.as_str());
+    let canonical_session_dir = session_dir
+        .canonicalize()
+        .map_err(|_| format!("Recording session not found: `{session}`"))?;
+
+    if !canonical_session_dir.starts_with(&canonical_guild_dir) || !canonical_session_dir.is_dir() {
+        return Err("Recording session is outside this guild.".to_string());
+    }
+
+    Ok(canonical_session_dir)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

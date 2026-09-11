@@ -8,7 +8,9 @@ use crate::{
     chronicle::transcription::constants::TRANSCRIPT_PAGE_LIMIT,
     chronicle::{
         config::{app::Config, discord::AliasGroup},
-        recording::recorder::{RecordingManifest, notify_recording_user},
+        recording::recorder::{
+            RecordingManifest, SessionId, notify_recording_user, resolve_session_directory,
+        },
         transcription::{
             service::{TranscribedSegment, TranscriptionService},
             transcript::{
@@ -134,6 +136,13 @@ pub async fn start(
     }
 
     let session_slug = session_name.replace(' ', "-").to_lowercase();
+    let session_slug = match SessionId::parse(session_slug) {
+        Ok(session_slug) => session_slug,
+        Err(error) => {
+            ctx.say(error).await?;
+            return Ok(());
+        }
+    };
 
     let started = recorder
         .start_recording(
@@ -142,7 +151,7 @@ pub async fn start(
             notification_channel_id,
             ctx.author().id,
             session_name.clone(),
-            session_slug,
+            session_slug.to_string(),
             initial_scene.clone(),
         )
         .await?;
@@ -236,16 +245,44 @@ pub async fn show(
     info!(user = %ctx.author().id, session = %session, "Transcript display requested");
     let guild_id = require_guild(ctx)?;
 
-    let recording_dir = ctx
-        .data()
-        .config
-        .paths
-        .recordings_dir
-        .clone()
-        .join(guild_id.to_string())
-        .join(&session);
+    let session = match SessionId::parse(session) {
+        Ok(session) => session,
+        Err(error) => {
+            ctx.say(error).await?;
+            return Ok(());
+        }
+    };
+    let recording_dir = match resolve_session_directory(
+        &ctx.data().config.paths.recordings_dir,
+        guild_id,
+        &session,
+    ) {
+        Ok(path) => path,
+        Err(message) => {
+            ctx.say(message).await?;
+            return Ok(());
+        }
+    };
+
+    let _manifest = match load_recording_manifest(&recording_dir, guild_id, &session) {
+        Ok(manifest) => manifest,
+        Err(message) => {
+            ctx.say(message).await?;
+            return Ok(());
+        }
+    };
 
     let transcript_path = transcript_path(&recording_dir);
+    let transcript_path = match canonical_contained_file(&recording_dir, &transcript_path) {
+        Ok(path) => path,
+        Err(error) => {
+            ctx.say(format!(
+                "No readable transcript exists for `{session}`: {error}"
+            ))
+            .await?;
+            return Ok(());
+        }
+    };
 
     let transcript = match TranscriptDocument::load(&transcript_path) {
         Ok(transcript) => transcript,
@@ -283,14 +320,24 @@ pub async fn generate(
     info!(user = %ctx.author().id, session = %session, alias_group = %alias_group_id, ignore_scenes, "Transcript generation requested");
     let guild_id = require_guild(ctx)?;
 
-    let recording_dir = ctx
-        .data()
-        .config
-        .paths
-        .recordings_dir
-        .clone()
-        .join(guild_id.to_string())
-        .join(&session);
+    let session = match SessionId::parse(session) {
+        Ok(session) => session,
+        Err(error) => {
+            ctx.say(error).await?;
+            return Ok(());
+        }
+    };
+    let recording_dir = match resolve_session_directory(
+        &ctx.data().config.paths.recordings_dir,
+        guild_id,
+        &session,
+    ) {
+        Ok(path) => path,
+        Err(message) => {
+            ctx.say(message).await?;
+            return Ok(());
+        }
+    };
 
     let manifest = match load_recording_manifest(&recording_dir, guild_id, &session) {
         Ok(manifest) => manifest,
@@ -323,6 +370,14 @@ pub async fn generate(
         };
 
     let transcript_path = transcript_path(&recording_dir);
+    let transcript_path = match canonical_contained_file(&recording_dir, &transcript_path) {
+        Ok(path) => path,
+        Err(error) => {
+            ctx.say(format!("Transcript path is not safe: {error}"))
+                .await?;
+            return Ok(());
+        }
+    };
 
     ctx.defer().await?;
 
@@ -335,7 +390,7 @@ pub async fn generate(
         recordings,
         alias_group,
         !ignore_scenes,
-        &session,
+        session.as_str(),
         &transcript_path,
         ctx.data().chronicle.transcription_service(),
     )
@@ -439,13 +494,19 @@ fn paginate_transcript(lines: Vec<String>) -> Vec<String> {
 fn load_recording_manifest(
     recording_dir: &Path,
     guild_id: GuildId,
-    session: &str,
+    session: &SessionId,
 ) -> Result<RecordingManifest, String> {
     if !recording_dir.is_dir() {
         return Err(format!("Recording session not found: `{session}`"));
     }
 
     let manifest_path = recording_dir.join("manifest.toml");
+    let manifest_path = manifest_path
+        .canonicalize()
+        .map_err(|error| format!("Failed to resolve recording manifest: {error}"))?;
+    if !manifest_path.starts_with(recording_dir) || !manifest_path.is_file() {
+        return Err("Recording manifest is outside the recording session.".to_string());
+    }
 
     let manifest = RecordingManifest::load(&manifest_path)
         .map_err(|error| format!("Failed to load recording manifest: {error}"))?;
@@ -457,6 +518,20 @@ fn load_recording_manifest(
     Ok(manifest)
 }
 
+fn canonical_contained_file(recording_dir: &Path, path: &Path) -> Result<PathBuf, String> {
+    if !path.exists() {
+        return Ok(path.to_owned());
+    }
+
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("failed to resolve transcript path: {error}"))?;
+    if !canonical.starts_with(recording_dir) || !canonical.is_file() {
+        return Err("transcript path is outside the recording session".to_string());
+    }
+    Ok(canonical)
+}
+
 fn find_recordings(recording_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut recordings = Vec::new();
 
@@ -464,7 +539,10 @@ fn find_recordings(recording_dir: &Path) -> std::io::Result<Vec<PathBuf>> {
         let path = entry?.path();
 
         if path.extension().and_then(|ext| ext.to_str()) == Some("opus") {
-            recordings.push(path);
+            let canonical = path.canonicalize()?;
+            if canonical.starts_with(recording_dir) && canonical.is_file() {
+                recordings.push(canonical);
+            }
         }
     }
 
@@ -744,11 +822,11 @@ mod tests {
     use super::{
         build_transcript_document, build_transcript_entries, find_recordings, format_entry,
         format_timestamp, format_transcript, load_recording_manifest, paginate_transcript,
-        scene_offset_seconds, transcript_path,
+        resolve_session_directory, scene_offset_seconds, transcript_path,
     };
     use crate::chronicle::{
         config::discord::AliasGroup,
-        recording::recorder::{ManifestStatus, RecordingManifest, SceneEvent},
+        recording::recorder::{ManifestStatus, RecordingManifest, SceneEvent, SessionId},
         transcription::{
             constants::TRANSCRIPT_PAGE_LIMIT, service::TranscribedSegment,
             transcript::TranscriptEntry,
@@ -972,7 +1050,7 @@ mod tests {
             load_recording_manifest(
                 &directory.path().join("missing"),
                 GuildId::new(1),
-                "missing"
+                &SessionId::parse("missing").map_err(anyhow::Error::msg)?
             )
             .is_err()
         );
@@ -980,10 +1058,47 @@ mod tests {
             directory.path().join("manifest.toml"),
             toml::to_string(&manifest()?)?,
         )?;
-        assert!(load_recording_manifest(directory.path(), GuildId::new(2), "session").is_err());
-        let loaded = load_recording_manifest(directory.path(), GuildId::new(1), "session")
-            .map_err(anyhow::Error::msg)?;
+        assert!(
+            load_recording_manifest(
+                directory.path(),
+                GuildId::new(2),
+                &SessionId::parse("session").map_err(anyhow::Error::msg)?
+            )
+            .is_err()
+        );
+        let loaded = load_recording_manifest(
+            directory.path(),
+            GuildId::new(1),
+            &SessionId::parse("session").map_err(anyhow::Error::msg)?,
+        )
+        .map_err(anyhow::Error::msg)?;
         assert_eq!(loaded.session_title, "Recorded title");
+        Ok(())
+    }
+
+    #[test]
+    fn session_ids_are_single_normal_path_components() -> anyhow::Result<()> {
+        for value in ["", ".", "..", "../other", "/tmp/session", "nested/session"] {
+            assert!(SessionId::parse(value).is_err(), "accepted {value:?}");
+        }
+        let session = SessionId::parse("20240102-030405-session").map_err(anyhow::Error::msg)?;
+        assert_eq!(session.as_str(), "20240102-030405-session");
+        Ok(())
+    }
+
+    #[test]
+    fn session_resolution_stays_inside_the_guild() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        fs::create_dir_all(root.path().join("1/session"))?;
+        assert!(
+            resolve_session_directory(
+                root.path(),
+                GuildId::new(1),
+                &SessionId::parse("session").map_err(anyhow::Error::msg)?,
+            )
+            .is_ok()
+        );
+        assert!(SessionId::parse("../session").is_err());
         Ok(())
     }
 }

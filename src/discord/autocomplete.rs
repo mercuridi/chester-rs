@@ -1,7 +1,9 @@
 use chrono::NaiveDateTime;
 use poise::serenity_prelude::AutocompleteChoice;
 
-use crate::chronicle::recording::recorder::RecordingManifest;
+use crate::chronicle::recording::recorder::{
+    RecordingManifest, SessionId, resolve_session_directory,
+};
 use crate::discord::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
 use crate::discord::context::PoiseContext;
 use crate::discord::voice::require_guild;
@@ -315,7 +317,7 @@ pub async fn autocomplete_existing_transcript(
     for entry in entries.flatten() {
         let path = entry.path();
 
-        if !path.is_dir() || !path.join("transcript.md").is_file() {
+        if !path.is_dir() {
             continue;
         }
 
@@ -323,21 +325,43 @@ pub async fn autocomplete_existing_transcript(
             continue;
         };
 
-        let manifest = RecordingManifest::load(path.join("manifest.toml")).ok();
-        let title = manifest
-            .as_ref()
-            .map(|manifest| manifest.session_title.as_str())
-            .filter(|title| !title.is_empty());
+        let Ok(session_id) = SessionId::parse(session) else {
+            continue;
+        };
+        let Ok(canonical_path) = resolve_session_directory(
+            &ctx.data().config.paths.recordings_dir,
+            guild_id,
+            &session_id,
+        ) else {
+            continue;
+        };
+        let manifest_path = canonical_path.join("manifest.toml");
+        let Ok(manifest_path) = manifest_path.canonicalize() else {
+            continue;
+        };
+        if !manifest_path.starts_with(&canonical_path) || !manifest_path.is_file() {
+            continue;
+        }
+        let Ok(manifest) = RecordingManifest::load(manifest_path) else {
+            continue;
+        };
+        if manifest.guild_id != guild_id || !safe_child_file(&canonical_path, "transcript.md") {
+            continue;
+        }
+        let title = manifest.session_title;
+        let title = (!title.is_empty()).then_some(title);
 
         if !session.to_lowercase().contains(&needle)
-            && !title.is_some_and(|title| title.to_lowercase().contains(&needle))
+            && !title
+                .as_ref()
+                .is_some_and(|title| title.to_lowercase().contains(&needle))
         {
             continue;
         }
 
-        let display = format_session_display_name(session, title);
+        let display = format_session_display_name(session_id.as_str(), title.as_deref());
 
-        sessions.push((session.to_owned(), display));
+        sessions.push((session_id.to_string(), display));
     }
 
     sessions.sort_unstable();
@@ -397,27 +421,43 @@ pub async fn autocomplete_recording_session(
             continue;
         };
 
-        let manifest = RecordingManifest::load(path.join("manifest.toml")).ok();
-        let title = manifest
-            .as_ref()
-            .map(|manifest| manifest.session_title.as_str())
-            .filter(|title| !title.is_empty());
+        let Ok(session_id) = SessionId::parse(session) else {
+            continue;
+        };
+        let Ok(canonical_path) = resolve_session_directory(
+            &ctx.data().config.paths.recordings_dir,
+            guild_id,
+            &session_id,
+        ) else {
+            continue;
+        };
+        let manifest_path = canonical_path.join("manifest.toml");
+        let Ok(manifest_path) = manifest_path.canonicalize() else {
+            continue;
+        };
+        if !manifest_path.starts_with(&canonical_path) || !manifest_path.is_file() {
+            continue;
+        }
+        let Ok(manifest) = RecordingManifest::load(manifest_path) else {
+            continue;
+        };
+        if manifest.guild_id != guild_id {
+            continue;
+        }
+        let title = manifest.session_title;
+        let title = (!title.is_empty()).then_some(title);
 
         if !session.to_lowercase().contains(&needle)
-            && !title.is_some_and(|title| title.to_lowercase().contains(&needle))
+            && !title
+                .as_ref()
+                .is_some_and(|title| title.to_lowercase().contains(&needle))
         {
             continue;
         }
 
-        // Only offer sessions that have a manifest.
-        if !path.join("manifest.toml").is_file() {
-            continue;
-        }
+        let display = format_session_display_name(session_id.as_str(), title.as_deref());
 
-        let display = format_session_display_name(session, title);
-
-        // Push the raw session path and the display to the vec
-        sessions.push((session.to_owned(), display));
+        sessions.push((session_id.to_string(), display));
     }
 
     sessions.sort_unstable();
@@ -428,6 +468,13 @@ pub async fn autocomplete_recording_session(
         .map(|(session, display)| AutocompleteChoice::new(display, session))
         .collect::<Vec<_>>()
         .into_iter()
+}
+
+fn safe_child_file(directory: &std::path::Path, name: &str) -> bool {
+    directory
+        .join(name)
+        .canonicalize()
+        .is_ok_and(|path| path.starts_with(directory) && path.is_file())
 }
 
 pub async fn autocomplete_alias_group(
