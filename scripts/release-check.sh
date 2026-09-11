@@ -28,12 +28,17 @@ target/release/chester-rs \
     tests/fixtures/chronicle/suite.toml \
     "$evaluation_dir/chronicle-retrieval.json"
 
-echo "Running Chronicle structured-query executor and planner evaluation (minimum planner accuracy: 0.90)..."
+echo "Running Chronicle structured-query executor evaluation..."
 target/release/chester-rs \
     --chronicle-query-eval \
     tests/fixtures/chronicle-query/suite.toml \
-    "$evaluation_dir/chronicle-query.json" \
-    --planner
+    "$evaluation_dir/chronicle-query.json"
+
+echo "Running Chronicle structured-query planner evaluation (minimum planner accuracy: 0.90)..."
+target/release/chester-rs \
+    --chronicle-query-planner-eval \
+    tests/fixtures/chronicle-query/suite.toml \
+    "$evaluation_dir/chronicle-query-planner.json"
 
 echo "Running Chronicle bounded-synthesis evaluation (minimum fact recall: 0.75; maximum prohibited claims: 0)..."
 if target/release/chester-rs \

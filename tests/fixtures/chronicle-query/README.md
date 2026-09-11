@@ -32,11 +32,15 @@ filter. An explicit `life_status: unknown` is distinct from an omitted field.
 To also measure the configured local LLM's interpretation:
 
 ```sh
-cargo run -- --chronicle-query-eval --planner
+cargo run -- --chronicle-query-planner-eval
 ```
 
 The planner report also uses the default suite and a timestamped report path. Explicit
-paths remain available with `--planner` last.
+paths remain available in the same position:
+
+```sh
+cargo run -- --chronicle-query-planner-eval SUITE.toml REPORT.json
+```
 
 This additionally reads `.chronicle/config.toml` for the model configuration and
 loads the model using the normal runtime/device path. It does not open the live
@@ -51,8 +55,8 @@ executor-only runs).
 Use a new output filename each time. Failures in case results still write a report
 and exit unsuccessfully; model-loading failures stop before evaluation.
 
-The gate requires every executor result to match. With `--planner`, it additionally
-requires at least 95% exact plan agreement and rejects any non-structured question
+The executor command requires every executor result to match. The planner command
+additionally requires at least 95% exact plan agreement and rejects any non-structured question
 incorrectly accepted for structured execution, regardless of aggregate accuracy.
 A recorded model identifier using `main` is not an immutable model snapshot;
 compare the actual local model revision when comparing planner reports.

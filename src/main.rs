@@ -419,7 +419,10 @@ enum EvaluationCommand {
     Query {
         suite_path: std::path::PathBuf,
         report_path: Option<std::path::PathBuf>,
-        test_planner: bool,
+    },
+    QueryPlanner {
+        suite_path: std::path::PathBuf,
+        report_path: Option<std::path::PathBuf>,
     },
     Synthesis {
         suite_path: std::path::PathBuf,
@@ -486,21 +489,31 @@ impl Invocation {
                 }))
             }
             "--chronicle-query-eval" => {
-                let (arguments, test_planner) = match arguments.strip_suffix(&["--planner".into()])
-                {
-                    Some(arguments) => (arguments, true),
-                    None => (arguments, false),
-                };
+                anyhow::ensure!(
+                    !arguments.iter().any(|argument| argument == "--planner"),
+                    "The planner evaluation is now invoked with --chronicle-query-planner-eval"
+                );
                 anyhow::ensure!(
                     arguments.len() <= 2,
-                    "Usage: chester-rs --chronicle-query-eval [SUITE.toml] [REPORT.json] [--planner]"
+                    "Usage: chester-rs --chronicle-query-eval [SUITE.toml] [REPORT.json]"
                 );
                 Ok(Self::Evaluation(EvaluationCommand::Query {
                     suite_path: arguments
                         .first()
                         .map_or_else(|| DEFAULT_CHRONICLE_QUERY_EVAL_SUITE.into(), Into::into),
                     report_path: arguments.get(1).map(Into::into),
-                    test_planner,
+                }))
+            }
+            "--chronicle-query-planner-eval" => {
+                anyhow::ensure!(
+                    arguments.len() <= 2,
+                    "Usage: chester-rs --chronicle-query-planner-eval [SUITE.toml] [REPORT.json]"
+                );
+                Ok(Self::Evaluation(EvaluationCommand::QueryPlanner {
+                    suite_path: arguments
+                        .first()
+                        .map_or_else(|| DEFAULT_CHRONICLE_QUERY_EVAL_SUITE.into(), Into::into),
+                    report_path: arguments.get(1).map(Into::into),
                 }))
             }
             "--chronicle-eval" => {
@@ -533,10 +546,12 @@ async fn run(invocation: Invocation, paths: AppPaths) -> Result<()> {
         Invocation::Evaluation(EvaluationCommand::Query {
             suite_path,
             report_path,
-            test_planner,
+        }) => chronicle::query::eval::run(&suite_path, report_path.as_deref(), &paths).await,
+        Invocation::Evaluation(EvaluationCommand::QueryPlanner {
+            suite_path,
+            report_path,
         }) => {
-            chronicle::query::eval::run(&suite_path, report_path.as_deref(), test_planner, &paths)
-                .await
+            chronicle::query::eval::run_planner(&suite_path, report_path.as_deref(), &paths).await
         }
         Invocation::Evaluation(EvaluationCommand::Chronicle {
             suite_path,
@@ -749,7 +764,6 @@ mod startup_tests {
             "--chronicle-query-eval".into(),
             "suite.toml".into(),
             "report.json".into(),
-            "--planner".into(),
         ])?;
 
         assert_eq!(
@@ -757,10 +771,34 @@ mod startup_tests {
             Invocation::Evaluation(EvaluationCommand::Query {
                 suite_path: PathBuf::from("suite.toml"),
                 report_path: Some(PathBuf::from("report.json")),
-                test_planner: true,
             })
         );
         Ok(())
+    }
+
+    #[test]
+    fn parses_query_planner_evaluation_options() -> anyhow::Result<()> {
+        let options = StartupOptions::parse([
+            "--chronicle-query-planner-eval".into(),
+            "suite.toml".into(),
+            "report.json".into(),
+        ])?;
+
+        assert_eq!(
+            options.invocation,
+            Invocation::Evaluation(EvaluationCommand::QueryPlanner {
+                suite_path: PathBuf::from("suite.toml"),
+                report_path: Some(PathBuf::from("report.json")),
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_nested_query_planner_option() {
+        assert!(
+            StartupOptions::parse(["--chronicle-query-eval".into(), "--planner".into(),]).is_err()
+        );
     }
 
     #[test]

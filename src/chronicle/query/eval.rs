@@ -88,7 +88,7 @@ struct IntentFamilyAccuracy {
 #[allow(clippy::cast_precision_loss)]
 fn family_accuracy(
     cases: &[CaseReport],
-    test_planner: bool,
+    mode: EvaluationMode,
 ) -> BTreeMap<String, IntentFamilyAccuracy> {
     let mut counts = BTreeMap::<String, (usize, usize)>::new();
     for case in cases {
@@ -106,11 +106,23 @@ fn family_accuracy(
                 IntentFamilyAccuracy {
                     cases,
                     correct,
-                    accuracy: test_planner.then(|| correct as f64 / cases as f64),
+                    accuracy: mode.tests_planner().then(|| correct as f64 / cases as f64),
                 },
             )
         })
         .collect()
+}
+
+#[derive(Clone, Copy)]
+enum EvaluationMode {
+    Executor,
+    Planner,
+}
+
+impl EvaluationMode {
+    fn tests_planner(self) -> bool {
+        matches!(self, Self::Planner)
+    }
 }
 
 async fn fixture_database(suite_path: &Path) -> Result<(tempfile::TempDir, IndexerDb, String)> {
@@ -348,7 +360,35 @@ fn create_report_file(requested_path: Option<&Path>, log_dir: &Path) -> Result<(
 pub async fn run(
     suite_path: &Path,
     requested_report_path: Option<&Path>,
-    test_planner: bool,
+    paths: &crate::chronicle::config::paths::AppPaths,
+) -> Result<()> {
+    run_internal(
+        suite_path,
+        requested_report_path,
+        EvaluationMode::Executor,
+        paths,
+    )
+    .await
+}
+
+pub async fn run_planner(
+    suite_path: &Path,
+    requested_report_path: Option<&Path>,
+    paths: &crate::chronicle::config::paths::AppPaths,
+) -> Result<()> {
+    run_internal(
+        suite_path,
+        requested_report_path,
+        EvaluationMode::Planner,
+        paths,
+    )
+    .await
+}
+
+async fn run_internal(
+    suite_path: &Path,
+    requested_report_path: Option<&Path>,
+    mode: EvaluationMode,
     paths: &crate::chronicle::config::paths::AppPaths,
 ) -> Result<()> {
     if let Some(path) = requested_report_path {
@@ -359,7 +399,7 @@ pub async fn run(
     let (_temp, db, fixture_sha256) = fixture_database(suite_path).await?;
     let runtime = GpuRuntime::new();
     let mut planner_model = None;
-    let llm = if test_planner {
+    let llm = if mode.tests_planner() {
         let config = Config::load(paths.clone())?;
         planner_model = Some(format!(
             "{}@{} / {}",
@@ -381,7 +421,7 @@ pub async fn run(
         llm.unload().await?;
     }
     #[allow(clippy::cast_precision_loss)]
-    let planner_accuracy = test_planner.then(|| {
+    let planner_accuracy = mode.tests_planner().then(|| {
         cases
             .iter()
             .filter(|c| c.end_to_end_correct == Some(true))
@@ -404,7 +444,7 @@ pub async fn run(
         planner_model,
         minimum_planner_accuracy: suite.minimum_planner_accuracy,
         planner_accuracy,
-        intent_family_accuracy: family_accuracy(&cases, test_planner),
+        intent_family_accuracy: family_accuracy(&cases, mode),
         passed,
         cases,
     };

@@ -365,6 +365,22 @@ whose frontmatter visibility is not `mixed`.
 
 ### Retrieval evaluation and diagnostics
 
+Chronicle has four offline evaluation commands. They use the checked-in fixture
+suites by default and write timestamped JSON reports under `logs/evaluation/`;
+you can provide a suite path and a new report path after any command.
+
+| Command | What it evaluates | Model required |
+| --- | --- | --- |
+| `cargo run -- --chronicle-eval` | Lexical, vector, and hybrid retrieval quality, including ranking and visibility diagnostics | Embedding model |
+| `cargo run -- --chronicle-query-eval` | Deterministic structured-query execution, counts, lists, and expected results | No model |
+| `cargo run -- --chronicle-query-planner-eval` | Route classification and structured-plan generation against the query suite | Configured local LLM |
+| `cargo run -- --chronicle-synthesis-eval` | Planner routing plus bounded map/reduce synthesis and its deterministic rubric checks | Configured local LLM and embedding model |
+
+The query commands are intentionally separate: `--chronicle-query-eval` checks
+the database executor without model variability, while
+`--chronicle-query-planner-eval` checks the natural-language planner. The old
+nested `--chronicle-query-eval ... --planner` form is no longer supported.
+
 A fixed fictional vault and retrieval evaluation suite live in
 [`tests/fixtures/chronicle`](tests/fixtures/chronicle/README.md). Run:
 
@@ -438,3 +454,14 @@ The fictional kingdom corpus in
 records expected route, required coverage, prohibited claims, and deliberate gaps
 without prescribing exact answer prose. It is intended for future model-backed
 synthesis evaluation alongside the deterministic unit and service tests.
+
+Run the synthesis evaluation with:
+
+```sh
+cargo run -- --chronicle-synthesis-eval
+```
+
+The query evaluation details and fixture-specific options are documented in
+[`tests/fixtures/chronicle-query`](tests/fixtures/chronicle-query/README.md);
+the retrieval and synthesis fixture guides document their individual report
+schemas and suite overrides.
