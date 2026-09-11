@@ -474,13 +474,13 @@ impl StartupOptions {
                 std::env::current_dir().context("Failed to determine current directory")?,
             ),
             config_path,
-            invocation: Invocation::parse(command_arguments)?,
+            invocation: Invocation::parse(&command_arguments)?,
         })
     }
 }
 
 impl Invocation {
-    fn parse(arguments: Vec<String>) -> Result<Self> {
+    fn parse(arguments: &[String]) -> Result<Self> {
         let Some((command, arguments)) = arguments.split_first() else {
             return Ok(Self::Bot);
         };
