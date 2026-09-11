@@ -2,6 +2,7 @@ mod chronicle;
 mod database;
 mod discord;
 mod jester;
+mod shutdown;
 mod utils;
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -35,6 +36,7 @@ use chrono::Utc;
 use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -178,6 +180,9 @@ fn handle_event<'a>(
     data: &'a Data,
 ) -> poise::BoxFuture<'a, Result<(), Error>> {
     Box::pin(async move {
+        if data.shutdown.is_requested() {
+            return Ok(());
+        }
         if let FullEvent::VoiceStateUpdate { old, new } = event {
             let Some(guild_id) = new.guild_id else {
                 return Ok(());
@@ -225,7 +230,10 @@ fn handle_event<'a>(
 fn build_framework(
     pool: SqlitePool,
     config: Config,
-    chronicle: Chronicle,
+    chronicle: Arc<Chronicle>,
+    recorder: crate::chronicle::recording::recorder::RecorderManager,
+    player: Arc<jester::player::service::PlayerService>,
+    shutdown: Arc<shutdown::ShutdownState>,
     poise_commands: Vec<poise::Command<Data, Error>>,
 ) -> poise::Framework<Data, Error> {
     let poise_options = poise::FrameworkOptions {
@@ -256,7 +264,11 @@ fn build_framework(
     poise::Framework::builder()
         .options(poise_options)
         .setup(|_ctx, _ready, _framework| {
-            Box::pin(async move { Ok(Data::new(pool, config, chronicle)) })
+            Box::pin(async move {
+                Ok(Data::new(
+                    pool, config, chronicle, recorder, player, shutdown,
+                ))
+            })
         })
         .build()
 }
@@ -597,9 +609,11 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
     jester::db::schema::initialise(&pool)
         .await
         .context("Failed to initialize the Jester database schema")?;
-    let chronicle = build_chronicle(&config)
-        .await
-        .context("Failed to initialize Chronicle")?;
+    let chronicle = Arc::new(
+        build_chronicle(&config)
+            .await
+            .context("Failed to initialize Chronicle")?,
+    );
 
     let sync_stats = sync_audio_library(&pool, SyncConfig::from(&config.paths))
         .await
@@ -625,29 +639,78 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
         "Registering bot commands"
     );
 
-    let framework = build_framework(pool, config, chronicle, poise_commands);
-
-    let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
-
-    // 2) Build the Songbird config too (required for decoding voice data)
+    // Build the Songbird config too (required for decoding voice data).
     let songbird_config =
         SongbirdConfig::default().decode_mode(DecodeMode::Decode(DecodeConfig::default()));
+
+    let songbird = songbird::Songbird::serenity_from_config(songbird_config.clone());
+    let recorder = crate::chronicle::recording::recorder::RecorderManager::new(
+        config.paths.recordings_dir.clone(),
+    );
+    let player = Arc::new(jester::player::service::PlayerService::new(
+        config.paths.audio_dir.clone(),
+    ));
+    let coordinator = Arc::new(shutdown::ShutdownCoordinator::new(
+        recorder.clone(),
+        player.clone(),
+        chronicle.clone(),
+        pool.clone(),
+        songbird.clone(),
+        Duration::from_secs(20),
+    ));
+
+    let framework = build_framework(
+        pool,
+        config,
+        chronicle,
+        recorder,
+        player,
+        coordinator.state.clone(),
+        poise_commands,
+    );
+
+    let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
 
     // 3) Create the Serenity client, attach Poise as the event handler…
     // 4) And register Songbird on the same builder
     let mut client = ClientBuilder::new(token, intents)
         .framework(framework)
-        .register_songbird_from_config(songbird_config) // ← this injects the Songbird voice manager
+        .register_songbird_with(songbird) // ← this injects the Songbird voice manager
         .await
         .context("Failed to create the Discord client")?;
 
     tracing::info!("Starting Discord gateway");
-    client
-        .start()
-        .await
-        .context("Discord gateway stopped with an error")?;
+    let signal = shutdown_signal();
+    tokio::pin!(signal);
+    tokio::select! {
+        result = client.start() => {
+            let gateway_result = result.context("Discord gateway stopped with an error");
+            let drain_result = coordinator.drain().await;
+            gateway_result.and(drain_result)?;
+        }
+        _ = &mut signal => {
+            tracing::info!("Shutdown signal received");
+            coordinator.drain().await?;
+        }
+    }
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut terminate = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {}
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
 }
 
 #[cfg(test)]

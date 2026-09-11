@@ -7,6 +7,7 @@ use std::{
 };
 
 use chrono::{DateTime, prelude::Local};
+use futures::future::join_all;
 use rtrb::{Producer, RingBuffer};
 use serde::{Deserialize, Serialize};
 use serenity::all::UserId;
@@ -56,6 +57,8 @@ pub struct RecordingManifest {
     pub participants: Vec<UserId>,
     #[serde(default)]
     pub scenes: Vec<SceneEvent>,
+    #[serde(default)]
+    pub finalization_error: Option<String>,
 }
 
 /// A session directory name supplied by a user or Discord.
@@ -129,6 +132,8 @@ pub struct SceneEvent {
 #[serde(rename_all = "lowercase")]
 pub enum ManifestStatus {
     Recording,
+    Finalizing,
+    Partial,
     Complete,
 }
 
@@ -177,6 +182,7 @@ pub struct RecordingSession {
     pub tick: u64,
     pub users: HashMap<UserId, UserRecording>,
 }
+#[derive(Clone)]
 pub struct RecorderManager {
     recorders: Arc<Mutex<HashMap<GuildId, Recorder>>>,
     recordings_dir: PathBuf,
@@ -216,6 +222,29 @@ impl RecorderManager {
 
     pub async fn remove(&self, guild_id: GuildId) -> Option<Recorder> {
         self.recorders.lock().await.remove(&guild_id)
+    }
+
+    pub async fn drain(&self) -> anyhow::Result<()> {
+        let recorders = std::mem::take(&mut *self.recorders.lock().await);
+        let results = join_all(
+            recorders
+                .into_values()
+                .map(|recorder| async move { recorder.stop_recording().await }),
+        )
+        .await;
+        let errors: Vec<String> = results
+            .into_iter()
+            .filter_map(Result::err)
+            .map(|error| error.to_string())
+            .collect();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "recording drain failed: {}",
+                errors.join("; ")
+            ))
+        }
     }
 }
 
@@ -287,6 +316,7 @@ impl Recorder {
             ended_at: None,
             participants: Vec::new(),
             scenes: Vec::new(),
+            finalization_error: None,
         };
 
         if let Some(name) = initial_scene {
@@ -371,37 +401,57 @@ impl Recorder {
         let session_slug = session.session_slug.clone();
         info!(%guild_id, session = %session_slug, participant_count = participants.len(), "Stopping recording");
 
-        for (_, user_recording) in session.users {
-            let UserRecording {
-                producer,
-                stop_tx,
-                encoder,
-            } = user_recording;
+        let mut manifest = session.manifest;
+        manifest.status = ManifestStatus::Finalizing;
+        manifest.participants = participants.clone();
+        manifest.finalization_error = None;
+        manifest.save_atomically(&session.manifest_path)?;
 
-            // Tell the encoder that no more data should be expected.
-            let _ = stop_tx.send(());
+        let encoder_drains = session
+            .users
+            .into_values()
+            .map(|user_recording| async move {
+                let UserRecording {
+                    producer,
+                    stop_tx,
+                    encoder,
+                } = user_recording;
 
-            // The producer must remain alive while the encoder drains the
-            // samples already committed to the ring buffer. Once the
-            // encoder has been told to stop, dropping the producer is safe.
-            drop(producer);
+                // Tell the encoder that no more data should be expected.
+                let _ = stop_tx.send(());
 
-            match encoder.await {
-                Ok(Ok(())) => {}
-                Ok(Err(error)) => {
-                    warn!(%error, "User recording encoder failed");
-                }
-                Err(error) => {
-                    tracing::error!(%error, "User recording encoder task failed");
-                }
-            }
+                // The producer must remain alive while the encoder drains the
+                // samples already committed to the ring buffer. Once the
+                // encoder has been told to stop, dropping the producer is safe.
+                drop(producer);
+                encoder.await
+            });
+        let encoder_results = join_all(encoder_drains).await;
+        let failures: Vec<String> = encoder_results
+            .into_iter()
+            .filter_map(|result| match result {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error.to_string()),
+                Err(error) => Some(error.to_string()),
+            })
+            .collect();
+
+        manifest.ended_at = Some(self.clock.now());
+        manifest.status = if failures.is_empty() {
+            ManifestStatus::Complete
+        } else {
+            manifest.finalization_error = Some(failures.join("; "));
+            ManifestStatus::Partial
+        };
+        manifest.save_atomically(&session.manifest_path)?;
+
+        for error in &failures {
+            warn!(%error, "User recording encoder failed");
         }
 
-        let mut manifest = session.manifest;
-        manifest.status = ManifestStatus::Complete;
-        manifest.ended_at = Some(self.clock.now());
-        manifest.participants = participants;
-        manifest.save_atomically(&session.manifest_path)?;
+        if !failures.is_empty() {
+            return Err(anyhow::anyhow!("one or more encoders failed").into());
+        }
 
         tracing::info!(
             path = %session.manifest_path.display(),
@@ -711,13 +761,14 @@ fn scan_manifest_directory(directory: &Path) -> anyhow::Result<()> {
         }
 
         match RecordingManifest::load(&path) {
-            Ok(manifest) if manifest.status == ManifestStatus::Recording => {
+            Ok(manifest) if manifest.status != ManifestStatus::Complete => {
                 tracing::warn!(
                     path = %path.display(),
                     guild_id = %manifest.guild_id,
                     started_at = %manifest.started_at,
                     participant_count = manifest.participants.len(),
-                    "Found an incomplete recording manifest; manual cleanup or recovery is required"
+                    status = ?manifest.status,
+                    "Found an incomplete recording manifest; recovery is required"
                 );
             }
             Ok(_) => {}
@@ -789,6 +840,7 @@ mod tests {
             ended_at: None,
             participants: vec![UserId::new(20)],
             scenes: Vec::new(),
+            finalization_error: None,
         })
     }
 

@@ -32,6 +32,7 @@ pub async fn join_vc(
     guild_id: GuildId,
     vc_id: ChannelId,
 ) -> Result<Arc<Mutex<Call>>, Error> {
+    ctx.data().ensure_running()?;
     tracing::debug!(?guild_id, ?vc_id, "Joining voice channel");
 
     let manager = songbird::get(ctx.serenity_context())

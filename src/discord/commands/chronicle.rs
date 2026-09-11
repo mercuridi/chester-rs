@@ -43,6 +43,7 @@ pub async fn chronicle(_ctx: PoiseContext<'_>) -> Result<(), Error> {
 /// Start the Chronicle subsystem
 #[poise::command(slash_command, rename = "start")]
 pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    ctx.data().ensure_running()?;
     info!(user = %ctx.author().id, "Chronicle start command requested");
     ctx.defer().await?;
     match ctx.data().chronicle.start_llm().await {
@@ -407,6 +408,7 @@ pub async fn ask(
     ctx: PoiseContext<'_>,
     #[description = "Question to ask Chronicle"] question: String,
 ) -> Result<(), Error> {
+    ctx.data().ensure_running()?;
     info!(user = %ctx.author().id, question = %question, "Chronicle ask command requested");
     ctx.defer().await?;
 
@@ -852,6 +854,7 @@ mod tests {
             started_at: time()?,
             ended_at: Some(time()? + Duration::seconds(10)),
             participants: vec![UserId::new(2)],
+            finalization_error: None,
             scenes: vec![
                 SceneEvent {
                     name: "Later".into(),

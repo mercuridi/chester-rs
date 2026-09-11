@@ -5,6 +5,7 @@ use sqlx::SqlitePool;
 use crate::{
     chronicle::{config::app::Config, recording::recorder::RecorderManager, service::Chronicle},
     jester::{player::service::PlayerService, track::download::DownloadConfig},
+    shutdown::ShutdownState,
 };
 
 // Defines user data; this is always available in the Serenity context of an invocation
@@ -14,20 +15,37 @@ pub struct Data {
     pub recorder: RecorderManager,
     pub download_config: DownloadConfig,
     pub config: Config,
-    pub chronicle: Chronicle,
+    pub chronicle: Arc<Chronicle>,
+    pub shutdown: Arc<ShutdownState>,
 }
 
 impl Data {
-    pub fn new(db_pool: SqlitePool, config: Config, chronicle: Chronicle) -> Self {
+    pub fn new(
+        db_pool: SqlitePool,
+        config: Config,
+        chronicle: Arc<Chronicle>,
+        recorder: RecorderManager,
+        player: Arc<PlayerService>,
+        shutdown: Arc<ShutdownState>,
+    ) -> Self {
         let paths = config.paths.clone();
         let download_config = DownloadConfig::from(&paths);
         Self {
             db_pool,
-            player: Arc::new(PlayerService::new(paths.audio_dir)),
-            recorder: RecorderManager::new(paths.recordings_dir),
+            player,
+            recorder,
             download_config,
             config,
             chronicle,
+            shutdown,
+        }
+    }
+
+    pub fn ensure_running(&self) -> Result<(), Error> {
+        if self.shutdown.is_requested() {
+            Err("The application is shutting down.".into())
+        } else {
+            Ok(())
         }
     }
 }

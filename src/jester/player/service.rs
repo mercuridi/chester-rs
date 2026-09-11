@@ -227,6 +227,17 @@ impl PlayerService {
         self.queues.lock().await.remove(&guild_id);
     }
 
+    pub async fn shutdown(&self) {
+        let _operation = self.operation_lock.lock().await;
+        let guilds: Vec<GuildId> = self.handles.lock().await.keys().copied().collect();
+        for guild_id in guilds {
+            self.stop_active(guild_id).await;
+        }
+        self.handles.lock().await.clear();
+        self.calls.lock().await.clear();
+        self.queues.lock().await.clear();
+    }
+
     async fn start_transition(
         self: &Arc<Self>,
         guild_id: GuildId,
