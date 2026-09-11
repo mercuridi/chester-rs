@@ -1,3 +1,4 @@
+use crate::chronicle::atomic_write::write_atomic;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use serenity::all::UserId;
@@ -49,10 +50,7 @@ impl TranscriptDocument {
         let contents = format!("---\n{}---\n\n{}", yaml, self.body.trim_end());
 
         // Don't overwrite a valid transcript with a partially-written file.
-        let tmp_path = path.with_extension("md.tmp");
-
-        std::fs::write(&tmp_path, contents)?;
-        std::fs::rename(&tmp_path, path)?;
+        write_atomic(path, contents.as_bytes())?;
 
         info!(
             entry_count = self.frontmatter.entry_count,

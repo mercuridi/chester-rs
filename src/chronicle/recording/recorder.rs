@@ -25,6 +25,7 @@ use tokio::{
 };
 
 use crate::{
+    chronicle::atomic_write::write_atomic,
     chronicle::recording::constants::{
         RING_BUFFER_CAPACITY, RecordedFrame, SILENCE_FRAME, STEREO_FRAME_SAMPLES,
     },
@@ -168,18 +169,8 @@ impl RecordingManifest {
     }
 
     fn save_atomically(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
-        let path = path.as_ref();
-        let temp_path = path.with_extension("toml.tmp");
         let contents = toml::to_string_pretty(self)?;
-
-        std::fs::write(&temp_path, contents)?;
-
-        let file = std::fs::OpenOptions::new().read(true).open(&temp_path)?;
-        file.sync_data()?;
-        drop(file);
-
-        std::fs::rename(&temp_path, path)?;
-        Ok(())
+        write_atomic(path, contents.as_bytes())
     }
 
     pub fn is_finalized(&self) -> bool {
@@ -418,15 +409,18 @@ impl Recorder {
         let started_at = self.clock.now();
         let started_instant = Instant::now();
 
-        let recording_directory =
-            recording_directory(&self.recordings_dir, guild_id, &session_slug, started_at);
-        ensure_recording_directory(&self.recordings_dir, guild_id, &session_slug, started_at)?;
-
         let mut recording = self.recording_session.lock().await;
 
         if recording.is_some() {
             return Ok(false);
         }
+
+        let (session_slug, recording_directory) = allocate_recording_directory(
+            &self.recordings_dir,
+            guild_id,
+            &session_slug,
+            started_at,
+        )?;
 
         let manifest_path = recording_directory.join("manifest.toml");
         let mut manifest = RecordingManifest {
@@ -865,18 +859,30 @@ fn recording_path(
         .join(format!("recording-{user_id}.opus"))
 }
 
-fn ensure_recording_directory(
+fn allocate_recording_directory(
     recordings_dir: &Path,
     guild_id: GuildId,
     session_name: &str,
     started_at: DateTime<Local>,
-) -> Result<(), std::io::Error> {
-    std::fs::create_dir_all(recording_directory(
-        recordings_dir,
-        guild_id,
-        session_name,
-        started_at,
-    ))
+) -> Result<(String, PathBuf), std::io::Error> {
+    let guild_directory = recordings_dir.join(guild_id.to_string());
+    std::fs::create_dir_all(&guild_directory)?;
+
+    let base_name = format!("{}-{}", started_at.format("%Y%m%d-%H%M%S"), session_name);
+    for suffix in 0.. {
+        let name = if suffix == 0 {
+            base_name.clone()
+        } else {
+            format!("{base_name}-{suffix}")
+        };
+        let directory = guild_directory.join(&name);
+        match std::fs::create_dir(&directory) {
+            Ok(()) => return Ok((name, directory)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("session directory suffix space exhausted")
 }
 
 fn validate_scene_name(name: String) -> Result<String, Error> {
@@ -981,9 +987,9 @@ pub async fn notify_recording_user(
 mod tests {
     use super::{
         Clock, FinalizedRecording, ManifestStatus, RecordedFrame, Recorder, RecorderManager,
-        RecordingManifest, default_manifest_status, recording_directory, recording_path,
-        recover_recording_manifest, resolve_finalized_recordings, scan_incomplete_manifests,
-        validate_scene_name, write_pcm,
+        RecordingManifest, allocate_recording_directory, default_manifest_status,
+        recording_directory, recording_path, recover_recording_manifest,
+        resolve_finalized_recordings, scan_incomplete_manifests, validate_scene_name, write_pcm,
     };
     use chrono::{DateTime, Local, TimeZone};
     use rtrb::RingBuffer;
@@ -1107,6 +1113,30 @@ mod tests {
             ),
             directory.join("recording-20.opus")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn recording_directory_allocation_does_not_reuse_colliding_session() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let first = allocate_recording_directory(
+            directory.path(),
+            GuildId::new(10),
+            "session",
+            fixed_time()?,
+        )?;
+        let second = allocate_recording_directory(
+            directory.path(),
+            GuildId::new(10),
+            "session",
+            fixed_time()?,
+        )?;
+
+        assert_eq!(first.0, "20240102-030405-session");
+        assert_eq!(second.0, "20240102-030405-session-1");
+        assert!(first.1.is_dir());
+        assert!(second.1.is_dir());
+        assert_ne!(first.1, second.1);
         Ok(())
     }
 

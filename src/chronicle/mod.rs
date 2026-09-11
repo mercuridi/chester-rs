@@ -1,3 +1,4 @@
+pub mod atomic_write;
 pub mod config;
 pub mod eval;
 pub mod indexer;
