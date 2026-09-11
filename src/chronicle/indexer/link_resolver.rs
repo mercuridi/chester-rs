@@ -10,6 +10,7 @@ use std::{
 
 use anyhow::{Context, Result};
 
+use super::scanner::DocumentCandidate;
 use super::{document::Document, frontmatter::MetadataValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +83,88 @@ struct Catalogue {
     paths: HashMap<String, BTreeSet<String>>,
     titles: HashMap<String, BTreeSet<String>>,
     aliases: HashMap<String, BTreeSet<String>>,
+}
+
+pub struct ResolverCatalogue(Catalogue);
+
+pub fn catalogue_from_candidates(
+    root: &Path,
+    candidates: &[DocumentCandidate],
+) -> Result<ResolverCatalogue> {
+    let mut catalogue = Catalogue::default();
+    for candidate in candidates {
+        let note_id = &candidate.metadata.id;
+        Catalogue::insert(&mut catalogue.ids, identity_key(note_id), note_id);
+        let relative = candidate.path.strip_prefix(root).with_context(|| {
+            format!(
+                "Document path is outside index root: {}",
+                candidate.path.display()
+            )
+        })?;
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        Catalogue::insert(&mut catalogue.paths, path_key(&relative), note_id);
+        Catalogue::insert(
+            &mut catalogue.titles,
+            identity_key(
+                &candidate
+                    .path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy(),
+            ),
+            note_id,
+        );
+        for alias in &candidate.metadata.aliases {
+            Catalogue::insert(&mut catalogue.aliases, identity_key(alias), note_id);
+        }
+    }
+    Ok(ResolverCatalogue(catalogue))
+}
+
+pub fn resolve_document(
+    catalogue: &ResolverCatalogue,
+    document: &Document,
+) -> Result<LinkResolution> {
+    let mut outcome = LinkResolution::default();
+    let source_note_id = document.metadata.id.clone();
+    let visibility = document_visibility(document);
+    for (field_name, value) in &document.metadata.fields {
+        for raw in frontmatter_links(value) {
+            record(
+                &mut outcome,
+                &catalogue.0,
+                &source_note_id,
+                LinkOrigin::Frontmatter {
+                    field_name: field_name.clone(),
+                },
+                visibility,
+                raw,
+            );
+        }
+    }
+    for raw in extract_wikilinks(&document.public_body) {
+        record(
+            &mut outcome,
+            &catalogue.0,
+            &source_note_id,
+            LinkOrigin::Body,
+            visibility,
+            raw,
+        );
+    }
+    for body in &document.secret_bodies {
+        for raw in extract_wikilinks(body) {
+            record(
+                &mut outcome,
+                &catalogue.0,
+                &source_note_id,
+                LinkOrigin::Body,
+                LinkVisibility::Secret,
+                raw,
+            );
+        }
+    }
+    Ok(outcome)
 }
 
 impl Catalogue {

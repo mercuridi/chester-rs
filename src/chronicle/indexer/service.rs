@@ -185,12 +185,20 @@ impl Indexer {
 
     #[instrument(skip(self), fields(root = %self.root.display()))]
     pub async fn index(&self) -> Result<IndexStats> {
-        let (documents, corpus_stats) =
-            scanner::scan_directory_with_stats_excluding(&self.root, &self.excluded_note_ids)
-                .with_context(|| {
-                    format!("Failed to scan index directory: {}", self.root.display())
-                })?;
-        let link_resolution = link_resolver::resolve(&self.root, &documents)?;
+        let (candidates, corpus_stats) = scanner::discover_directory_with_stats_excluding(
+            &self.root,
+            &self.excluded_note_ids,
+        )
+        .with_context(|| format!("Failed to scan index directory: {}", self.root.display()))?;
+        let resolver_catalogue = link_resolver::catalogue_from_candidates(&self.root, &candidates)?;
+        let mut link_resolution = link_resolver::LinkResolution::default();
+        for candidate in &candidates {
+            let document = scanner::load_document(candidate)?;
+            let resolved = link_resolver::resolve_document(&resolver_catalogue, &document)?;
+            link_resolution.resolved.extend(resolved.resolved);
+            link_resolution.dangling.extend(resolved.dangling);
+            link_resolution.ambiguous.extend(resolved.ambiguous);
+        }
         debug!(
             resolved = link_resolution.resolved.len(),
             dangling = link_resolution.dangling.len(),
@@ -204,7 +212,7 @@ impl Indexer {
             .await
             .context("Failed to load existing index")?;
         info!(
-            discovered = documents.len(),
+            discovered = candidates.len(),
             indexed = indexed_documents.len(),
             "Preparing Chronicle index"
         );
@@ -212,7 +220,7 @@ impl Indexer {
             ?corpus_stats,
             "Collected corpus statistics before embedding"
         );
-        let graph_fingerprint = graph_input_fingerprint(&documents, &link_resolution);
+        let graph_fingerprint = graph_input_fingerprint(&candidates, &link_resolution);
 
         let indexed_by_path = indexed_documents
             .iter()
@@ -223,16 +231,20 @@ impl Indexer {
         let mut seen_paths = HashSet::new();
         let mut pending = Vec::new();
 
-        for document in documents {
-            let path = document.path.to_string_lossy().into_owned();
+        for candidate in candidates {
+            let path = candidate.path.to_string_lossy().into_owned();
             seen_paths.insert(path.clone());
 
             if let Some(indexed) = indexed_by_path.get(path.as_str()) {
-                let fingerprint =
-                    index_fingerprint(&document, self.max_chunk_tokens, self.chunk_overlap_tokens);
+                let fingerprint = index_fingerprint_candidate(
+                    &candidate,
+                    self.max_chunk_tokens,
+                    self.chunk_overlap_tokens,
+                );
                 let unchanged = if indexed.content_hash == fingerprint {
                     true
                 } else {
+                    let document = scanner::load_document(&candidate)?;
                     let chunks = PreparedDocument::chunks(
                         &document,
                         self.embedder.chunking_tokenizer(),
@@ -244,19 +256,21 @@ impl Indexer {
                 if unchanged {
                     if !self
                         .db
-                        .metadata_matches(indexed.id, &document.metadata)
+                        .metadata_matches(indexed.id, &candidate.metadata)
                         .await?
                     {
                         self.db
-                            .refresh_metadata(indexed.id, &fingerprint, &document.metadata)
+                            .refresh_metadata(indexed.id, &fingerprint, &candidate.metadata)
                             .await?;
                     }
                     stats.unchanged += 1;
                     continue;
                 }
 
+                let document = scanner::load_document(&candidate)?;
                 pending.push((document, path, true));
             } else {
+                let document = scanner::load_document(&candidate)?;
                 pending.push((document, path, false));
             }
         }
@@ -508,13 +522,13 @@ fn index_fingerprint(
 }
 
 fn graph_input_fingerprint(
-    documents: &[Document],
+    candidates: &[scanner::DocumentCandidate],
     resolution: &link_resolver::LinkResolution,
 ) -> String {
     let mut hasher = Sha256::new();
     // Scanner order is path-stable; include only graph-relevant authored data
     // plus the complete resolver result, including dangling/ambiguous links.
-    for document in documents {
+    for document in candidates {
         hasher.update(document.path.to_string_lossy().as_bytes());
         hasher.update([0]);
         hasher.update(format!(
@@ -526,6 +540,17 @@ fn graph_input_fingerprint(
     }
     hasher.update(format!("{resolution:?}"));
     hex::encode(hasher.finalize())
+}
+
+fn index_fingerprint_candidate(
+    candidate: &scanner::DocumentCandidate,
+    max_chunk_tokens: usize,
+    chunk_overlap_tokens: usize,
+) -> String {
+    format!(
+        "{}:chunker-v10-clean-frontmatter:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
+        candidate.content_hash
+    )
 }
 
 #[cfg(test)]

@@ -16,6 +16,26 @@ pub struct CorpusStats {
     pub characters: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct DocumentCandidate {
+    pub path: std::path::PathBuf,
+    pub metadata: super::frontmatter::Metadata,
+    pub content_hash: String,
+}
+
+pub fn discover_directory_with_stats(
+    root: impl AsRef<Path>,
+) -> Result<(Vec<DocumentCandidate>, CorpusStats)> {
+    discover_directory_with_stats_excluding(root, &HashSet::new())
+}
+
+pub fn discover_directory_with_stats_excluding(
+    root: impl AsRef<Path>,
+    excluded_note_ids: &HashSet<String>,
+) -> Result<(Vec<DocumentCandidate>, CorpusStats)> {
+    scan_directory_internal(root, excluded_note_ids)
+}
+
 #[instrument(skip(root))]
 pub fn scan_directory_with_stats(root: impl AsRef<Path>) -> Result<(Vec<Document>, CorpusStats)> {
     scan_directory_with_stats_excluding(root, &HashSet::new())
@@ -25,6 +45,19 @@ pub fn scan_directory_with_stats_excluding(
     root: impl AsRef<Path>,
     excluded_note_ids: &HashSet<String>,
 ) -> Result<(Vec<Document>, CorpusStats)> {
+    let root = root.as_ref();
+    let (candidates, stats) = discover_directory_with_stats_excluding(root, excluded_note_ids)?;
+    let documents = candidates
+        .iter()
+        .map(load_document)
+        .collect::<Result<Vec<_>>>()?;
+    Ok((documents, stats))
+}
+
+fn scan_directory_internal(
+    root: impl AsRef<Path>,
+    excluded_note_ids: &HashSet<String>,
+) -> Result<(Vec<DocumentCandidate>, CorpusStats)> {
     let root = root.as_ref();
 
     if !root.is_dir() {
@@ -40,7 +73,7 @@ pub fn scan_directory_with_stats_excluding(
         ..CorpusStats::default()
     };
     if !is_templates_directory(root) {
-        scan_directory_recursive(root, &mut documents, &mut stats, excluded_note_ids)?;
+        scan_directory_recursive_candidates(root, &mut documents, &mut stats, excluded_note_ids)?;
     }
 
     let mut ids = std::collections::HashSet::new();
@@ -68,9 +101,25 @@ pub fn scan_directory_with_stats_excluding(
     Ok((documents, stats))
 }
 
-fn scan_directory_recursive(
+pub fn load_document(candidate: &DocumentCandidate) -> Result<Document> {
+    let document = scan_file(&candidate.path)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Document became ineligible during indexing: {}",
+            candidate.path.display()
+        )
+    })?;
+    if document.content_hash != candidate.content_hash {
+        anyhow::bail!(
+            "Document changed while indexing: {}",
+            candidate.path.display()
+        );
+    }
+    Ok(document)
+}
+
+fn scan_directory_recursive_candidates(
     directory: &Path,
-    documents: &mut Vec<Document>,
+    documents: &mut Vec<DocumentCandidate>,
     stats: &mut CorpusStats,
     excluded_note_ids: &HashSet<String>,
 ) -> Result<()> {
@@ -91,7 +140,7 @@ fn scan_directory_recursive(
                 continue;
             }
             stats.directories += 1;
-            scan_directory_recursive(&path, documents, stats, excluded_note_ids)?;
+            scan_directory_recursive_candidates(&path, documents, stats, excluded_note_ids)?;
             continue;
         }
 
@@ -108,7 +157,7 @@ fn scan_directory_recursive(
         stats.files += 1;
         stats.words += document.content.split_whitespace().count();
         stats.characters += document.content.chars().count();
-        documents.push(document);
+        documents.push(document.candidate());
     }
 
     Ok(())
