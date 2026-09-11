@@ -161,7 +161,6 @@ impl Chronicle {
     ) -> Result<ChronicleAnswer> {
         info!("Starting Chronicle question");
         let _lifecycle = self.lifecycle.lock().await;
-        let _gpu_lease = self.runtime.acquire_inference()?;
 
         let selection = self.select_answer_route(question).await?;
         let effective_route = Self::effective_route(&selection.route);

@@ -76,11 +76,15 @@ impl TranscriptionService {
         &self,
         recordings: Vec<PathBuf>,
     ) -> Result<Vec<TranscribedSegment>> {
-        let _gpu_lease = self.runtime.acquire_transcription()?;
+        let gpu_lease = self.runtime.acquire_transcription()?;
 
         info!("Starting recording transcription");
         let factory = Arc::clone(&self.factory);
         let result = tokio::task::spawn_blocking(move || {
+            // The blocking worker, rather than the async caller, owns the GPU
+            // lease. Aborting the caller must not release the lease while this
+            // work is still using the GPU.
+            let _gpu_lease = gpu_lease;
             let mut transcriber = factory.create()?;
             let mut output = Vec::new();
 
@@ -127,7 +131,46 @@ mod tests {
     use crate::chronicle::runtime::GpuRuntime;
     use anyhow::Result;
     use serenity::model::id::UserId;
-    use std::{path::Path, sync::Arc};
+    use std::{
+        path::Path,
+        sync::mpsc::{Receiver, Sender},
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    struct NoopTranscriber;
+
+    impl super::Transcriber for NoopTranscriber {
+        fn transcribe(
+            &mut self,
+            _audio: &super::super::audio::Audio,
+        ) -> Result<Vec<super::super::whisper::transcriber::TranscriptSegment>> {
+            Ok(Vec::new())
+        }
+    }
+
+    struct BlockingFactory {
+        started: Sender<()>,
+        release: Mutex<Option<Receiver<()>>>,
+    }
+
+    impl TranscriberFactory for BlockingFactory {
+        fn create(&self) -> Result<Box<dyn super::Transcriber>> {
+            self.started
+                .send(())
+                .map_err(|_| anyhow::anyhow!("test worker start receiver dropped"))?;
+            let release = self
+                .release
+                .lock()
+                .map_err(|_| anyhow::anyhow!("test release receiver poisoned"))?
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("test worker release receiver missing"))?;
+            release
+                .recv()
+                .map_err(|_| anyhow::anyhow!("test worker release sender dropped"))?;
+            Ok(Box::new(NoopTranscriber))
+        }
+    }
 
     struct FailingFactory;
 
@@ -168,6 +211,41 @@ mod tests {
         assert!(error.to_string().contains("factory failed"));
         assert!(runtime.acquire_transcription().is_ok());
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_transcription_keeps_gpu_lease_until_worker_finishes() -> Result<()> {
+        let runtime = GpuRuntime::new();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let factory = Arc::new(BlockingFactory {
+            started: started_tx,
+            release: Mutex::new(Some(release_rx)),
+        });
+        let service = TranscriptionService::with_factory(runtime.clone(), factory);
+
+        let task = tokio::spawn(async move { service.transcribe_recordings(Vec::new()).await });
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .map_err(|_| anyhow::anyhow!("blocking transcription worker did not start"))?;
+
+        task.abort();
+        let _ = task.await;
+        assert!(runtime.acquire_transcription().is_err());
+
+        release_tx
+            .send(())
+            .map_err(|_| anyhow::anyhow!("blocking transcription worker already stopped"))?;
+
+        for _ in 0..100 {
+            if let Ok(lease) = runtime.acquire_transcription() {
+                drop(lease);
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        anyhow::bail!("transcription GPU lease was not released after worker completion");
     }
 
     #[tokio::test]

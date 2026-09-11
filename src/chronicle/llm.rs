@@ -90,47 +90,47 @@ impl Llm {
     pub async fn load(&self) -> Result<()> {
         info!(repo = %self.repo, revision = %self.revision, "Loading Chronicle LLM");
         let lease = self.runtime.begin_llm_load()?;
+        let model = Arc::clone(&self.model);
         let repo = self.repo.clone();
         let revision = self.revision.clone();
         let model_file = self.model_file.clone();
         let tokenizer_repo = self.tokenizer_repo.clone();
         let tokenizer_file = self.tokenizer_file.clone();
 
-        let loaded_result = tokio::task::spawn_blocking(move || {
-            LoadedLlm::load(
+        let result = tokio::task::spawn_blocking(move || {
+            let loaded = LoadedLlm::load(
                 &repo,
                 &revision,
                 &model_file,
                 &tokenizer_repo,
                 &tokenizer_file,
-            )
+            )?;
+
+            let mut model = model
+                .lock()
+                .map_err(|_| anyhow!("LLM model state is poisoned"))?;
+
+            if model.is_some() {
+                bail!("The LLM model was loaded concurrently");
+            }
+
+            *model = Some(loaded);
+            drop(model);
+
+            // The worker owns the lease through both model construction and
+            // the successful runtime state transition.
+            lease.commit_to_loaded()
         })
         .await
         .context("Native LLM loading task failed")?;
-        let loaded = match loaded_result {
-            Ok(loaded) => loaded,
-            Err(error) => {
-                report_cuda_oom(&error, "llm", "load");
-                return Err(error);
-            }
-        };
 
-        let mut model = self
-            .model
-            .lock()
-            .map_err(|_| anyhow!("LLM model state is poisoned"))?;
-
-        if model.is_some() {
-            bail!("The LLM model was loaded concurrently");
+        if let Err(error) = &result {
+            report_cuda_oom(error, "llm", "load");
         }
-
-        *model = Some(loaded);
-        drop(model);
-        lease.commit_to_loaded()?;
 
         info!("Chronicle LLM loaded");
 
-        Ok(())
+        result
     }
 
     #[instrument(skip(self))]
@@ -146,11 +146,12 @@ impl Llm {
             model_slot.take()
         };
 
-        tokio::task::spawn_blocking(move || drop(model))
-            .await
-            .context("Native LLM unload task failed")?;
-
-        lease.commit_to_idle()?;
+        tokio::task::spawn_blocking(move || {
+            let _model = model;
+            lease.commit_to_idle()
+        })
+        .await
+        .context("Native LLM unload task failed")??;
         info!("Chronicle LLM unloaded");
         Ok(())
     }
@@ -231,8 +232,12 @@ impl Llm {
         let user_prompt = format_chat_prompt(system, prompt);
         let context_limit = self.context_limit;
         let seed = self.seed;
+        let gpu_lease = self.runtime.acquire_inference()?;
 
         let result = tokio::task::spawn_blocking(move || {
+            // Keep inference exclusive until the native worker has completely
+            // finished, even if the async caller is cancelled.
+            let _gpu_lease = gpu_lease;
             let mut model = model
                 .lock()
                 .map_err(|_| anyhow!("LLM model state is poisoned"))?;
@@ -500,6 +505,10 @@ mod tests {
     async fn generation_requires_loaded_model() {
         let llm = Llm::new(&config(), GpuRuntime::new());
         let error = llm.generate("Question").await.unwrap_err();
-        assert!(error.to_string().contains("not loaded"));
+        assert!(
+            error
+                .to_string()
+                .contains("unavailable until the LLM is loaded")
+        );
     }
 }
