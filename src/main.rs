@@ -15,6 +15,7 @@ use songbird::{
     Config as SongbirdConfig, SerenityInit,
     driver::{DecodeConfig, DecodeMode},
 };
+use sqlx::SqlitePool;
 use tracing::info;
 
 use crate::{
@@ -547,6 +548,13 @@ async fn run(invocation: Invocation, paths: AppPaths) -> Result<()> {
 async fn run_bot(paths: AppPaths) -> Result<()> {
     tracing::info!(runtime_root = %paths.runtime_root.display(), config_path = %paths.config_path.display(), "Starting Chester");
 
+    let (config, token) = load_bot_startup(paths)?;
+    let (pool, chronicle) = initialize_bot_services(&config).await?;
+    let downloader = synchronize_audio_library(&config, &pool).await?;
+    run_discord_client(config, token, pool, chronicle, downloader).await
+}
+
+fn load_bot_startup(paths: AppPaths) -> Result<(Config, String)> {
     let config_path = paths.config_path.clone();
     let config = Config::load(paths).with_context(|| {
         format!(
@@ -564,9 +572,11 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
 
     scan_incomplete_manifests(&config.paths.recordings_dir)
         .context("Failed to scan recording manifests")?;
-
     let token = std::env::var("DISCORD_TOKEN").context("DISCORD_TOKEN is not set")?;
+    Ok((config, token))
+}
 
+async fn initialize_bot_services(config: &Config) -> Result<(SqlitePool, Arc<Chronicle>)> {
     let pool = database::pool::open_sqlite_pool(&config.database.jester, "Jester")
         .await
         .context("Failed to open the Jester database")?;
@@ -574,16 +584,19 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
         .await
         .context("Failed to initialize the Jester database schema")?;
     let chronicle = Arc::new(
-        build_chronicle(&config)
+        build_chronicle(config)
             .await
             .context("Failed to initialize Chronicle")?,
     );
+    Ok((pool, chronicle))
+}
 
+async fn synchronize_audio_library(config: &Config, pool: &SqlitePool) -> Result<Arc<Downloader>> {
     let downloader = Downloader::new(crate::jester::track::download::DownloadConfig::from(
         &config.paths,
     ));
     let sync_stats = sync_audio_library(
-        &pool,
+        pool,
         SyncConfig {
             downloader: downloader.clone(),
         },
@@ -598,24 +611,30 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
         skipped = sync_stats.skipped,
         "Library sync complete"
     );
-
     if sync_stats.failed > 0 {
         bail!(
             "Audio library synchronization failed for {} track(s); refusing to start",
             sync_stats.failed
         );
     }
+    Ok(downloader)
+}
 
+async fn run_discord_client(
+    config: Config,
+    token: String,
+    pool: SqlitePool,
+    chronicle: Arc<Chronicle>,
+    downloader: Arc<Downloader>,
+) -> Result<()> {
     let poise_commands = build_commands();
     tracing::info!(
         command_count = poise_commands.len(),
         "Registering bot commands"
     );
 
-    // Build the Songbird config too (required for decoding voice data).
     let songbird_config =
         SongbirdConfig::default().decode_mode(DecodeMode::Decode(DecodeConfig::default()));
-
     let songbird = songbird::Songbird::serenity_from_config(songbird_config.clone());
     let recorder = crate::chronicle::recording::recorder::RecorderManager::new(
         config.paths.recordings_dir.clone(),
@@ -642,14 +661,10 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
         coordinator.state.clone(),
     );
     let framework = build_framework(data, poise_commands);
-
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
-
-    // 3) Create the Serenity client, attach Poise as the event handler…
-    // 4) And register Songbird on the same builder
     let mut client = ClientBuilder::new(token, intents)
         .framework(framework)
-        .register_songbird_with(songbird) // ← this injects the Songbird voice manager
+        .register_songbird_with(songbird)
         .await
         .context("Failed to create the Discord client")?;
 
@@ -668,7 +683,6 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
             coordinator.drain().await?;
         }
     }
-
     Ok(())
 }
 
