@@ -663,6 +663,7 @@ mod tests {
         prompts: Mutex<Vec<String>>,
         budget: Mutex<usize>,
         plan_output: Mutex<String>,
+        plan_calls: Mutex<usize>,
         repair_plan_output: Mutex<Option<String>>,
         repair_requests: Mutex<Vec<(String, String, String)>>,
         fail_count: bool,
@@ -681,6 +682,7 @@ mod tests {
                 prompts: Mutex::new(Vec::new()),
                 budget: Mutex::new(10_000),
                 plan_output: Mutex::new(r#"{"operation":"search"}"#.into()),
+                plan_calls: Mutex::new(0),
                 repair_plan_output: Mutex::new(None),
                 repair_requests: Mutex::new(Vec::new()),
                 fail_count: false,
@@ -707,6 +709,10 @@ mod tests {
         }
 
         async fn generate_plan(&self, _question: &str) -> Result<String> {
+            *self
+                .plan_calls
+                .lock()
+                .map_err(|_| anyhow!("plan counter poisoned"))? += 1;
             Ok(self
                 .plan_output
                 .lock()
@@ -957,6 +963,18 @@ mod tests {
                 .map_err(|_| anyhow!("prompts poisoned"))?[0]
                 .contains("cannot be executed as a structured count or list")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn definitely_unsupported_structured_request_skips_planner() -> Result<()> {
+        let (chronicle, _retriever, llm) =
+            service(FakeOutcome::Results, ["Some documented examples."], 500)?;
+
+        let answer = chronicle.ask("List characters who are not dead.").await?;
+
+        assert!(answer.starts_with("An exhaustive count or list is unavailable"));
+        assert_eq!(mutex_value(&llm.plan_calls)?, 0);
         Ok(())
     }
 

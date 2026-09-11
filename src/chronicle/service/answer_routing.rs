@@ -58,6 +58,12 @@ pub(in crate::chronicle::service) async fn select_answer_route(
     if question.trim().is_empty() {
         return Ok(AnswerRoute::EmptyQuestion);
     }
+    if planner::is_definitely_unsupported_structured_request(question) {
+        debug!("Skipping query planner for a definitely unsupported structured request");
+        return Ok(AnswerRoute::Retrieval(
+            RetrievalMode::UnsupportedStructuredQuery,
+        ));
+    }
     let plan = match llm.generate_plan(question).await {
         Ok(response) => match planner::parse_for_question(question, &response) {
             Ok(plan) => Some(plan),

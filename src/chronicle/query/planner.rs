@@ -177,31 +177,72 @@ fn wrap_wikilink_if_required(
 }
 
 pub fn parse_for_question(question: &str, response: &str) -> Result<Plan> {
-    let question = question.to_lowercase();
-    let words = question.split_whitespace().collect::<Vec<_>>();
-    let unsafe_structured_query = ["not", "without", "no", "or", "either"]
-        .iter()
-        .any(|marker| words.contains(marker))
-        || [
-            "draft",
-            "non-canon",
-            "noncanon",
-            "deprecated",
-            "speculative",
-            "no life status",
-            "missing life status",
-            "last year",
-            "historically",
-            "as of",
-            "before",
-            "after",
-        ]
-        .iter()
-        .any(|marker| question.contains(marker));
-    if unsafe_structured_query {
+    if is_definitely_unsupported_structured_request(question) {
         return Ok(Plan::Unsupported {});
     }
-    parse(response)
+    let plan = parse(response)?;
+    if has_unsupported_structured_modifier(question) && plan.is_structured() {
+        return Ok(Plan::Unsupported {});
+    }
+    Ok(plan)
+}
+
+/// Returns true only for questions that unambiguously request a structured
+/// collection or total while using a restriction SQLite cannot represent. This
+/// lets route selection skip an otherwise-discarded planner generation.
+pub fn is_definitely_unsupported_structured_request(question: &str) -> bool {
+    has_structured_request_intent(question) && has_unsupported_structured_modifier(question)
+}
+
+fn has_structured_request_intent(question: &str) -> bool {
+    let words = normalized_words(question);
+    words
+        .windows(2)
+        .any(|pair| pair[0] == "how" && pair[1] == "many")
+        || words.iter().any(|word| {
+            matches!(
+                word.as_str(),
+                "count" | "total" | "list" | "name" | "identify"
+            )
+        })
+}
+
+fn has_unsupported_structured_modifier(question: &str) -> bool {
+    let words = normalized_words(question);
+    words.iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "not"
+                | "without"
+                | "no"
+                | "or"
+                | "either"
+                | "draft"
+                | "noncanon"
+                | "deprecated"
+                | "speculative"
+                | "historically"
+                | "before"
+                | "after"
+        )
+    }) || words.windows(2).any(|pair| {
+        matches!(
+            (pair[0].as_str(), pair[1].as_str()),
+            ("non", "canon")
+                | ("no", "life")
+                | ("missing", "life")
+                | ("last", "year")
+                | ("as", "of")
+        )
+    })
+}
+
+fn normalized_words(question: &str) -> Vec<String> {
+    question
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 #[cfg(test)]
@@ -232,6 +273,37 @@ mod tests {
             parse_for_question("How many living NPCs are recorded?", structured)?,
             Plan::List { .. } | Plan::Count { .. }
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn safety_gate_only_short_circuits_definite_structured_requests() -> Result<()> {
+        assert!(is_definitely_unsupported_structured_request(
+            "List characters who are not dead."
+        ));
+        assert!(is_definitely_unsupported_structured_request(
+            "How many draft NPCs are recorded?"
+        ));
+        assert!(!is_definitely_unsupported_structured_request(
+            "Why did the rebellion not succeed?"
+        ));
+        assert!(!is_definitely_unsupported_structured_request(
+            "Give an overview of the aftermath of the rebellion."
+        ));
+        assert_eq!(
+            parse_for_question(
+                "Why did the rebellion not succeed?",
+                r#"{"operation":"search"}"#
+            )?,
+            Plan::Search {}
+        );
+        assert_eq!(
+            parse_for_question(
+                "Give an overview of the aftermath of the rebellion.",
+                r#"{"operation":"synthesis"}"#
+            )?,
+            Plan::Synthesis {}
+        );
         Ok(())
     }
 
