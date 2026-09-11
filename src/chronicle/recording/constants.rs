@@ -1,4 +1,6 @@
-pub const RING_BUFFER_CAPACITY: usize = 96_000;
+// 2,604 complete 20 ms stereo frames: approximately 10 MB (9,999,360 bytes)
+// of per-participant PCM buffering, or about 104 seconds at 48 kHz.
+pub const RING_BUFFER_CAPACITY: usize = 4_999_680;
 pub const STEREO_FRAME_SAMPLES: usize = 1_920;
 pub const MONO_FRAME_SAMPLES: usize = 960;
 pub const MAX_OPUS_PACKET_SIZE: usize = 4_000;
