@@ -13,7 +13,7 @@ use tracing::{debug, info, instrument, warn};
 
 use super::{
     chunker,
-    db::repository::facade::{IndexedChunk, IndexerDb},
+    db::repository::facade::{IndexedChunk, IndexedDocument, IndexerDb},
     embedder::{Embedder, EmbeddingModel},
     link_resolver, scanner,
 };
@@ -133,6 +133,13 @@ pub struct IndexStats {
     pub pagerank_rebuilt: bool,
 }
 
+struct ResolvedCorpus {
+    candidates: Vec<scanner::DocumentCandidate>,
+    corpus_stats: scanner::CorpusStats,
+    link_resolution: link_resolver::LinkResolution,
+    graph_fingerprint: String,
+}
+
 pub struct Indexer {
     root: PathBuf,
     db: IndexerDb,
@@ -185,6 +192,43 @@ impl Indexer {
 
     #[instrument(skip(self), fields(root = %self.root.display()))]
     pub async fn index(&self) -> Result<IndexStats> {
+        let corpus = self.scan_and_resolve_corpus()?;
+        let indexed_documents = self
+            .db
+            .all_documents()
+            .await
+            .context("Failed to load existing index")?;
+        info!(
+            discovered = corpus.candidates.len(),
+            indexed = indexed_documents.len(),
+            "Preparing Chronicle index"
+        );
+        debug!(
+            ?corpus.corpus_stats,
+            "Collected corpus statistics before embedding"
+        );
+        let (mut stats, seen_paths) = self
+            .index_discovered_documents(corpus.candidates, &indexed_documents)
+            .await?;
+        debug!(
+            pending_documents = stats.added + stats.updated,
+            "Indexed changed documents"
+        );
+
+        self.remove_deleted_documents(&indexed_documents, &seen_paths, &mut stats)
+            .await?;
+        self.rebuild_graph_if_changed(
+            &corpus.graph_fingerprint,
+            &corpus.link_resolution,
+            &mut stats,
+        )
+        .await?;
+
+        info!(?stats, "Chronicle indexing finished");
+        Ok(stats)
+    }
+
+    fn scan_and_resolve_corpus(&self) -> Result<ResolvedCorpus> {
         let (candidates, corpus_stats) = scanner::discover_directory_with_stats_excluding(
             &self.root,
             &self.excluded_note_ids,
@@ -205,28 +249,24 @@ impl Indexer {
             ambiguous = link_resolution.ambiguous.len(),
             "Resolved Chronicle wikilinks"
         );
-
-        let indexed_documents = self
-            .db
-            .all_documents()
-            .await
-            .context("Failed to load existing index")?;
-        info!(
-            discovered = candidates.len(),
-            indexed = indexed_documents.len(),
-            "Preparing Chronicle index"
-        );
-        debug!(
-            ?corpus_stats,
-            "Collected corpus statistics before embedding"
-        );
         let graph_fingerprint = graph_input_fingerprint(&candidates, &link_resolution);
+        Ok(ResolvedCorpus {
+            candidates,
+            corpus_stats,
+            link_resolution,
+            graph_fingerprint,
+        })
+    }
 
+    async fn index_discovered_documents(
+        &self,
+        candidates: Vec<scanner::DocumentCandidate>,
+        indexed_documents: &[IndexedDocument],
+    ) -> Result<(IndexStats, HashSet<String>)> {
         let indexed_by_path = indexed_documents
             .iter()
             .map(|document| (document.path.as_str(), document))
             .collect::<std::collections::HashMap<_, _>>();
-
         let mut stats = IndexStats::default();
         let mut seen_paths = HashSet::new();
         let mut pending = Vec::new();
@@ -276,11 +316,15 @@ impl Indexer {
         }
 
         self.index_pending_documents(&pending, &mut stats).await?;
-        debug!(
-            pending_documents = pending.len(),
-            "Indexed changed documents"
-        );
+        Ok((stats, seen_paths))
+    }
 
+    async fn remove_deleted_documents(
+        &self,
+        indexed_documents: &[IndexedDocument],
+        seen_paths: &HashSet<String>,
+        stats: &mut IndexStats,
+    ) -> Result<()> {
         for document in indexed_documents {
             if !seen_paths.contains(&document.path) {
                 self.db
@@ -294,12 +338,20 @@ impl Indexer {
                 warn!(path = %document.path, "Removed document from Chronicle index");
             }
         }
+        Ok(())
+    }
 
+    async fn rebuild_graph_if_changed(
+        &self,
+        graph_fingerprint: &str,
+        link_resolution: &link_resolver::LinkResolution,
+        stats: &mut IndexStats,
+    ) -> Result<()> {
         let graph_changed =
-            self.db.graph_input_fingerprint().await?.as_deref() != Some(graph_fingerprint.as_str());
+            self.db.graph_input_fingerprint().await?.as_deref() != Some(graph_fingerprint);
         if graph_changed {
             stats.graph_rebuilt = true;
-            let graph_stats = self.db.rebuild_document_graph(&link_resolution).await?;
+            let graph_stats = self.db.rebuild_document_graph(link_resolution).await?;
             debug!(
                 edges = graph_stats.edge_count,
                 "Persisted resolved Chronicle document graph"
@@ -313,14 +365,12 @@ impl Indexer {
                 "Rebuilt Chronicle document PageRank"
             );
             self.db
-                .set_graph_input_fingerprint(&graph_fingerprint)
+                .set_graph_input_fingerprint(graph_fingerprint)
                 .await?;
         } else {
             debug!("Skipped unchanged Chronicle document graph and PageRank");
         }
-
-        info!(?stats, "Chronicle indexing finished");
-        Ok(stats)
+        Ok(())
     }
 
     pub fn into_parts(self) -> (IndexerDb, Box<dyn EmbeddingModel>) {
