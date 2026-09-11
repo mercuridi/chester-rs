@@ -19,6 +19,38 @@ pub const NOTE_TYPES: &[&str] = &[
     "template",
 ];
 
+/// The answer path selected before any structured-query details are generated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RouteOperation {
+    Count,
+    List,
+    CountMembers,
+    Search,
+    Synthesis,
+    Unsupported,
+    Clarify,
+}
+
+impl RouteOperation {
+    /// Stable, low-cardinality value for route-selection telemetry.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::List => "list",
+            Self::CountMembers => "count_members",
+            Self::Search => "search",
+            Self::Synthesis => "synthesis",
+            Self::Unsupported => "unsupported",
+            Self::Clarify => "clarify",
+        }
+    }
+
+    pub fn is_structured(self) -> bool {
+        matches!(self, Self::Count | Self::List | Self::CountMembers)
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Filters {
@@ -113,6 +145,27 @@ impl Plan {
             self,
             Self::Count { .. } | Self::List { .. } | Self::CountMembers { .. }
         )
+    }
+
+    pub fn route_operation(&self) -> RouteOperation {
+        match self {
+            Self::Count { .. } => RouteOperation::Count,
+            Self::List { .. } => RouteOperation::List,
+            Self::CountMembers { .. } => RouteOperation::CountMembers,
+            Self::Search {} => RouteOperation::Search,
+            Self::Synthesis {} => RouteOperation::Synthesis,
+            Self::Unsupported {} => RouteOperation::Unsupported,
+            Self::Clarify {} => RouteOperation::Clarify,
+        }
+    }
+
+    pub fn structured_operation(&self) -> Option<RouteOperation> {
+        match self {
+            Self::Count { .. } => Some(RouteOperation::Count),
+            Self::List { .. } => Some(RouteOperation::List),
+            Self::CountMembers { .. } => Some(RouteOperation::CountMembers),
+            Self::Search {} | Self::Synthesis {} | Self::Unsupported {} | Self::Clarify {} => None,
+        }
     }
 
     pub fn selection(&self) -> Option<(&str, &Filters)> {

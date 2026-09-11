@@ -1,5 +1,9 @@
 //! Separate structured-query evaluation; leaves the retrieval baseline unchanged.
-use super::{plan::Plan, planner};
+use super::{
+    classifier,
+    plan::{Plan, RouteOperation},
+    planner,
+};
 use crate::chronicle::{
     config::app::Config,
     indexer::{
@@ -44,10 +48,23 @@ struct CaseReport {
     case: Case,
     result: Option<StructuredResult>,
     executor_correct: bool,
-    planner_responses: Vec<String>,
+    expected_operation: RouteOperation,
+    classifier_response: Option<String>,
+    classifier_error: Option<String>,
+    classified_operation: Option<RouteOperation>,
+    route_correct: Option<bool>,
+    query_generation_responses: Vec<String>,
+    query_generation_error: Option<String>,
+    query_validation_error: Option<String>,
+    repair_response: Option<String>,
+    repair_error: Option<String>,
+    repair_validation_error: Option<String>,
+    link_resolution_error: Option<String>,
+    execution_error: Option<String>,
     actual_plan: Option<Plan>,
-    planner_error: Option<String>,
-    planner_correct: Option<bool>,
+    actual_result: Option<StructuredResult>,
+    query_correct: Option<bool>,
+    end_to_end_correct: Option<bool>,
 }
 #[derive(Serialize)]
 struct Report {
@@ -77,7 +94,7 @@ fn family_accuracy(
     for case in cases {
         let entry = counts.entry(case.case.intent_family.clone()).or_default();
         entry.0 += 1;
-        if case.planner_correct == Some(true) {
+        if case.end_to_end_correct == Some(true) {
             entry.1 += 1;
         }
     }
@@ -180,70 +197,158 @@ async fn evaluate(
             })
     });
     let mut report = CaseReport {
+        expected_operation: case.plan.route_operation(),
         case,
         result,
         executor_correct,
-        planner_responses: Vec::new(),
+        classifier_response: None,
+        classifier_error: None,
+        classified_operation: None,
+        route_correct: None,
+        query_generation_responses: Vec::new(),
+        query_generation_error: None,
+        query_validation_error: None,
+        repair_response: None,
+        repair_error: None,
+        repair_validation_error: None,
+        link_resolution_error: None,
+        execution_error: None,
         actual_plan: None,
-        planner_error: None,
-        planner_correct: None,
+        actual_result: None,
+        query_correct: None,
+        end_to_end_correct: None,
     };
     if let Some(llm) = llm {
         let _lease = runtime.acquire_inference()?;
-        match llm.generate_plan(&report.case.question).await {
+        match llm.classify_route(&report.case.question).await {
             Ok(response) => {
-                report.planner_responses.push(response.clone());
-                match planner::parse_for_question(&report.case.question, &response) {
-                    Ok(mut plan) => {
-                        db.resolve_string_or_wikilinks(&mut plan).await?;
-                        report.planner_correct = Some(plan == report.case.plan);
-                        report.actual_plan = Some(plan);
-                    }
-                    Err(initial_error) => {
-                        match llm
-                            .repair_plan(
-                                &report.case.question,
-                                &response,
-                                &initial_error.to_string(),
-                            )
-                            .await
-                        {
-                            Ok(retry_response) => {
-                                report.planner_responses.push(retry_response.clone());
-                                match planner::parse_for_question(
-                                    &report.case.question,
-                                    &retry_response,
-                                ) {
-                                    Ok(mut plan) => {
-                                        db.resolve_string_or_wikilinks(&mut plan).await?;
-                                        report.planner_correct = Some(plan == report.case.plan);
-                                        report.actual_plan = Some(plan);
-                                    }
-                                    Err(retry_error) => {
-                                        report.planner_correct = Some(false);
-                                        report.planner_error = Some(format!(
-                                            "Initial planner response rejected: {initial_error:#}\nPlanner retry response rejected: {retry_error:#}"
-                                        ));
-                                    }
-                                }
-                            }
-                            Err(retry_error) => {
-                                report.planner_correct = Some(false);
-                                report.planner_error = Some(format!(
-                                    "Initial planner response rejected: {initial_error:#}\nPlanner retry failed: {retry_error:#}"
-                                ));
-                            }
+                report.classifier_response = Some(response.clone());
+                match classifier::parse(&response) {
+                    Ok(operation) => {
+                        report.classified_operation = Some(operation);
+                        report.route_correct = Some(operation == report.expected_operation);
+                        if operation.is_structured() {
+                            evaluate_structured_route(&mut report, db, llm, operation).await;
+                        } else {
+                            let plan = plan_for_operation(operation);
+                            report.actual_plan = Some(plan.clone());
+                            report.end_to_end_correct = Some(plan == report.case.plan);
                         }
+                    }
+                    Err(error) => {
+                        report.classifier_error = Some(format!("{error:#}"));
+                        report.route_correct = Some(false);
+                        report.end_to_end_correct = Some(false);
                     }
                 }
             }
             Err(error) => {
-                report.planner_correct = Some(false);
-                report.planner_error = Some(format!("{error:#}"));
+                report.classifier_error = Some(format!("{error:#}"));
+                report.route_correct = Some(false);
+                report.end_to_end_correct = Some(false);
             }
         }
     }
     Ok(report)
+}
+
+async fn evaluate_structured_route(
+    report: &mut CaseReport,
+    db: &IndexerDb,
+    llm: &Llm,
+    operation: RouteOperation,
+) {
+    let response = match llm
+        .generate_structured_plan(&report.case.question, operation)
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            report.query_generation_error = Some(format!("{error:#}"));
+            report.end_to_end_correct = Some(false);
+            return;
+        }
+    };
+    report.query_generation_responses.push(response.clone());
+    match parse_structured_plan(&report.case.question, &response, operation) {
+        Ok(plan) => accept_structured_plan(report, db, plan).await,
+        Err(error) => {
+            report.query_validation_error = Some(format!("{error:#}"));
+            let repair_response = match llm
+                .repair_structured_plan(
+                    &report.case.question,
+                    operation,
+                    &response,
+                    &error.to_string(),
+                )
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    report.repair_error = Some(format!("{error:#}"));
+                    report.end_to_end_correct = Some(false);
+                    return;
+                }
+            };
+            report.repair_response = Some(repair_response.clone());
+            match parse_structured_plan(&report.case.question, &repair_response, operation) {
+                Ok(plan) => accept_structured_plan(report, db, plan).await,
+                Err(error) => {
+                    report.repair_validation_error = Some(format!("{error:#}"));
+                    report.end_to_end_correct = Some(false);
+                }
+            }
+        }
+    }
+}
+
+async fn accept_structured_plan(report: &mut CaseReport, db: &IndexerDb, mut plan: Plan) {
+    if let Err(error) = db.resolve_string_or_wikilinks(&mut plan).await {
+        report.link_resolution_error = Some(format!("{error:#}"));
+        report.end_to_end_correct = Some(false);
+        return;
+    }
+    let result = match db.execute_plan_for(&plan, AccessScope::Gm).await {
+        Ok(result) => result,
+        Err(error) => {
+            report.execution_error = Some(format!("{error:#}"));
+            report.end_to_end_correct = Some(false);
+            return;
+        }
+    };
+    report.query_correct = report
+        .route_correct
+        .filter(|correct| *correct)
+        .map(|_| plan == report.case.plan);
+    report.end_to_end_correct =
+        Some(report.route_correct == Some(true) && report.query_correct == Some(true));
+    report.actual_plan = Some(plan);
+    report.actual_result = Some(result);
+}
+
+fn parse_structured_plan(
+    question: &str,
+    response: &str,
+    operation: RouteOperation,
+) -> Result<Plan> {
+    let plan = planner::parse_for_question(question, response)?;
+    ensure!(
+        plan.structured_operation() == Some(operation),
+        "Structured plan operation did not match classified route"
+    );
+    Ok(plan)
+}
+
+fn plan_for_operation(operation: RouteOperation) -> Plan {
+    match operation {
+        RouteOperation::Search => Plan::Search {},
+        RouteOperation::Synthesis => Plan::Synthesis {},
+        RouteOperation::Unsupported => Plan::Unsupported {},
+        RouteOperation::Clarify => Plan::Clarify {},
+        RouteOperation::Count | RouteOperation::List | RouteOperation::CountMembers => {
+            unreachable!("structured route must generate a plan")
+        }
+    }
 }
 
 fn create_report_file(requested_path: Option<&Path>) -> Result<(File, PathBuf)> {
@@ -324,17 +429,19 @@ pub async fn run(
     let planner_accuracy = test_planner.then(|| {
         cases
             .iter()
-            .filter(|c| c.planner_correct == Some(true))
+            .filter(|c| c.end_to_end_correct == Some(true))
             .count() as f64
             / cases.len() as f64
     });
-    // Reject any unsupported/ambiguous question incorrectly accepted for SQL,
-    // even if aggregate planner accuracy meets the threshold.
-    let unsafe_acceptance = cases.iter().any(|c| {
-        !c.case.plan.is_structured() && c.actual_plan.as_ref().is_some_and(Plan::is_structured)
+    // A false structured classification can cause a parameterized query to run
+    // for a request that must remain on a non-structured route. Do not allow
+    // aggregate accuracy to mask that safety failure.
+    let unsafe_structured_acceptance = cases.iter().any(|case| {
+        !case.case.plan.is_structured()
+            && case.actual_plan.as_ref().is_some_and(Plan::is_structured)
     });
     let passed = cases.iter().all(|c| c.executor_correct)
-        && !unsafe_acceptance
+        && !unsafe_structured_acceptance
         && planner_accuracy.is_none_or(|a| a >= suite.minimum_planner_accuracy);
     let report = Report {
         suite: suite.name,

@@ -406,8 +406,26 @@ impl LanguageModel for JudgeTestModel {
             .context("test model ran out of responses")
     }
 
-    async fn generate_plan(&self, _question: &str) -> Result<String> {
+    async fn classify_route(&self, _question: &str) -> Result<String> {
         Ok(r#"{"operation":"synthesis"}"#.into())
+    }
+
+    async fn generate_structured_plan(
+        &self,
+        _question: &str,
+        _operation: crate::chronicle::query::plan::RouteOperation,
+    ) -> Result<String> {
+        unreachable!("synthesis test model should not generate a structured plan")
+    }
+
+    async fn repair_structured_plan(
+        &self,
+        _question: &str,
+        _operation: crate::chronicle::query::plan::RouteOperation,
+        _rejected_response: &str,
+        _rejection_error: &str,
+    ) -> Result<String> {
+        unreachable!("synthesis test model should not repair a structured plan")
     }
 
     async fn load(&self) -> Result<()> {

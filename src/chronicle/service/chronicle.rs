@@ -662,9 +662,11 @@ mod tests {
         outputs: Mutex<VecDeque<String>>,
         prompts: Mutex<Vec<String>>,
         budget: Mutex<usize>,
+        classifier_output: Mutex<Option<String>>,
         plan_output: Mutex<String>,
         plan_calls: Mutex<usize>,
-        repair_plan_output: Mutex<Option<String>>,
+        structured_plan_calls: Mutex<usize>,
+        repair_structured_plan_output: Mutex<Option<String>>,
         repair_requests: Mutex<Vec<(String, String, String)>>,
         fail_count: bool,
         fail_generate_on_call: Mutex<Option<usize>>,
@@ -681,9 +683,11 @@ mod tests {
                 outputs: Mutex::new(outputs.into_iter().map(str::to_owned).collect()),
                 prompts: Mutex::new(Vec::new()),
                 budget: Mutex::new(10_000),
+                classifier_output: Mutex::new(None),
                 plan_output: Mutex::new(r#"{"operation":"search"}"#.into()),
                 plan_calls: Mutex::new(0),
-                repair_plan_output: Mutex::new(None),
+                structured_plan_calls: Mutex::new(0),
+                repair_structured_plan_output: Mutex::new(None),
                 repair_requests: Mutex::new(Vec::new()),
                 fail_count: false,
                 fail_generate_on_call: Mutex::new(None),
@@ -708,11 +712,49 @@ mod tests {
             Ok(prompt.chars().count())
         }
 
-        async fn generate_plan(&self, _question: &str) -> Result<String> {
+        async fn classify_route(&self, question: &str) -> Result<String> {
             *self
                 .plan_calls
                 .lock()
                 .map_err(|_| anyhow!("plan counter poisoned"))? += 1;
+            if let Some(output) = self
+                .classifier_output
+                .lock()
+                .map_err(|_| anyhow!("classifier output poisoned"))?
+                .clone()
+            {
+                return Ok(output);
+            }
+            let plan = self
+                .plan_output
+                .lock()
+                .map_err(|_| anyhow!("plan poisoned"))?
+                .clone();
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&plan) {
+                if let Some(operation) = value.get("operation") {
+                    return Ok(serde_json::json!({ "operation": operation }).to_string());
+                }
+            }
+            let question = question.to_lowercase();
+            let operation = if question.starts_with("list") || question.starts_with("name") {
+                "list"
+            } else if question.contains("how many") {
+                "count"
+            } else {
+                "search"
+            };
+            Ok(serde_json::json!({ "operation": operation }).to_string())
+        }
+
+        async fn generate_structured_plan(
+            &self,
+            _question: &str,
+            _operation: crate::chronicle::query::plan::RouteOperation,
+        ) -> Result<String> {
+            *self
+                .structured_plan_calls
+                .lock()
+                .map_err(|_| anyhow!("structured plan counter poisoned"))? += 1;
             Ok(self
                 .plan_output
                 .lock()
@@ -720,9 +762,10 @@ mod tests {
                 .clone())
         }
 
-        async fn repair_plan(
+        async fn repair_structured_plan(
             &self,
             question: &str,
+            _operation: crate::chronicle::query::plan::RouteOperation,
             rejected_response: &str,
             rejection_error: &str,
         ) -> Result<String> {
@@ -734,7 +777,7 @@ mod tests {
                     rejected_response.into(),
                     rejection_error.into(),
                 ));
-            self.repair_plan_output
+            self.repair_structured_plan_output
                 .lock()
                 .map_err(|_| anyhow!("repair plan poisoned"))?
                 .take()
@@ -880,7 +923,7 @@ mod tests {
             .lock()
             .map_err(|_| anyhow!("plan poisoned"))? = "This is not a JSON query plan.".into();
         *llm
-            .repair_plan_output
+            .repair_structured_plan_output
             .lock()
             .map_err(|_| anyhow!("repair plan poisoned"))? = Some(r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"pc"},{"field":"played_by","operator":"equals","value":"Rowan"}]}}"#.into());
 
@@ -935,6 +978,44 @@ mod tests {
             .lock()
             .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"clarify"}"#.into();
         assert!(chronicle.ask("List them").await?.starts_with("Please name"));
+        assert_eq!(
+            retriever
+                .calls
+                .lock()
+                .map_err(|_| anyhow!("calls poisoned"))?
+                .len(),
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_route_classification_uses_best_effort_retrieval_without_planning() -> Result<()>
+    {
+        let (chronicle, retriever, llm) =
+            service(FakeOutcome::Results, ["Some documented examples."], 500)?;
+        *llm.classifier_output
+            .lock()
+            .map_err(|_| anyhow!("classifier output poisoned"))? = Some("not JSON".into());
+
+        let answer = chronicle
+            .ask("How many characters are in Northmere?")
+            .await?;
+
+        assert!(answer.starts_with("Chronicle couldn't classify this request"));
+        assert!(
+            llm.prompts
+                .lock()
+                .map_err(|_| anyhow!("prompts poisoned"))?[0]
+                .contains("could not classify this request")
+        );
+        assert_eq!(mutex_value(&llm.structured_plan_calls)?, 0);
+        assert!(
+            llm.repair_requests
+                .lock()
+                .map_err(|_| anyhow!("repair requests poisoned"))?
+                .is_empty()
+        );
         assert_eq!(
             retriever
                 .calls

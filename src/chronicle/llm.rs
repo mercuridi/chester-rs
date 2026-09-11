@@ -12,6 +12,7 @@ use tokenizers::Tokenizer;
 
 use super::{
     config::chronicle::LlmSettings,
+    query::plan::RouteOperation,
     runtime::{GpuRuntime, report_cuda_oom},
 };
 use tracing::{info, instrument};
@@ -21,14 +22,20 @@ pub trait LanguageModel: Send + Sync {
     fn prompt_token_budget(&self) -> usize;
     fn count_input_tokens(&self, prompt: &str) -> Result<usize>;
     async fn generate(&self, prompt: &str) -> Result<String>;
-    async fn generate_plan(&self, question: &str) -> Result<String>;
-    async fn repair_plan(
+    async fn classify_route(&self, question: &str) -> Result<String>;
+    async fn generate_structured_plan(
         &self,
         question: &str,
+        operation: RouteOperation,
+    ) -> Result<String>;
+    async fn repair_structured_plan(
+        &self,
+        question: &str,
+        operation: RouteOperation,
         _rejected_response: &str,
         _rejection_error: &str,
     ) -> Result<String> {
-        self.generate_plan(question).await
+        self.generate_structured_plan(question, operation).await
     }
     async fn load(&self) -> Result<()>;
     async fn unload(&self) -> Result<()>;
@@ -179,18 +186,33 @@ impl Llm {
         .await
     }
 
-    pub async fn generate_plan(&self, question: &str) -> Result<String> {
-        let system = crate::chronicle::query::planner::system_prompt();
+    pub async fn classify_route(&self, question: &str) -> Result<String> {
+        self.generate_with_system(
+            crate::chronicle::query::classifier::system_prompt(),
+            question,
+            32,
+            0.0,
+        )
+        .await
+    }
+
+    pub async fn generate_structured_plan(
+        &self,
+        question: &str,
+        operation: RouteOperation,
+    ) -> Result<String> {
+        let system = crate::chronicle::query::planner::structured_system_prompt(operation);
         self.generate_with_system(&system, question, 256, 0.0).await
     }
 
-    pub async fn repair_plan(
+    pub async fn repair_structured_plan(
         &self,
         question: &str,
+        operation: RouteOperation,
         rejected_response: &str,
         rejection_error: &str,
     ) -> Result<String> {
-        let system = crate::chronicle::query::planner::system_prompt();
+        let system = crate::chronicle::query::planner::structured_system_prompt(operation);
         let guidance = plan_repair_guidance(rejection_error);
         let prompt = format!(
             "Original question:\n{question}\n\nYour previous response was rejected:\n<rejected-plan>\n{rejected_response}\n</rejected-plan>\n\nValidation error:\n<validation-error>\n{rejection_error}\n</validation-error>\n\n{guidance}\n\nCorrect the specific validation error. Return a corrected query plan for the original question. Output exactly one JSON object and nothing else."
@@ -315,16 +337,24 @@ impl LanguageModel for Llm {
     async fn generate(&self, prompt: &str) -> Result<String> {
         self.generate(prompt).await
     }
-    async fn generate_plan(&self, question: &str) -> Result<String> {
-        self.generate_plan(question).await
+    async fn classify_route(&self, question: &str) -> Result<String> {
+        self.classify_route(question).await
     }
-    async fn repair_plan(
+    async fn generate_structured_plan(
         &self,
         question: &str,
+        operation: RouteOperation,
+    ) -> Result<String> {
+        self.generate_structured_plan(question, operation).await
+    }
+    async fn repair_structured_plan(
+        &self,
+        question: &str,
+        operation: RouteOperation,
         rejected_response: &str,
         rejection_error: &str,
     ) -> Result<String> {
-        self.repair_plan(question, rejected_response, rejection_error)
+        self.repair_structured_plan(question, operation, rejected_response, rejection_error)
             .await
     }
     async fn load(&self) -> Result<()> {

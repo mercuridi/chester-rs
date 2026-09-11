@@ -175,7 +175,7 @@ note_type = "character"
 conditions = [{ field = "life_status_cause", operator = "equals", value = "[[Great Dungeon Fight]]" }]
 
 [[cases]]
-id = "combined-generic-conditions"
+id = "generic-conditions"
 question = "List characters who appeared in Blueskies and whose life status cause is the Great Dungeon Fight."
 expected_total = 1
 expected_ids = ["corin"]
@@ -211,7 +211,7 @@ note_type = "character"
 conditions = [{ field = "life_status_cause", operator = "equals", value = "[[Great Dungeon Fight]]" }]
 
 [[cases]]
-id = "combined-generic-conditions-paraphrase"
+id = "generic-conditions-paraphrase"
 question = "Which characters both appeared in Blueskies and have the Great Dungeon Fight as their life status cause?"
 expected_total = 1
 expected_ids = ["corin"]

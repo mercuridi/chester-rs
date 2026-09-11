@@ -3,7 +3,7 @@ use super::super::{
     config::app::Config,
     indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
     llm::{LanguageModel, Llm},
-    query::{plan::Plan, planner},
+    query::{classifier, plan::RouteOperation},
     runtime::GpuRuntime,
     service::Chronicle,
 };
@@ -488,9 +488,13 @@ impl SynthesisJudge {
 #[derive(Debug, Serialize)]
 struct CaseReport {
     case: Case,
+    expected_operation: RouteOperation,
+    classifier_response: Option<String>,
+    classifier_error: Option<String>,
+    classified_operation: Option<RouteOperation>,
+    route_correct: bool,
     answer: String,
     synthesis_diagnostics: super::super::service::SynthesisDiagnostics,
-    route_correct: bool,
     required_fact_recall: f64,
     core_recall: f64,
     supporting_recall: f64,
@@ -1121,13 +1125,19 @@ async fn evaluate_case(
     judge: &SynthesisJudge,
     thresholds: EvaluationThresholds,
 ) -> Result<CaseReport> {
-    let route =
-        planner::parse_for_question(&case.question, &llm.generate_plan(&case.question).await?)?;
+    let (classifier_response, classifier_error, classified_operation) =
+        match llm.classify_route(&case.question).await {
+            Ok(response) => match classifier::parse(&response) {
+                Ok(operation) => (Some(response), None, Some(operation)),
+                Err(error) => (Some(response), Some(format!("{error:#}")), None),
+            },
+            Err(error) => (None, Some(format!("{error:#}")), None),
+        };
+    let route_correct = classified_operation == Some(RouteOperation::Synthesis);
     let answer = chronicle.ask(&case.question).await?;
     let synthesis_diagnostics = chronicle
         .last_synthesis_diagnostics()?
         .context("Synthesis did not produce diagnostics")?;
-    let route_correct = route == Plan::Synthesis {};
     let mut results = initial_claim_results(&case, &answer);
     let targets = judge_targets(&case, &results);
     let judge =
@@ -1170,9 +1180,13 @@ async fn evaluate_case(
             <= thresholds.maximum_unsupported_major_causal_claims;
     Ok(CaseReport {
         case,
+        expected_operation: RouteOperation::Synthesis,
+        classifier_response,
+        classifier_error,
+        classified_operation,
+        route_correct,
         answer,
         synthesis_diagnostics,
-        route_correct,
         required_fact_recall,
         core_recall,
         supporting_recall,
