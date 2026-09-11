@@ -6,8 +6,10 @@ use super::super::{
         db::repository::facade::AccessScope,
         prompt,
         retriever::{
-            CandidatePoolPolicy, FusionPolicy, RetrievalLimits, RetrievalOutcome, RetrieverApi,
-            SearchSettings, SelectionPolicy,
+            api::{RetrievalOutcome, RetrieverApi},
+            settings::{
+                CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
+            },
         },
     },
     llm::LanguageModel,

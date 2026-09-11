@@ -5,8 +5,10 @@ use super::super::{
     indexer::{
         db::repository::facade::{AccessScope, SearchResult},
         retriever::{
-            CandidatePoolPolicy, FusionPolicy, RetrievalLimits, RetrievalOutcome, RetrieverApi,
-            SearchSettings, SelectionPolicy,
+            api::{RetrievalOutcome, RetrieverApi},
+            settings::{
+                CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
+            },
         },
     },
 };

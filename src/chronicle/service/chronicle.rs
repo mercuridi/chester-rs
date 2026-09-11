@@ -12,7 +12,7 @@ use super::super::{
     config::chronicle::SynthesisSettings,
     indexer::{
         db::repository::facade::{AccessScope, IndexerDb, SearchResult},
-        retriever::{Retriever, RetrieverApi},
+        retriever::{api::RetrieverApi, runtime::Retriever},
     },
     llm::{LanguageModel, Llm},
     query::{plan::Plan, render},
@@ -506,7 +506,10 @@ mod tests {
     use crate::chronicle::{
         indexer::{
             db::repository::facade::SearchResult,
-            retriever::{RetrievalOutcome, RetrieverApi, SearchSettings},
+            retriever::{
+                api::{RetrievalOutcome, RetrieverApi},
+                settings::SearchSettings,
+            },
         },
         llm::LanguageModel,
         runtime::GpuRuntime,

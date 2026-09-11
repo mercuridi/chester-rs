@@ -2,7 +2,10 @@
 use super::indexer::{
     db::repository::facade::{AccessScope, IndexerDb, SearchResult},
     embedder::Embedder,
-    retriever::{RetrievalDiagnostics, SearchSettings, select_with_diagnostics},
+    retriever::{
+        diagnostics::RetrievalDiagnostics, pipeline::select_with_diagnostics,
+        settings::SearchSettings,
+    },
     scanner,
     service::Indexer,
 };
