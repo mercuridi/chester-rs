@@ -109,71 +109,63 @@ pub(in crate::chronicle::service) async fn select_answer_route(
     access: AccessScope,
 ) -> Result<RouteSelection> {
     let selection_started = Instant::now();
+    if let Some(selection) = predetermined_route(question, selection_started) {
+        return Ok(selection);
+    }
+
+    let classifier_started = Instant::now();
+    let (response, operation) = match classify_route(llm, question, classifier_started).await {
+        Ok(classification) => classification,
+        Err(selection) => return Ok(selection),
+    };
+
+    if let Some(selection) = direct_route(&response, operation, classifier_started) {
+        return Ok(selection);
+    }
+
+    select_structured_route(llm, structured_store, question, access, response, operation).await
+}
+
+fn predetermined_route(question: &str, started: Instant) -> Option<RouteSelection> {
     if question.trim().is_empty() {
-        emit_route_selection(
-            RouteOperation::Clarify,
-            "routed",
-            "classifier",
-            selection_started,
-        );
-        return Ok(RouteSelection::predetermined(AnswerRoute::EmptyQuestion));
+        emit_route_selection(RouteOperation::Clarify, "routed", "classifier", started);
+        return Some(RouteSelection::predetermined(AnswerRoute::EmptyQuestion));
     }
     if planner::is_definitely_unsupported_structured_request(question) {
         debug!(
             question_len = question.chars().count(),
             "Skipping query planner for a definitely unsupported structured request"
         );
-        emit_route_selection(
-            RouteOperation::Unsupported,
-            "routed",
-            "classifier",
-            selection_started,
-        );
-        return Ok(RouteSelection::predetermined(AnswerRoute::Retrieval(
+        emit_route_selection(RouteOperation::Unsupported, "routed", "classifier", started);
+        return Some(RouteSelection::predetermined(AnswerRoute::Retrieval(
             RetrievalMode::UnsupportedStructuredQuery,
         )));
     }
-    let classifier_started = Instant::now();
-    let (response, operation) = match llm.classify_route(question).await {
-        Ok(response) => {
-            debug!(
-                question_len = question.chars().count(),
-                classifier_response_len = response.chars().count(),
-                "Route classifier response received"
-            );
-            match classifier::parse(&response) {
-                Ok(operation) => (response, operation),
-                Err(error) => {
-                    debug!(question_len = question.chars().count(), classifier_response_len = response.chars().count(), %error, "Route classification response rejected");
-                    tracing::warn!(%error, "Route classification failed; using non-exhaustive retrieval");
-                    emit_route_selection(
-                        RouteOperation::Search,
-                        "classifier_failure",
-                        "classifier",
-                        classifier_started,
-                    );
-                    return Ok(RouteSelection::classifier_failure(
-                        AnswerRoute::Retrieval(RetrievalMode::ClassificationFailure),
-                        Some(response),
-                        format!("{error:#}"),
-                    ));
-                }
-            }
-        }
+    None
+}
+
+async fn classify_route(
+    llm: &dyn LanguageModel,
+    question: &str,
+    started: Instant,
+) -> std::result::Result<(String, RouteOperation), RouteSelection> {
+    let response = match llm.classify_route(question).await {
+        Ok(response) => response,
         Err(error) => {
             debug!(question_len = question.chars().count(), %error, "Route classification request failed");
-            tracing::warn!(%error, "Route classification failed; using non-exhaustive retrieval");
-            emit_route_selection(
-                RouteOperation::Search,
-                "classifier_failure",
-                "classifier",
-                classifier_started,
-            );
-            return Ok(RouteSelection::classifier_failure(
-                AnswerRoute::Retrieval(RetrievalMode::ClassificationFailure),
-                None,
-                format!("{error:#}"),
-            ));
+            return Err(classification_failure(started, None, &error));
+        }
+    };
+    debug!(
+        question_len = question.chars().count(),
+        classifier_response_len = response.chars().count(),
+        "Route classifier response received"
+    );
+    let operation = match classifier::parse(&response) {
+        Ok(operation) => operation,
+        Err(error) => {
+            debug!(question_len = question.chars().count(), classifier_response_len = response.chars().count(), %error, "Route classification response rejected");
+            return Err(classification_failure(started, Some(response), &error));
         }
     };
     debug!(
@@ -181,84 +173,65 @@ pub(in crate::chronicle::service) async fn select_answer_route(
         ?operation,
         "Route classification accepted"
     );
-    match operation {
-        RouteOperation::Search => {
-            emit_route_selection(operation, "routed", "classifier", classifier_started);
-            return Ok(RouteSelection::classified(
-                AnswerRoute::Retrieval(RetrievalMode::Ordinary),
-                response,
-                operation,
-            ));
-        }
-        RouteOperation::Synthesis => {
-            emit_route_selection(operation, "routed", "classifier", classifier_started);
-            return Ok(RouteSelection::classified(
-                AnswerRoute::Synthesis,
-                response,
-                operation,
-            ));
-        }
-        RouteOperation::Clarify => {
-            emit_route_selection(operation, "routed", "classifier", classifier_started);
-            return Ok(RouteSelection::classified(
-                AnswerRoute::Clarification,
-                response,
-                operation,
-            ));
-        }
-        RouteOperation::Unsupported => {
-            emit_route_selection(operation, "routed", "classifier", classifier_started);
-            return Ok(RouteSelection::classified(
-                AnswerRoute::Retrieval(RetrievalMode::UnsupportedStructuredQuery),
-                response,
-                operation,
-            ));
-        }
-        RouteOperation::Count | RouteOperation::List | RouteOperation::CountMembers => {}
-    }
+    Ok((response, operation))
+}
 
+fn classification_failure(
+    started: Instant,
+    response: Option<String>,
+    error: &anyhow::Error,
+) -> RouteSelection {
+    tracing::warn!(%error, "Route classification failed; using non-exhaustive retrieval");
+    emit_route_selection(
+        RouteOperation::Search,
+        "classifier_failure",
+        "classifier",
+        started,
+    );
+    RouteSelection::classifier_failure(
+        AnswerRoute::Retrieval(RetrievalMode::ClassificationFailure),
+        response,
+        format!("{error:#}"),
+    )
+}
+
+fn direct_route(
+    response: &str,
+    operation: RouteOperation,
+    started: Instant,
+) -> Option<RouteSelection> {
+    let route = match operation {
+        RouteOperation::Search => AnswerRoute::Retrieval(RetrievalMode::Ordinary),
+        RouteOperation::Synthesis => AnswerRoute::Synthesis,
+        RouteOperation::Clarify => AnswerRoute::Clarification,
+        RouteOperation::Unsupported => {
+            AnswerRoute::Retrieval(RetrievalMode::UnsupportedStructuredQuery)
+        }
+        RouteOperation::Count | RouteOperation::List | RouteOperation::CountMembers => return None,
+    };
+    emit_route_selection(operation, "routed", "classifier", started);
+    Some(RouteSelection::classified(
+        route,
+        response.to_owned(),
+        operation,
+    ))
+}
+
+async fn select_structured_route(
+    llm: &dyn LanguageModel,
+    structured_store: &dyn StructuredStore,
+    question: &str,
+    access: AccessScope,
+    response: String,
+    operation: RouteOperation,
+) -> Result<RouteSelection> {
     let structured_operation = StructuredOperation::try_from(operation)?;
     let generator_started = Instant::now();
     let planning =
         planner::generate_or_repair_structured_plan(llm, question, structured_operation).await;
+    emit_structured_planning_outcome(&planning, operation, question, generator_started);
     let plan = planning.plan;
-    if let Some(error) = planning.generation_error.as_deref() {
-        debug!(question_len = question.chars().count(), %error, ?operation, "Chronicle structured query generation failed");
-        tracing::warn!(%error, ?operation, "Structured query planning failed; using non-exhaustive retrieval");
-        emit_route_selection(
-            operation,
-            "generation_failure",
-            "structured_generator",
-            generator_started,
-        );
-    } else if let Some(error) = planning
-        .repair_validation_error
-        .as_deref()
-        .or(planning.repair_error.as_deref())
-    {
-        debug!(question_len = question.chars().count(), %error, "Chronicle structured query repair rejected");
-        tracing::warn!(%error, "Structured query planning failed after retry; using non-exhaustive retrieval");
-        emit_route_selection(
-            operation,
-            "repair_failure",
-            "structured_repair",
-            generator_started,
-        );
-    } else if planning.repair_response.is_some() {
-        emit_route_selection(
-            operation,
-            "repaired",
-            "structured_repair",
-            generator_started,
-        );
-    } else {
-        emit_route_selection(
-            operation,
-            "routed",
-            "structured_generator",
-            generator_started,
-        );
-    }
+
     let Some(mut plan) = plan else {
         return Ok(RouteSelection::classified(
             AnswerRoute::Retrieval(RetrievalMode::PlanningFailure),
@@ -277,6 +250,36 @@ pub(in crate::chronicle::service) async fn select_answer_route(
         response,
         operation,
     ))
+}
+
+fn emit_structured_planning_outcome(
+    planning: &planner::StructuredPlanningResult,
+    operation: RouteOperation,
+    question: &str,
+    started: Instant,
+) {
+    if let Some(error) = planning.generation_error.as_deref() {
+        debug!(question_len = question.chars().count(), %error, ?operation, "Chronicle structured query generation failed");
+        tracing::warn!(%error, ?operation, "Structured query planning failed; using non-exhaustive retrieval");
+        emit_route_selection(
+            operation,
+            "generation_failure",
+            "structured_generator",
+            started,
+        );
+    } else if let Some(error) = planning
+        .repair_validation_error
+        .as_deref()
+        .or(planning.repair_error.as_deref())
+    {
+        debug!(question_len = question.chars().count(), %error, "Chronicle structured query repair rejected");
+        tracing::warn!(%error, "Structured query planning failed after retry; using non-exhaustive retrieval");
+        emit_route_selection(operation, "repair_failure", "structured_repair", started);
+    } else if planning.repair_response.is_some() {
+        emit_route_selection(operation, "repaired", "structured_repair", started);
+    } else {
+        emit_route_selection(operation, "routed", "structured_generator", started);
+    }
 }
 
 /// Emits low-cardinality production telemetry for every completed routing stage. Detailed model
