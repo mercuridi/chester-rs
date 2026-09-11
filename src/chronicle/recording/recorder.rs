@@ -624,14 +624,8 @@ impl Recorder {
     }
 
     pub async fn stop_recording(&self) -> Result<bool, Error> {
-        let session = {
-            let mut recording = self.recording_session.lock().await;
-
-            let Some(session) = recording.take() else {
-                return Ok(false);
-            };
-
-            session
+        let Some(session) = self.take_recording_session().await else {
+            return Ok(false);
         };
 
         let participants: Vec<UserId> = session.users.keys().copied().collect();
@@ -639,38 +633,108 @@ impl Recorder {
         let session_slug = session.session_slug.clone();
         info!(%guild_id, session = %session_slug, participant_count = participants.len(), "Stopping recording");
 
-        let mut manifest = session.manifest;
+        let manifest = self
+            .begin_manifest_finalization(session.manifest, &participants, &session.manifest_path)
+            .await?;
+        let (failures, finalized_recordings) =
+            Self::drain_user_recordings(session.users, session.tick).await;
+        self.persist_final_manifest(
+            manifest,
+            failures.clone(),
+            finalized_recordings,
+            &session.manifest_path,
+        )
+        .await?;
+
+        for failure in &failures {
+            warn!(participant = %failure.participant, error = %failure.error, "User recording encoder failed");
+        }
+
+        if !failures.is_empty() {
+            return Err(anyhow::anyhow!("one or more encoders failed").into());
+        }
+
+        tracing::info!(
+            path = %session.manifest_path.display(),
+            "Recording manifest written"
+        );
+
+        info!(%guild_id, session = %session_slug, "Recording stopped");
+        Ok(true)
+    }
+
+    async fn take_recording_session(&self) -> Option<RecordingSession> {
+        self.recording_session.lock().await.take()
+    }
+
+    async fn begin_manifest_finalization(
+        &self,
+        mut manifest: RecordingManifest,
+        participants: &[UserId],
+        manifest_path: &Path,
+    ) -> Result<RecordingManifest, Error> {
         manifest.status = ManifestStatus::Finalizing;
-        manifest.participants = participants.clone();
+        manifest.participants = participants.to_vec();
         manifest.finalization_error = None;
         manifest.participant_failures.clear();
         manifest.finalized_recordings = Some(Vec::new());
         self.manifest_persistence
-            .persist(manifest.clone(), session.manifest_path.clone())
+            .persist(manifest.clone(), manifest_path.to_owned())
             .await?;
-        let final_tick = session.tick;
+        Ok(manifest)
+    }
 
-        let encoder_drains =
-            session
-                .users
-                .into_iter()
-                .map(|(participant, user_recording)| async move {
-                    let UserRecording {
-                        path,
-                        producer,
-                        stop_tx,
-                        encoder,
-                    } = user_recording;
+    async fn persist_final_manifest(
+        &self,
+        mut manifest: RecordingManifest,
+        failures: Vec<ParticipantFailure>,
+        finalized_recordings: Vec<FinalizedRecording>,
+        manifest_path: &Path,
+    ) -> Result<(), Error> {
+        manifest.ended_at = Some(self.clock.now());
+        manifest.status = if failures.is_empty() {
+            ManifestStatus::Complete
+        } else {
+            manifest.finalization_error = Some(
+                failures
+                    .iter()
+                    .map(|failure| format!("{}: {}", failure.participant, failure.error))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
+            ManifestStatus::Partial
+        };
+        manifest.participant_failures = failures;
+        manifest.finalized_recordings = Some(finalized_recordings);
+        self.manifest_persistence
+            .persist(manifest, manifest_path.to_owned())
+            .await?;
+        Ok(())
+    }
 
-                    // Tell the encoder that no more data should be expected.
-                    let _ = stop_tx.send(final_tick);
+    async fn drain_user_recordings(
+        users: HashMap<UserId, UserRecording>,
+        final_tick: u64,
+    ) -> (Vec<ParticipantFailure>, Vec<FinalizedRecording>) {
+        let encoder_drains = users
+            .into_iter()
+            .map(|(participant, user_recording)| async move {
+                let UserRecording {
+                    path,
+                    producer,
+                    stop_tx,
+                    encoder,
+                } = user_recording;
 
-                    // The producer must remain alive while the encoder drains the
-                    // samples already committed to the ring buffer. Once the
-                    // encoder has been told to stop, dropping the producer is safe.
-                    drop(producer);
-                    (participant, path, encoder.await)
-                });
+                // Tell the encoder that no more data should be expected.
+                let _ = stop_tx.send(final_tick);
+
+                // The producer must remain alive while the encoder drains the samples
+                // already committed to the ring buffer. Once the encoder has been told
+                // to stop, dropping the producer is safe.
+                drop(producer);
+                (participant, path, encoder.await)
+            });
         let encoder_results = join_all(encoder_drains).await;
         let mut failures = Vec::new();
         let mut finalized_recordings = Vec::new();
@@ -704,41 +768,7 @@ impl Recorder {
                 }),
             }
         }
-
-        manifest.ended_at = Some(self.clock.now());
-        manifest.status = if failures.is_empty() {
-            ManifestStatus::Complete
-        } else {
-            manifest.finalization_error = Some(
-                failures
-                    .iter()
-                    .map(|failure| format!("{}: {}", failure.participant, failure.error))
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            );
-            ManifestStatus::Partial
-        };
-        manifest.participant_failures = failures.clone();
-        manifest.finalized_recordings = Some(finalized_recordings);
-        self.manifest_persistence
-            .persist(manifest.clone(), session.manifest_path.clone())
-            .await?;
-
-        for failure in &failures {
-            warn!(participant = %failure.participant, error = %failure.error, "User recording encoder failed");
-        }
-
-        if !failures.is_empty() {
-            return Err(anyhow::anyhow!("one or more encoders failed").into());
-        }
-
-        tracing::info!(
-            path = %session.manifest_path.display(),
-            "Recording manifest written"
-        );
-
-        info!(%guild_id, session = %session_slug, "Recording stopped");
-        Ok(true)
+        (failures, finalized_recordings)
     }
 
     pub async fn is_recording(&self) -> bool {
