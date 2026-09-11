@@ -44,6 +44,7 @@ const DEFAULT_CHRONICLE_QUERY_EVAL_SUITE: &str = "tests/fixtures/chronicle-query
 const DEFAULT_CHRONICLE_SYNTHESIS_EVAL_SUITE: &str =
     "tests/fixtures/chronicle-synthesis/suite.toml";
 const DEFAULT_LOG_LEVEL: &str = "info";
+const DEFAULT_LOG_FILTER: &str = "chester_rs=info,warn";
 
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
@@ -261,8 +262,7 @@ fn build_framework(
 }
 
 #[allow(clippy::print_stderr)]
-#[tokio::main]
-async fn main() {
+fn main() {
     let startup = match StartupOptions::parse(std::env::args().skip(1)) {
         Ok(options) => options,
         Err(error) => {
@@ -279,30 +279,17 @@ async fn main() {
             }
         };
 
-    // Load .env before constructing the logging filter. RUST_LOG in .env is
-    // intentionally authoritative, even if the process inherited another
-    // value from its shell environment.
-    #[allow(deprecated)]
-    let dotenv_entries = dotenv::from_path_iter(&paths.env_path);
-    if let Ok(entries) = dotenv_entries {
-        for entry in entries.flatten() {
-            if entry.0 == "RUST_LOG" {
-                // SAFETY: this runs before Tokio starts any application tasks.
-                unsafe { std::env::set_var(entry.0, entry.1) };
-            }
-        }
-    }
+    // Credentials and other application configuration remain available from
+    // .env. This is deliberately completed before the Tokio runtime is built.
     from_path(&paths.env_path).ok();
 
-    // Keep normal operation useful without being noisy. RUST_LOG is read from
-    // .env above, for example: `RUST_LOG=chester_rs=debug`.
-    let (env_filter, invalid_filter) = match EnvFilter::try_from_default_env() {
-        Ok(filter) => (filter, None),
-        Err(error) => (EnvFilter::new("chester_rs=info,warn"), Some(error)),
-    };
+    // The .env value is intentionally authoritative for logging, even when
+    // the shell inherited RUST_LOG. Read it as configuration instead of
+    // mutating the process environment after runtime creation.
+    let logging = LoggingSettings::load(&paths.env_path);
 
     #[allow(clippy::print_stderr)]
-    let log_file = match create_log_file(&paths.log_dir) {
+    let log_file = match create_log_file(&paths.log_dir, logging.log_level) {
         Ok(file) => file,
         Err(error) => {
             eprintln!("Failed to initialize logfile: {error:#}");
@@ -316,7 +303,7 @@ async fn main() {
 
     #[allow(clippy::print_stderr)]
     if let Err(error) = tracing_subscriber::registry()
-        .with(env_filter)
+        .with(logging.filter)
         .with(terminal_layer)
         .with(file_layer)
         .try_init()
@@ -325,18 +312,29 @@ async fn main() {
         std::process::exit(1);
     }
 
-    if let Some(error) = invalid_filter {
+    if let Some(error) = logging.invalid_filter {
         tracing::warn!(?error, "Invalid RUST_LOG filter; using the default filter");
     }
 
-    if let Err(error) = run(startup.command_arguments, paths).await {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("Failed to create Tokio runtime: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(error) = runtime.block_on(run(startup.invocation, paths)) {
         tracing::error!("Chester failed to start: {error:#}");
         tracing::debug!(error = ?error, "Startup error chain");
         std::process::exit(1);
     }
 }
 
-fn create_log_file(directory: &Path) -> Result<std::fs::File> {
+fn create_log_file(directory: &Path, log_level: &str) -> Result<std::fs::File> {
     fs::create_dir_all(directory).with_context(|| {
         format!(
             "Failed to create logfile directory at {}",
@@ -344,14 +342,13 @@ fn create_log_file(directory: &Path) -> Result<std::fs::File> {
         )
     })?;
     let timestamp = Utc::now().format("%Y%m%d-%H%M%S");
-    let level = configured_log_level();
     let version = env!("CARGO_PKG_VERSION");
     let mut suffix = 0_u64;
     loop {
         let filename = if suffix == 0 {
-            format!("chester-{timestamp}-{level}-v{version}.log")
+            format!("chester-{timestamp}-{log_level}-v{version}.log")
         } else {
-            format!("chester-{timestamp}-{level}-v{version}-{suffix}.log")
+            format!("chester-{timestamp}-{log_level}-v{version}-{suffix}.log")
         };
         let path = directory.join(filename);
         match OpenOptions::new().write(true).create_new(true).open(&path) {
@@ -365,8 +362,8 @@ fn create_log_file(directory: &Path) -> Result<std::fs::File> {
     }
 }
 
-fn configured_log_level() -> &'static str {
-    let settings = std::env::var("RUST_LOG").unwrap_or_default().to_lowercase();
+fn configured_log_level(settings: &str) -> &'static str {
+    let settings = settings.to_lowercase();
     ["trace", "debug", "info", "warn", "error"]
         .into_iter()
         .find(|level| {
@@ -377,11 +374,80 @@ fn configured_log_level() -> &'static str {
         .unwrap_or(DEFAULT_LOG_LEVEL)
 }
 
+struct LoggingSettings {
+    filter: EnvFilter,
+    log_level: &'static str,
+    invalid_filter: Option<tracing_subscriber::filter::ParseError>,
+}
+
+impl LoggingSettings {
+    fn load(env_path: &Path) -> Self {
+        let directives = selected_log_directive(
+            dotenv_log_directive(env_path),
+            std::env::var("RUST_LOG").ok(),
+        );
+        match EnvFilter::try_new(&directives) {
+            Ok(filter) => Self {
+                filter,
+                log_level: configured_log_level(&directives),
+                invalid_filter: None,
+            },
+            Err(error) => Self {
+                filter: EnvFilter::new(DEFAULT_LOG_FILTER),
+                log_level: configured_log_level(DEFAULT_LOG_FILTER),
+                invalid_filter: Some(error),
+            },
+        }
+    }
+}
+
+fn selected_log_directive(
+    dotenv_directive: Option<String>,
+    inherited_directive: Option<String>,
+) -> String {
+    dotenv_directive
+        .or(inherited_directive)
+        .unwrap_or_else(|| DEFAULT_LOG_FILTER.into())
+}
+
+fn dotenv_log_directive(env_path: &Path) -> Option<String> {
+    #[allow(deprecated)]
+    let entries = dotenv::from_path_iter(env_path).ok()?;
+    entries
+        .filter_map(Result::ok)
+        .fold(None, |directive, (key, value)| {
+            (key == "RUST_LOG").then_some(value).or(directive)
+        })
+}
+
 #[derive(Debug)]
 struct StartupOptions {
     runtime_root: std::path::PathBuf,
     config_path: Option<std::path::PathBuf>,
-    command_arguments: Vec<String>,
+    invocation: Invocation,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Invocation {
+    Bot,
+    Evaluation(EvaluationCommand),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EvaluationCommand {
+    Chronicle {
+        suite_path: std::path::PathBuf,
+        report_path: Option<std::path::PathBuf>,
+    },
+    Query {
+        suite_path: std::path::PathBuf,
+        report_path: Option<std::path::PathBuf>,
+        test_planner: bool,
+    },
+    Synthesis {
+        suite_path: std::path::PathBuf,
+        report_path: Option<std::path::PathBuf>,
+    },
 }
 
 impl StartupOptions {
@@ -419,83 +485,90 @@ impl StartupOptions {
                 std::env::current_dir().context("Failed to determine current directory")?,
             ),
             config_path,
-            command_arguments,
+            invocation: Invocation::parse(command_arguments)?,
         })
     }
 }
 
-async fn run_evaluation_command(arguments: &[String], paths: &AppPaths) -> Result<bool> {
-    if arguments
-        .first()
-        .is_some_and(|arg| arg == "--chronicle-synthesis-eval")
-    {
-        anyhow::ensure!(
-            arguments.len() <= 3,
-            "Usage: chester-rs --chronicle-synthesis-eval [SUITE.toml] [REPORT.json]"
-        );
-        let suite_path = arguments
-            .get(1)
-            .map_or(DEFAULT_CHRONICLE_SYNTHESIS_EVAL_SUITE, String::as_str);
-        chronicle::synthesis_eval::runner::run(
-            std::path::Path::new(suite_path),
-            arguments.get(2).map(std::path::Path::new),
-            paths,
-        )
-        .await?;
-        return Ok(true);
-    }
-    if arguments
-        .first()
-        .is_some_and(|arg| arg == "--chronicle-query-eval")
-    {
-        let mut args = arguments.iter().skip(1).collect::<Vec<_>>();
-        let test_planner = args.last().is_some_and(|arg| arg.as_str() == "--planner");
-        if test_planner {
-            args.pop();
+impl Invocation {
+    fn parse(arguments: Vec<String>) -> Result<Self> {
+        let Some((command, arguments)) = arguments.split_first() else {
+            return Ok(Self::Bot);
+        };
+        match command.as_str() {
+            "--chronicle-synthesis-eval" => {
+                anyhow::ensure!(
+                    arguments.len() <= 2,
+                    "Usage: chester-rs --chronicle-synthesis-eval [SUITE.toml] [REPORT.json]"
+                );
+                Ok(Self::Evaluation(EvaluationCommand::Synthesis {
+                    suite_path: arguments
+                        .first()
+                        .map_or_else(|| DEFAULT_CHRONICLE_SYNTHESIS_EVAL_SUITE.into(), Into::into),
+                    report_path: arguments.get(1).map(Into::into),
+                }))
+            }
+            "--chronicle-query-eval" => {
+                let (arguments, test_planner) = match arguments.strip_suffix(&["--planner".into()])
+                {
+                    Some(arguments) => (arguments, true),
+                    None => (arguments, false),
+                };
+                anyhow::ensure!(
+                    arguments.len() <= 2,
+                    "Usage: chester-rs --chronicle-query-eval [SUITE.toml] [REPORT.json] [--planner]"
+                );
+                Ok(Self::Evaluation(EvaluationCommand::Query {
+                    suite_path: arguments
+                        .first()
+                        .map_or_else(|| DEFAULT_CHRONICLE_QUERY_EVAL_SUITE.into(), Into::into),
+                    report_path: arguments.get(1).map(Into::into),
+                    test_planner,
+                }))
+            }
+            "--chronicle-eval" => {
+                anyhow::ensure!(
+                    arguments.len() <= 2,
+                    "Usage: chester-rs --chronicle-eval [SUITE.toml] [REPORT.json]"
+                );
+                Ok(Self::Evaluation(EvaluationCommand::Chronicle {
+                    suite_path: arguments
+                        .first()
+                        .map_or_else(|| DEFAULT_CHRONICLE_EVAL_SUITE.into(), Into::into),
+                    report_path: arguments.get(1).map(Into::into),
+                }))
+            }
+            _ => Ok(Self::Bot),
         }
-        anyhow::ensure!(
-            args.len() <= 2,
-            "Usage: chester-rs --chronicle-query-eval [SUITE.toml] [REPORT.json] [--planner]"
-        );
-        let suite_path = args
-            .first()
-            .map_or(DEFAULT_CHRONICLE_QUERY_EVAL_SUITE, |path| path.as_str());
-        chronicle::query::eval::run(
-            std::path::Path::new(suite_path),
-            args.get(1).map(std::path::Path::new),
-            test_planner,
-            paths,
-        )
-        .await?;
-        return Ok(true);
     }
-    if arguments
-        .first()
-        .is_some_and(|arg| arg == "--chronicle-eval")
-    {
-        anyhow::ensure!(
-            (1..=3).contains(&arguments.len()),
-            "Usage: chester-rs --chronicle-eval [SUITE.toml] [REPORT.json]"
-        );
-        let suite_path = arguments
-            .get(1)
-            .map_or(DEFAULT_CHRONICLE_EVAL_SUITE, String::as_str);
-        chronicle::eval::run(
-            std::path::Path::new(suite_path),
-            arguments.get(2).map(std::path::Path::new),
-            paths,
-        )
-        .await?;
-        return Ok(true);
-    }
-    Ok(false)
 }
 
-async fn run(arguments: Vec<String>, paths: AppPaths) -> Result<()> {
-    if run_evaluation_command(&arguments, &paths).await? {
-        return Ok(());
+async fn run(invocation: Invocation, paths: AppPaths) -> Result<()> {
+    match invocation {
+        Invocation::Bot => run_bot(paths).await,
+        Invocation::Evaluation(EvaluationCommand::Synthesis {
+            suite_path,
+            report_path,
+        }) => {
+            chronicle::synthesis_eval::runner::run(&suite_path, report_path.as_deref(), &paths)
+                .await
+        }
+        Invocation::Evaluation(EvaluationCommand::Query {
+            suite_path,
+            report_path,
+            test_planner,
+        }) => {
+            chronicle::query::eval::run(&suite_path, report_path.as_deref(), test_planner, &paths)
+                .await
+        }
+        Invocation::Evaluation(EvaluationCommand::Chronicle {
+            suite_path,
+            report_path,
+        }) => chronicle::eval::run(&suite_path, report_path.as_deref(), &paths).await,
     }
+}
 
+async fn run_bot(paths: AppPaths) -> Result<()> {
     tracing::info!(runtime_root = %paths.runtime_root.display(), config_path = %paths.config_path.display(), "Starting Chester");
 
     let config_path = paths.config_path.clone();
@@ -579,7 +652,9 @@ async fn run(arguments: Vec<String>, paths: AppPaths) -> Result<()> {
 
 #[cfg(test)]
 mod startup_tests {
-    use super::StartupOptions;
+    use super::{
+        EvaluationCommand, Invocation, StartupOptions, configured_log_level, selected_log_directive,
+    };
     use std::path::PathBuf;
 
     #[test]
@@ -599,8 +674,11 @@ mod startup_tests {
             Some(PathBuf::from("config/production.toml"))
         );
         assert_eq!(
-            options.command_arguments,
-            vec!["--chronicle-eval", "suite.toml"]
+            options.invocation,
+            Invocation::Evaluation(EvaluationCommand::Chronicle {
+                suite_path: PathBuf::from("suite.toml"),
+                report_path: None,
+            })
         );
         Ok(())
     }
@@ -609,5 +687,52 @@ mod startup_tests {
     fn rejects_runtime_options_without_values() {
         assert!(StartupOptions::parse(["--config".into()]).is_err());
         assert!(StartupOptions::parse(["--runtime-root".into()]).is_err());
+    }
+
+    #[test]
+    fn parses_query_evaluation_options() -> anyhow::Result<()> {
+        let options = StartupOptions::parse([
+            "--chronicle-query-eval".into(),
+            "suite.toml".into(),
+            "report.json".into(),
+            "--planner".into(),
+        ])?;
+
+        assert_eq!(
+            options.invocation,
+            Invocation::Evaluation(EvaluationCommand::Query {
+                suite_path: PathBuf::from("suite.toml"),
+                report_path: Some(PathBuf::from("report.json")),
+                test_planner: true,
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_too_many_evaluation_arguments() {
+        assert!(
+            StartupOptions::parse([
+                "--chronicle-eval".into(),
+                "suite.toml".into(),
+                "report.json".into(),
+                "extra".into(),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn derives_logfile_level_from_filter_directives() {
+        assert_eq!(configured_log_level("chester_rs=debug,warn"), "debug");
+        assert_eq!(configured_log_level("invalid-directive"), "info");
+    }
+
+    #[test]
+    fn dotenv_log_directive_takes_precedence_over_the_inherited_value() {
+        assert_eq!(
+            selected_log_directive(Some("chester_rs=debug".into()), Some("warn".into())),
+            "chester_rs=debug"
+        );
     }
 }
