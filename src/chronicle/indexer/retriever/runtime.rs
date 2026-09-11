@@ -1,7 +1,8 @@
-use std::sync::Mutex;
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use candle_core::Device;
+use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, info, instrument};
 
 use super::{
@@ -14,16 +15,20 @@ use crate::chronicle::indexer::{
     embedder::Embedder,
 };
 
+const EMBEDDING_WORKER_LIMIT: usize = 2;
+
 pub struct Retriever {
     db: IndexerDb,
-    embedder: Mutex<Option<Embedder>>,
+    embedder: RwLock<Option<Arc<Embedder>>>,
+    embedding_workers: Arc<Semaphore>,
 }
 
 impl Retriever {
     pub fn new(db: IndexerDb) -> Self {
         Self {
             db,
-            embedder: Mutex::new(None),
+            embedder: RwLock::new(None),
+            embedding_workers: Arc::new(Semaphore::new(EMBEDDING_WORKER_LIMIT)),
         }
     }
 
@@ -32,24 +37,18 @@ impl Retriever {
         let embedder = tokio::task::spawn_blocking(|| Embedder::load(Device::Cpu))
             .await
             .context("CPU embedder loading task failed")??;
-        let mut slot = self
-            .embedder
-            .lock()
-            .map_err(|_| anyhow!("Retriever embedder state is poisoned"))?;
+        let mut slot = self.embedder.write().await;
         if slot.is_some() {
             debug!("Retriever embedder already loaded");
             return Ok(());
         }
-        *slot = Some(embedder);
+        *slot = Some(Arc::new(embedder));
         info!("Retriever embedder loaded");
         Ok(())
     }
 
-    pub fn unload_embedder(&self) -> Result<()> {
-        let mut slot = self
-            .embedder
-            .lock()
-            .map_err(|_| anyhow!("Retriever embedder state is poisoned"))?;
+    pub async fn unload_embedder(&self) -> Result<()> {
+        let mut slot = self.embedder.write().await;
         slot.take();
         info!("Retriever embedder unloaded");
         Ok(())
@@ -62,7 +61,7 @@ impl Retriever {
         settings: SearchSettings,
         access: AccessScope,
     ) -> Result<RetrievalOutcome> {
-        let query = query.trim();
+        let query = query.trim().to_owned();
         if query.is_empty() {
             return Ok(RetrievalOutcome::BadQuestion);
         }
@@ -74,23 +73,26 @@ impl Retriever {
         {
             return Ok(RetrievalOutcome::CorpusEmpty);
         }
-        let embedding = {
-            let slot = self
-                .embedder
-                .lock()
-                .map_err(|_| anyhow!("Retriever embedder state is poisoned"))?;
-            let embedder = slot.as_ref().ok_or_else(|| {
-                anyhow!("Chronicle retriever is not ready; run /chronicle start first")
-            })?;
-            embedder
-                .embed(query)
-                .with_context(|| "Failed to embed search query")?
-        };
+        let embedder = self.embedder.read().await.clone().ok_or_else(|| {
+            anyhow!("Chronicle retriever is not ready; run /chronicle start first")
+        })?;
+        let worker_permit = Arc::clone(&self.embedding_workers)
+            .acquire_owned()
+            .await
+            .context("Failed to acquire CPU query embedding worker")?;
+        let embedding_query = query.clone();
+        let embedding = tokio::task::spawn_blocking(move || {
+            let _worker_permit = worker_permit;
+            embedder.embed(&embedding_query)
+        })
+        .await
+        .context("CPU query embedding task failed")?
+        .with_context(|| "Failed to embed search query")?;
         let (vector, lexical) = tokio::try_join!(
             self.db
                 .search_similar_for(&embedding, settings.limits.candidate_limit, access),
             self.db
-                .search_lexical_for(query, settings.limits.candidate_limit, access),
+                .search_lexical_for(&query, settings.limits.candidate_limit, access),
         )?;
         let paths = vector
             .iter()
@@ -122,7 +124,7 @@ impl RetrieverApi for Retriever {
     async fn load_embedder(&self) -> Result<()> {
         self.load_embedder().await
     }
-    fn unload_embedder(&self) -> Result<()> {
-        self.unload_embedder()
+    async fn unload_embedder(&self) -> Result<()> {
+        self.unload_embedder().await
     }
 }

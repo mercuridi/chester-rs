@@ -2,11 +2,8 @@ use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use serde_json::Value;
 use sqlx::SqlitePool;
-use std::{
-    path::PathBuf,
-    process::{Command, Output},
-    sync::Arc,
-};
+use std::{path::PathBuf, process::Output, sync::Arc};
+use tokio::process::Command;
 
 use crate::{
     jester::db::repository::{insert_new_track_with_metadata, lookup_track},
@@ -30,6 +27,7 @@ impl DownloadExecutor for ProcessExecutor {
         Command::new(program)
             .args(args)
             .output()
+            .await
             .map_err(Into::into)
     }
 }

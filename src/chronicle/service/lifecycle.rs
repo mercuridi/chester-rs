@@ -11,7 +11,7 @@ pub(in crate::chronicle::service) async fn start(
     retriever.load_embedder().await?;
     if let Err(error) = llm.load().await {
         tracing::warn!(%error, "Chronicle LLM failed to load; releasing embedder");
-        retriever.unload_embedder()?;
+        retriever.unload_embedder().await?;
         return Err(error);
     }
     info!("Chronicle models ready");
@@ -24,7 +24,7 @@ pub(in crate::chronicle::service) async fn stop(
 ) -> Result<()> {
     info!("Stopping Chronicle models");
     llm.unload().await?;
-    retriever.unload_embedder()?;
+    retriever.unload_embedder().await?;
     info!("Chronicle models stopped");
     Ok(())
 }

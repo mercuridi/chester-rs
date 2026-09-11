@@ -12,7 +12,7 @@ pub trait RetrieverApi: Send + Sync {
         access: AccessScope,
     ) -> Result<RetrievalOutcome>;
     async fn load_embedder(&self) -> Result<()>;
-    fn unload_embedder(&self) -> Result<()>;
+    async fn unload_embedder(&self) -> Result<()>;
 }
 
 #[derive(Debug)]

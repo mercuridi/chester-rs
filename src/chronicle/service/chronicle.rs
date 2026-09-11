@@ -702,7 +702,7 @@ mod tests {
             Ok(())
         }
 
-        fn unload_embedder(&self) -> Result<()> {
+        async fn unload_embedder(&self) -> Result<()> {
             *self
                 .unloads
                 .lock()

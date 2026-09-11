@@ -20,7 +20,7 @@ use songbird::{
     events::{Event, EventContext, EventHandler},
 };
 use tokio::{
-    sync::{Mutex, oneshot},
+    sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
 };
 
@@ -47,7 +47,7 @@ impl Clock for SystemClock {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingManifest {
     #[serde(default = "default_manifest_status")]
     pub status: ManifestStatus,
@@ -177,6 +177,113 @@ impl RecordingManifest {
         self.status == ManifestStatus::Complete
             && self.ended_at.is_some()
             && self.finalized_recordings.is_some()
+    }
+}
+
+const MANIFEST_PERSISTENCE_QUEUE_CAPACITY: usize = 64;
+
+struct PersistManifest {
+    manifest: RecordingManifest,
+    path: PathBuf,
+    completion: Option<oneshot::Sender<anyhow::Result<()>>>,
+}
+
+enum ManifestCommand {
+    Persist(Box<PersistManifest>),
+    Shutdown(oneshot::Sender<anyhow::Result<()>>),
+}
+
+#[derive(Clone)]
+struct ManifestPersistence {
+    sender: mpsc::Sender<ManifestCommand>,
+}
+
+impl ManifestPersistence {
+    fn new() -> Self {
+        let (sender, mut receiver) = mpsc::channel(MANIFEST_PERSISTENCE_QUEUE_CAPACITY);
+
+        tokio::spawn(async move {
+            while let Some(command) = receiver.recv().await {
+                let (manifest, path, completion) = match command {
+                    ManifestCommand::Persist(command) => {
+                        let PersistManifest {
+                            manifest,
+                            path,
+                            completion,
+                        } = *command;
+                        (manifest, path, completion)
+                    }
+                    ManifestCommand::Shutdown(completion) => {
+                        let _ = completion.send(Ok(()));
+                        break;
+                    }
+                };
+
+                let result = tokio::task::spawn_blocking(move || manifest.save_atomically(path))
+                    .await
+                    .map_err(|error| anyhow::anyhow!("Manifest persistence task failed: {error}"))
+                    .and_then(|result| result);
+
+                if let Some(completion) = completion {
+                    let _ = completion.send(result);
+                } else if let Err(error) = result {
+                    tracing::error!(%error, "Failed to persist recording manifest");
+                }
+            }
+        });
+
+        Self { sender }
+    }
+
+    async fn enqueue(&self, manifest: RecordingManifest, path: PathBuf) -> anyhow::Result<()> {
+        self.sender
+            .send(
+                PersistManifest {
+                    manifest,
+                    path,
+                    completion: None,
+                }
+                .into(),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("Manifest persistence worker has stopped"))
+    }
+
+    async fn persist(&self, manifest: RecordingManifest, path: PathBuf) -> anyhow::Result<()> {
+        let (completion_sender, completion_receiver) = oneshot::channel();
+        self.sender
+            .send(
+                PersistManifest {
+                    manifest,
+                    path,
+                    completion: Some(completion_sender),
+                }
+                .into(),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("Manifest persistence worker has stopped"))?;
+
+        completion_receiver
+            .await
+            .map_err(|_| anyhow::anyhow!("Manifest persistence worker has stopped"))?
+    }
+
+    async fn shutdown(&self) -> anyhow::Result<()> {
+        let (completion_sender, completion_receiver) = oneshot::channel();
+        self.sender
+            .send(ManifestCommand::Shutdown(completion_sender))
+            .await
+            .map_err(|_| anyhow::anyhow!("Manifest persistence worker has stopped"))?;
+
+        completion_receiver
+            .await
+            .map_err(|_| anyhow::anyhow!("Manifest persistence worker has stopped"))?
+    }
+}
+
+impl From<PersistManifest> for ManifestCommand {
+    fn from(command: PersistManifest) -> Self {
+        Self::Persist(Box::new(command))
     }
 }
 
@@ -338,17 +445,21 @@ impl RecorderManager {
 
     pub async fn drain(&self) -> anyhow::Result<()> {
         let recorders = std::mem::take(&mut *self.recorders.lock().await);
-        let results = join_all(
-            recorders
-                .into_values()
-                .map(|recorder| async move { recorder.stop_recording().await }),
-        )
+        let results = join_all(recorders.into_values().map(|recorder| async move {
+            let stop_result = recorder.stop_recording().await;
+            let shutdown_result = recorder.shutdown_persistence().await;
+
+            match (stop_result, shutdown_result) {
+                (Ok(_), Ok(())) => Ok(()),
+                (Err(stop_error), Ok(())) => Err(stop_error.to_string()),
+                (Ok(_), Err(shutdown_error)) => Err(shutdown_error.to_string()),
+                (Err(stop_error), Err(shutdown_error)) => Err(format!(
+                    "{stop_error}; persistence shutdown failed: {shutdown_error}"
+                )),
+            }
+        }))
         .await;
-        let errors: Vec<String> = results
-            .into_iter()
-            .filter_map(Result::err)
-            .map(|error| error.to_string())
-            .collect();
+        let errors: Vec<String> = results.into_iter().filter_map(Result::err).collect();
         if errors.is_empty() {
             Ok(())
         } else {
@@ -367,6 +478,7 @@ pub struct Recorder {
     pub recording_session: Arc<Mutex<Option<RecordingSession>>>,
     recordings_dir: PathBuf,
     clock: Arc<dyn Clock>,
+    manifest_persistence: ManifestPersistence,
 }
 
 impl Recorder {
@@ -381,6 +493,7 @@ impl Recorder {
             recording_session: Arc::new(Mutex::new(None)),
             recordings_dir,
             clock: Arc::new(SystemClock),
+            manifest_persistence: ManifestPersistence::new(),
         }
     }
 
@@ -391,6 +504,7 @@ impl Recorder {
             recording_session: Arc::new(Mutex::new(None)),
             recordings_dir,
             clock,
+            manifest_persistence: ManifestPersistence::new(),
         }
     }
 
@@ -445,7 +559,9 @@ impl Recorder {
             });
         }
 
-        manifest.save_atomically(&manifest_path)?;
+        self.manifest_persistence
+            .persist(manifest.clone(), manifest_path.clone())
+            .await?;
 
         *recording = Some(RecordingSession {
             guild_id,
@@ -494,7 +610,11 @@ impl Recorder {
         };
 
         session.manifest.scenes.push(event.clone());
-        if let Err(error) = session.manifest.save_atomically(&session.manifest_path) {
+        if let Err(error) = self
+            .manifest_persistence
+            .persist(session.manifest.clone(), session.manifest_path.clone())
+            .await
+        {
             session.manifest.scenes.pop();
             return Err(error.into());
         }
@@ -524,7 +644,9 @@ impl Recorder {
         manifest.finalization_error = None;
         manifest.participant_failures.clear();
         manifest.finalized_recordings = Some(Vec::new());
-        manifest.save_atomically(&session.manifest_path)?;
+        self.manifest_persistence
+            .persist(manifest.clone(), session.manifest_path.clone())
+            .await?;
         let final_tick = session.tick;
 
         let encoder_drains =
@@ -597,7 +719,9 @@ impl Recorder {
         };
         manifest.participant_failures = failures.clone();
         manifest.finalized_recordings = Some(finalized_recordings);
-        manifest.save_atomically(&session.manifest_path)?;
+        self.manifest_persistence
+            .persist(manifest.clone(), session.manifest_path.clone())
+            .await?;
 
         for failure in &failures {
             warn!(participant = %failure.participant, error = %failure.error, "User recording encoder failed");
@@ -618,6 +742,10 @@ impl Recorder {
 
     pub async fn is_recording(&self) -> bool {
         self.recording_session.lock().await.is_some()
+    }
+
+    async fn shutdown_persistence(&self) -> anyhow::Result<()> {
+        self.manifest_persistence.shutdown().await
     }
 
     fn initiate_user_recording(
@@ -763,12 +891,15 @@ impl EventHandler for Recorder {
                 }
 
                 if manifest_changed
-                    && let Err(error) = session.manifest.save_atomically(&session.manifest_path)
+                    && let Err(error) = self
+                        .manifest_persistence
+                        .enqueue(session.manifest.clone(), session.manifest_path.clone())
+                        .await
                 {
                     tracing::error!(
                         %error,
                         path = %session.manifest_path.display(),
-                        "Failed to persist recording manifest after participant discovery"
+                        "Failed to enqueue recording manifest after participant discovery"
                     );
                 }
 
@@ -1196,6 +1327,40 @@ mod tests {
             Some(first.id)
         );
         assert!(manager.get(GuildId::new(1)).await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manager_drain_flushes_and_shuts_down_manifest_persistence() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let manager = RecorderManager::with_clock(
+            directory.path().into(),
+            Arc::new(FixedClock(fixed_time()?)),
+        );
+        let (recorder, created) = manager.get_or_create(GuildId::new(1)).await;
+        assert!(created);
+
+        recorder
+            .start_recording(
+                GuildId::new(1),
+                ChannelId::new(2),
+                ChannelId::new(3),
+                UserId::new(4),
+                "Title".into(),
+                "slug".into(),
+                None,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+        manager.drain().await?;
+
+        let path = recording_directory(directory.path(), GuildId::new(1), "slug", fixed_time()?)
+            .join("manifest.toml");
+        assert_eq!(
+            RecordingManifest::load(path)?.status,
+            ManifestStatus::Complete
+        );
         Ok(())
     }
 
