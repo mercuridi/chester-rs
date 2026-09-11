@@ -85,56 +85,56 @@ where
             return Ok(());
         }
 
-        if !self.end_of_input {
-            let Some(packet) = self.packets.read_packet()? else {
-                self.end_of_input = true;
-                return self.flush_resampler();
-            };
-
-            let data = packet.data.as_slice();
-
-            if data.starts_with(b"OpusHead") {
-                let header = parse_opus_head(data)?;
-                if header.channels != 1 {
-                    return Err(anyhow!(
-                        "Expected mono Opus recording, got {} channels",
-                        header.channels
-                    ));
-                }
-                self.pre_skip_remaining = header.pre_skip as usize;
-                self.output_delay_remaining = self.resampler.output_delay();
-                self.decoder = Some(OpusDecoder::new(
-                    u32::try_from(OPUS_SAMPLE_RATE)?,
-                    Channels::Mono,
-                )?);
-                return Ok(());
-            }
-
-            if data.starts_with(b"OpusTags") {
-                return Ok(());
-            }
-
-            let decoder = self
-                .decoder
-                .as_mut()
-                .ok_or_else(|| anyhow!("Encountered Opus audio packet before OpusHead"))?;
-            let mut pcm = [0i16; OPUS_SAMPLE_RATE * 120 / 1000];
-            let samples = decoder.decode(data, &mut pcm, false)?;
-
-            let skip = self.pre_skip_remaining.min(samples);
-            self.pre_skip_remaining -= skip;
-            self.input_buffer.extend(
-                pcm[skip..samples]
-                    .iter()
-                    .map(|&sample| f32::from(sample) / 32768.0),
-            );
-            self.input_samples = self.input_samples.saturating_add(samples - skip);
-            self.expected_output = self.input_samples * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE;
-
-            self.process_full_input()
-        } else {
-            self.flush_resampler()
+        if self.end_of_input {
+            return self.flush_resampler();
         }
+
+        let Some(packet) = self.packets.read_packet()? else {
+            self.end_of_input = true;
+            return self.flush_resampler();
+        };
+
+        let data = packet.data.as_slice();
+
+        if data.starts_with(b"OpusHead") {
+            let header = parse_opus_head(data)?;
+            if header.channels != 1 {
+                return Err(anyhow!(
+                    "Expected mono Opus recording, got {} channels",
+                    header.channels
+                ));
+            }
+            self.pre_skip_remaining = header.pre_skip as usize;
+            self.output_delay_remaining = self.resampler.output_delay();
+            self.decoder = Some(OpusDecoder::new(
+                u32::try_from(OPUS_SAMPLE_RATE)?,
+                Channels::Mono,
+            )?);
+            return Ok(());
+        }
+
+        if data.starts_with(b"OpusTags") {
+            return Ok(());
+        }
+
+        let decoder = self
+            .decoder
+            .as_mut()
+            .ok_or_else(|| anyhow!("Encountered Opus audio packet before OpusHead"))?;
+        let mut pcm = [0i16; OPUS_SAMPLE_RATE * 120 / 1000];
+        let samples = decoder.decode(data, &mut pcm, false)?;
+
+        let skip = self.pre_skip_remaining.min(samples);
+        self.pre_skip_remaining -= skip;
+        self.input_buffer.extend(
+            pcm[skip..samples]
+                .iter()
+                .map(|&sample| f32::from(sample) / 32768.0),
+        );
+        self.input_samples = self.input_samples.saturating_add(samples - skip);
+        self.expected_output = self.input_samples * WHISPER_SAMPLE_RATE / OPUS_SAMPLE_RATE;
+
+        self.process_full_input()
     }
 
     fn process_full_input(&mut self) -> Result<()> {

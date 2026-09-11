@@ -46,11 +46,11 @@ impl WhisperTranscriber {
         &mut self,
         source: &mut dyn AudioSource,
     ) -> Result<Vec<TranscriptSegment>> {
-        let mel_filters = load_mel_filters()?;
-
         const WINDOW_SAMPLES: usize = 30 * MODEL_SAMPLE_RATE as usize;
         const ADVANCE_SAMPLES: usize = 25 * MODEL_SAMPLE_RATE as usize;
         const OVERLAP_SAMPLES: usize = WINDOW_SAMPLES - ADVANCE_SAMPLES;
+
+        let mel_filters = load_mel_filters()?;
 
         let mut buffer = VecDeque::with_capacity(WINDOW_SAMPLES + 16_000);
         let mut window_start = 0usize;

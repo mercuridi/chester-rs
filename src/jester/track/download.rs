@@ -58,7 +58,7 @@ impl From<&crate::chronicle::config::paths::AppPaths> for DownloadConfig {
             ytdlp_path: paths.ytdlp_path.clone(),
             cookies_path: paths.cookies_path.clone(),
             ffmpeg_path: "ffmpeg".into(),
-            deadline: Duration::from_secs(300),
+            deadline: Duration::from_mins(5),
             retries: 3,
             concurrency: 4,
         }
