@@ -115,7 +115,7 @@ impl IndexerDb {
 
         let mut tx = self.pool.begin().await?;
 
-        let document_id = upsert_document(&mut tx, path, content_hash).await?;
+        let document_id = upsert_document(&mut tx, path, content_hash, metadata).await?;
         delete_document_chunks(&mut tx, document_id).await?;
         insert_chunks(&mut tx, document_id, chunks, embeddings).await?;
 
@@ -142,8 +142,25 @@ impl IndexerDb {
             .bind(document_id)
             .execute(&mut *tx)
             .await?;
+        sqlx::query("UPDATE documents SET metadata_hash = ? WHERE id = ?")
+            .bind(metadata_hash(metadata))
+            .bind(document_id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    pub async fn metadata_matches(
+        &self,
+        document_id: i64,
+        metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+    ) -> Result<bool> {
+        let stored: String = sqlx::query_scalar("SELECT metadata_hash FROM documents WHERE id = ?")
+            .bind(document_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(!stored.is_empty() && stored == metadata_hash(metadata))
     }
 
     pub async fn chunks_match(
@@ -168,23 +185,32 @@ async fn upsert_document(
     connection: &mut sqlx::SqliteConnection,
     path: &str,
     content_hash: &str,
+    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
 ) -> Result<i64> {
     sqlx::query_scalar(
         r"
-        INSERT INTO documents (path, content_hash, indexed_at)
-        VALUES (?, ?, ?)
+        INSERT INTO documents (path, content_hash, metadata_hash, indexed_at)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(path) DO UPDATE SET
             content_hash = excluded.content_hash,
+            metadata_hash = excluded.metadata_hash,
             indexed_at = excluded.indexed_at
         RETURNING id
         ",
     )
     .bind(path)
     .bind(content_hash)
+    .bind(metadata_hash(metadata))
     .bind(Utc::now().to_rfc3339())
     .fetch_one(&mut *connection)
     .await
     .context("Failed to upsert indexed document")
+}
+
+fn metadata_hash(metadata: &crate::chronicle::indexer::frontmatter::Metadata) -> String {
+    // Metadata uses ordered maps, making its Debug representation deterministic.
+    // This is an internal cache key, not a persisted interchange format.
+    format!("{metadata:?}")
 }
 
 async fn delete_document_chunks(

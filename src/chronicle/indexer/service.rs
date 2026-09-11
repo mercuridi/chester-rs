@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use tokenizers::Encoding;
 
 use crate::chronicle::{
@@ -21,6 +22,7 @@ use super::{
 use super::db::repository::facade::AccessScope;
 
 const EMBEDDING_BATCH_SIZE: usize = 16;
+const PREPARATION_BATCH_DOCUMENTS: usize = 8;
 
 struct PreparedChunk {
     chunk: Chunk,
@@ -127,6 +129,8 @@ pub struct IndexStats {
     pub updated: usize,
     pub unchanged: usize,
     pub removed: usize,
+    pub graph_rebuilt: bool,
+    pub pagerank_rebuilt: bool,
 }
 
 pub struct Indexer {
@@ -208,6 +212,7 @@ impl Indexer {
             ?corpus_stats,
             "Collected corpus statistics before embedding"
         );
+        let graph_fingerprint = graph_input_fingerprint(&documents, &link_resolution);
 
         let indexed_by_path = indexed_documents
             .iter()
@@ -237,9 +242,15 @@ impl Indexer {
                     self.db.chunks_match(indexed.id, &chunks).await?
                 };
                 if unchanged {
-                    self.db
-                        .refresh_metadata(indexed.id, &fingerprint, &document.metadata)
-                        .await?;
+                    if !self
+                        .db
+                        .metadata_matches(indexed.id, &document.metadata)
+                        .await?
+                    {
+                        self.db
+                            .refresh_metadata(indexed.id, &fingerprint, &document.metadata)
+                            .await?;
+                    }
                     stats.unchanged += 1;
                     continue;
                 }
@@ -270,18 +281,29 @@ impl Indexer {
             }
         }
 
-        let graph_stats = self.db.rebuild_document_graph(&link_resolution).await?;
-        debug!(
-            edges = graph_stats.edge_count,
-            "Persisted resolved Chronicle document graph"
-        );
-        let pagerank_stats = self.db.rebuild_document_pagerank().await?;
-        debug!(
-            documents = pagerank_stats.document_count,
-            player_iterations = pagerank_stats.player_iterations,
-            gm_iterations = pagerank_stats.gm_iterations,
-            "Rebuilt Chronicle document PageRank"
-        );
+        let graph_changed =
+            self.db.graph_input_fingerprint().await?.as_deref() != Some(graph_fingerprint.as_str());
+        if graph_changed {
+            stats.graph_rebuilt = true;
+            let graph_stats = self.db.rebuild_document_graph(&link_resolution).await?;
+            debug!(
+                edges = graph_stats.edge_count,
+                "Persisted resolved Chronicle document graph"
+            );
+            let pagerank_stats = self.db.rebuild_document_pagerank().await?;
+            stats.pagerank_rebuilt = true;
+            debug!(
+                documents = pagerank_stats.document_count,
+                player_iterations = pagerank_stats.player_iterations,
+                gm_iterations = pagerank_stats.gm_iterations,
+                "Rebuilt Chronicle document PageRank"
+            );
+            self.db
+                .set_graph_input_fingerprint(&graph_fingerprint)
+                .await?;
+        } else {
+            debug!("Skipped unchanged Chronicle document graph and PageRank");
+        }
 
         info!(?stats, "Chronicle indexing finished");
         Ok(stats)
@@ -292,6 +314,17 @@ impl Indexer {
     }
 
     async fn index_pending_documents(
+        &self,
+        pending: &[(Document, String, bool)],
+        stats: &mut IndexStats,
+    ) -> Result<()> {
+        for batch in pending.chunks(PREPARATION_BATCH_DOCUMENTS) {
+            self.index_pending_documents_batch(batch, stats).await?;
+        }
+        Ok(())
+    }
+
+    async fn index_pending_documents_batch(
         &self,
         pending: &[(Document, String, bool)],
         stats: &mut IndexStats,
@@ -474,6 +507,27 @@ fn index_fingerprint(
     )
 }
 
+fn graph_input_fingerprint(
+    documents: &[Document],
+    resolution: &link_resolver::LinkResolution,
+) -> String {
+    let mut hasher = Sha256::new();
+    // Scanner order is path-stable; include only graph-relevant authored data
+    // plus the complete resolver result, including dangling/ambiguous links.
+    for document in documents {
+        hasher.update(document.path.to_string_lossy().as_bytes());
+        hasher.update([0]);
+        hasher.update(format!(
+            "{}\0{}\0{}",
+            document.metadata.id,
+            document.metadata.visibility,
+            document.metadata.aliases.join("\0"),
+        ));
+    }
+    hasher.update(format!("{resolution:?}"));
+    hex::encode(hasher.finalize())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -548,7 +602,10 @@ mod tests {
         metadata.fields.remove("role");
         db.refresh_metadata(docs[0].id, &docs[0].content_hash, &metadata)
             .await?;
-        assert_eq!(indexer.index().await?.unchanged, 1);
+        let second = indexer.index().await?;
+        assert_eq!(second.unchanged, 1);
+        assert!(!second.graph_rebuilt);
+        assert!(!second.pagerank_rebuilt);
         let plan = crate::chronicle::query::plan::StructuredPlan::try_from(
             crate::chronicle::query::planner::parse(
                 r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
@@ -556,7 +613,10 @@ mod tests {
         )?;
         assert_eq!(db.execute_plan_for(&plan, AccessScope::Gm).await?.total, 1);
         std::fs::write(&path, source.replace("role: npc", "role: pc"))?;
-        assert_eq!(indexer.index().await?.unchanged, 1);
+        let metadata_change = indexer.index().await?;
+        assert_eq!(metadata_change.unchanged, 1);
+        assert!(!metadata_change.graph_rebuilt);
+        assert!(!metadata_change.pagerank_rebuilt);
         assert_eq!(db.execute_plan_for(&plan, AccessScope::Gm).await?.total, 0);
         assert_eq!(batches.load(Ordering::SeqCst), initial_batches);
         std::fs::write(&path, source.replace("status: canon", "status: draft"))?;

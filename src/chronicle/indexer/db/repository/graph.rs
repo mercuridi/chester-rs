@@ -4,7 +4,29 @@ use sqlx::{QueryBuilder, Row, Sqlite};
 
 use super::facade::{AccessScope, GraphStats, IndexerDb, PageRankSignal, PageRankStats};
 
+const GRAPH_STATE_KEY: &str = "document-graph-input-v1";
+
 impl IndexerDb {
+    pub async fn graph_input_fingerprint(&self) -> Result<Option<String>> {
+        sqlx::query_scalar("SELECT value FROM chronicle_index_state WHERE key = ?")
+            .bind(GRAPH_STATE_KEY)
+            .fetch_optional(&self.pool)
+            .await
+            .context("Failed to load Chronicle graph state")
+    }
+
+    pub async fn set_graph_input_fingerprint(&self, fingerprint: &str) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO chronicle_index_state(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )
+        .bind(GRAPH_STATE_KEY)
+        .bind(fingerprint)
+        .execute(&self.pool)
+        .await
+        .context("Failed to persist Chronicle graph state")?;
+        Ok(())
+    }
+
     pub async fn pagerank_for_paths(
         &self,
         paths: impl IntoIterator<Item = String>,

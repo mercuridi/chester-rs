@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS documents (
     id           INTEGER PRIMARY KEY,
     path         TEXT NOT NULL UNIQUE,
     content_hash TEXT NOT NULL,
+    metadata_hash TEXT NOT NULL DEFAULT '',
     indexed_at   TEXT NOT NULL
 );
 
@@ -70,6 +71,11 @@ CREATE TABLE IF NOT EXISTS document_pagerank (
     player_rank INTEGER NOT NULL,
     gm_score REAL NOT NULL,
     gm_rank INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chronicle_index_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS note_wikilinks_lookup ON note_wikilinks(field_name, value);
