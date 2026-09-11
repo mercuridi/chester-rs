@@ -226,10 +226,10 @@ impl StructuredPlan {
         self.0
     }
 
-    pub fn operation(&self) -> StructuredOperation {
+    pub fn operation(&self) -> anyhow::Result<StructuredOperation> {
         self.0
             .structured_operation()
-            .expect("StructuredPlan invariant violated")
+            .ok_or_else(|| anyhow::anyhow!("StructuredPlan invariant violated"))
     }
 
     pub fn selection(&self) -> Option<(&str, &Filters)> {

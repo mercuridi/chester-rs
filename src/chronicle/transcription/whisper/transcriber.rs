@@ -122,7 +122,8 @@ impl WhisperTranscriber {
 
         let sample_rate = f64::from(u32::try_from(m::SAMPLE_RATE)?);
         let hop_length = f64::from(u32::try_from(m::HOP_LENGTH)?);
-        let segment_start = window_start_samples as f64 / f64::from(MODEL_SAMPLE_RATE);
+        let segment_start =
+            f64::from(u32::try_from(window_start_samples)?) / f64::from(MODEL_SAMPLE_RATE);
         let segment_duration = f64::from(u32::try_from(content_frames)?) * hop_length / sample_rate;
         let timestamp_segments =
             self.extract_timestamp_segments(&decoded.tokens, segment_start, segment_duration)?;

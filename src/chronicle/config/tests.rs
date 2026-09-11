@@ -97,10 +97,10 @@ fn readme_configuration_example_matches_and_parses_as_the_checked_in_example() -
     let readme = include_str!("../../../README.md");
     let (_, after_start) = readme
         .split_once("<!-- config-example:start -->\n```toml\n")
-        .expect("README configuration example must have a start marker");
+        .ok_or_else(|| anyhow::anyhow!("README configuration example must have a start marker"))?;
     let (documented_config, _) = after_start
         .split_once("```\n<!-- config-example:end -->")
-        .expect("README configuration example must have an end marker");
+        .ok_or_else(|| anyhow::anyhow!("README configuration example must have an end marker"))?;
 
     assert_eq!(
         documented_config,

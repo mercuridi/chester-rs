@@ -195,7 +195,7 @@ mod tests {
     use tracing_subscriber::fmt::MakeWriter;
 
     #[test]
-    fn queue_discards_oldest_event_when_full() {
+    fn queue_discards_oldest_event_when_full() -> anyhow::Result<()> {
         let state = Arc::new((
             Mutex::new(QueueState {
                 queue: VecDeque::new(),
@@ -208,12 +208,27 @@ mod tests {
         };
         for index in 0..=BUFFER_LINES {
             let mut event = writer.make_writer();
-            write!(event, "{index}").unwrap();
+            write!(event, "{index}")?;
         }
 
-        let queue = &state.0.lock().unwrap().queue;
+        let guard = state
+            .0
+            .lock()
+            .map_err(|_| anyhow::anyhow!("test queue mutex poisoned"))?;
+        let queue = &guard.queue;
         assert_eq!(queue.len(), BUFFER_LINES);
-        assert_eq!(queue.front().unwrap(), b"1");
-        assert_eq!(queue.back().unwrap(), BUFFER_LINES.to_string().as_bytes());
+        assert_eq!(
+            queue
+                .front()
+                .ok_or_else(|| anyhow::anyhow!("test queue unexpectedly empty"))?,
+            b"1"
+        );
+        assert_eq!(
+            queue
+                .back()
+                .ok_or_else(|| anyhow::anyhow!("test queue unexpectedly empty"))?,
+            BUFFER_LINES.to_string().as_bytes()
+        );
+        Ok(())
     }
 }

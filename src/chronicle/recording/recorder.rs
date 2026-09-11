@@ -295,10 +295,11 @@ pub fn resolve_finalized_recordings(
         return Err("This recording is not finalized; recover it before transcribing.".to_string());
     }
 
-    manifest
+    let finalized_recordings = manifest
         .finalized_recordings
         .as_ref()
-        .expect("is_finalized guarantees finalized recordings")
+        .ok_or_else(|| "Finalized recording manifest has no recording artifacts".to_string())?;
+    finalized_recordings
         .iter()
         .map(|recording| {
             let path = recording_dir.join(&recording.path);
@@ -1000,7 +1001,7 @@ fn allocate_recording_directory(
     std::fs::create_dir_all(&guild_directory)?;
 
     let base_name = format!("{}-{}", started_at.format("%Y%m%d-%H%M%S"), session_name);
-    for suffix in 0.. {
+    for suffix in 0..=u32::MAX {
         let name = if suffix == 0 {
             base_name.clone()
         } else {
@@ -1013,7 +1014,10 @@ fn allocate_recording_directory(
             Err(error) => return Err(error),
         }
     }
-    unreachable!("session directory suffix space exhausted")
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "session directory suffix space exhausted",
+    ))
 }
 
 fn validate_scene_name(name: String) -> Result<String, Error> {

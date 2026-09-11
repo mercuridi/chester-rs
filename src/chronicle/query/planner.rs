@@ -199,7 +199,7 @@ pub fn parse_structured_for_question(
     );
     let plan = StructuredPlan::try_from(parse(response)?)?;
     ensure!(
-        plan.operation() == operation,
+        plan.operation()? == operation,
         "Structured plan operation did not match classified route"
     );
     ensure!(

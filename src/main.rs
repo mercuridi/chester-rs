@@ -674,7 +674,8 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
             let drain_result = coordinator.drain().await;
             gateway_result.and(drain_result)?;
         }
-        _ = &mut signal => {
+        signal_result = &mut signal => {
+            signal_result?;
             tracing::info!("Shutdown signal received");
             coordinator.drain().await?;
         }
@@ -683,11 +684,12 @@ async fn run_bot(paths: AppPaths) -> Result<()> {
     Ok(())
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal() -> Result<()> {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{SignalKind, signal};
-        let mut terminate = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+        let mut terminate =
+            signal(SignalKind::terminate()).context("Failed to install SIGTERM handler")?;
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {}
             _ = terminate.recv() => {}
@@ -697,6 +699,7 @@ async fn shutdown_signal() {
     {
         let _ = tokio::signal::ctrl_c().await;
     }
+    Ok(())
 }
 
 #[cfg(test)]

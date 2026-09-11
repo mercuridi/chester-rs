@@ -333,11 +333,14 @@ mod tests {
     #[async_trait]
     impl DownloadExecutor for FakeExecutor {
         async fn output(&self, _program: &str, args: &[String]) -> Result<Output> {
-            *self.calls.lock().unwrap() += 1;
+            *self
+                .calls
+                .lock()
+                .map_err(|_| anyhow!("fake executor call counter poisoned"))? += 1;
             let path = args
                 .iter()
                 .find(|arg| arg.contains("%(ext)s"))
-                .unwrap()
+                .ok_or_else(|| anyhow!("download output path argument missing"))?
                 .replace("%(ext)s", "mp3");
             std::fs::write(path, b"audio")?;
             Ok(Output {
@@ -380,7 +383,13 @@ mod tests {
             ),
         );
         assert_eq!(first?.audio_path, second?.audio_path);
-        assert_eq!(*executor.calls.lock().unwrap(), 1);
+        assert_eq!(
+            *executor
+                .calls
+                .lock()
+                .map_err(|_| anyhow!("fake executor call counter poisoned"))?,
+            1
+        );
         assert!(dir.path().join("abc.mp3").exists());
         Ok(())
     }

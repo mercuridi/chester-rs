@@ -58,12 +58,11 @@ mod tests {
     use super::*;
     use crate::chronicle::{indexer::db::repository::facade::StructuredNote, query::plan::Filters};
     #[test]
-    fn lists_report_total_and_do_not_silently_truncate_names() {
+    fn lists_report_total_and_do_not_silently_truncate_names() -> anyhow::Result<()> {
         let plan = StructuredPlan::try_from(Plan::List {
             note_type: "character".into(),
             filters: Filters::default(),
-        })
-        .expect("test plan should be valid");
+        })?;
         let result = StructuredResult {
             total: 25,
             notes: (0..20)
@@ -78,5 +77,6 @@ mod tests {
         let short = render(&plan, &result, 100);
         assert!(short.chars().count() <= 100);
         assert!(short.contains("of 25 recorded matches"));
+        Ok(())
     }
 }

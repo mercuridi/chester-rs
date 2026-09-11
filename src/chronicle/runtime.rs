@@ -299,14 +299,20 @@ mod tests {
         let runtime = GpuRuntime::new();
         let lease = runtime.begin_llm_load()?;
 
-        *runtime.state.lock().expect("runtime state is not poisoned") = RuntimeState::Idle;
+        *runtime
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("runtime state is poisoned"))? = RuntimeState::Idle;
         assert!(lease.commit_to_loaded().is_err());
         assert!(!runtime.is_llm_loaded()?);
         assert_eq!(Arc::strong_count(&runtime.state), 1);
 
         runtime.begin_llm_load()?.commit_to_loaded()?;
         let lease = runtime.begin_llm_unload()?;
-        *runtime.state.lock().expect("runtime state is not poisoned") = RuntimeState::LlmLoaded;
+        *runtime
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("runtime state is poisoned"))? = RuntimeState::LlmLoaded;
         assert!(lease.commit_to_idle().is_err());
         assert!(runtime.is_llm_loaded()?);
         assert_eq!(Arc::strong_count(&runtime.state), 1);

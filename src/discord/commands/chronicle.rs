@@ -479,6 +479,7 @@ pub async fn ask(
         crate::chronicle::indexer::db::repository::facade::AccessScope::Player
     };
     let access_scope = if access.is_gm() { "gm" } else { "player" };
+    let elapsed_ms = || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let answer = match ctx
         .data()
         .chronicle
@@ -487,11 +488,11 @@ pub async fn ask(
     {
         Ok(answer) => answer,
         Err(error) => {
-            tracing::error!(%user, ?guild, access = access_scope, elapsed_ms = started.elapsed().as_millis() as u64, %error, "Chronicle ask failed");
+            tracing::error!(%user, ?guild, access = access_scope, elapsed_ms = elapsed_ms(), %error, "Chronicle ask failed");
             return Err(error.into());
         }
     };
-    info!(%user, ?guild, access = access_scope, route = ?answer.effective_route, elapsed_ms = started.elapsed().as_millis() as u64, reply_len = answer.reply.chars().count(), "Chronicle ask command returned reply");
+    info!(%user, ?guild, access = access_scope, route = ?answer.effective_route, elapsed_ms = elapsed_ms(), reply_len = answer.reply.chars().count(), "Chronicle ask command returned reply");
     if ctx.data().config.logging.content {
         info!(%user, ?guild, question = %question, reply = %answer.reply, "Chronicle ask content");
     }
