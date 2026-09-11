@@ -341,16 +341,16 @@ mod tests {
     #[test]
     fn participants_with_different_drops_keep_equal_timelines() -> anyhow::Result<()> {
         let participant_with_drop = encode_test_file(&[frame(0, 100), frame(4, 200)], 5)?;
-        let participant_without_drop = encode_test_file(
-            &[
-                frame(0, 100),
-                frame(1, 100),
-                frame(2, 100),
-                frame(3, 100),
-                frame(4, 200),
-            ],
-            5,
-        )?;
+
+        let frames = vec![
+            frame(0, 100),
+            frame(1, 100),
+            frame(2, 100),
+            frame(3, 100),
+            frame(4, 200),
+        ]
+        .into_boxed_slice();
+        let participant_without_drop = encode_test_file(&frames, 5)?;
 
         assert_eq!(participant_with_drop, participant_without_drop);
         assert_eq!(participant_with_drop, 5);
