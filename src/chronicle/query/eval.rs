@@ -10,7 +10,7 @@ use crate::chronicle::{
         db::repository::facade::{AccessScope, IndexerDb, StructuredResult},
         scanner,
     },
-    llm::Llm,
+    llm::{Llm, STRUCTURED_PLAN_OUTPUT_TOKENS},
     runtime::GpuRuntime,
 };
 use anyhow::{Context, Result, ensure};
@@ -71,11 +71,48 @@ struct Report {
     suite: String,
     fixture_sha256: String,
     planner_model: Option<String>,
+    planner_runtime: Option<PlannerRuntimeSettings>,
     minimum_planner_accuracy: f64,
     planner_accuracy: Option<f64>,
     intent_family_accuracy: BTreeMap<String, IntentFamilyAccuracy>,
     passed: bool,
     cases: Vec<CaseReport>,
+}
+
+/// The resolved model settings that affect planner-evaluation reproducibility.
+/// Keep this intentionally narrower than the full application config: unrelated
+/// Discord, retrieval, and corpus settings do not affect planner generation.
+#[derive(Serialize)]
+struct PlannerRuntimeSettings {
+    model_repo: String,
+    model_revision: String,
+    model_file: String,
+    tokenizer_repo: String,
+    tokenizer_file: String,
+    context_limit: usize,
+    planner_output_budget: usize,
+    classifier_output_budget: usize,
+    inject_full_taxonomy: bool,
+    temperature: f32,
+    seed: u64,
+}
+
+impl PlannerRuntimeSettings {
+    fn from_llm_settings(settings: &crate::chronicle::config::chronicle::LlmSettings) -> Self {
+        Self {
+            model_repo: settings.model.repo.clone(),
+            model_revision: settings.model.revision.clone(),
+            model_file: settings.model.file.clone(),
+            tokenizer_repo: settings.tokenizer.repo.clone(),
+            tokenizer_file: settings.tokenizer.file.clone(),
+            context_limit: settings.generation.context_limit,
+            planner_output_budget: STRUCTURED_PLAN_OUTPUT_TOKENS,
+            classifier_output_budget: 32,
+            inject_full_taxonomy: settings.generation.inject_full_taxonomy,
+            temperature: settings.generation.temperature,
+            seed: settings.generation.seed,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -399,6 +436,7 @@ async fn run_internal(
     let (_temp, db, fixture_sha256) = fixture_database(suite_path).await?;
     let runtime = GpuRuntime::new();
     let mut planner_model = None;
+    let mut planner_runtime = None;
     let llm = if mode.tests_planner() {
         let config = Config::load(paths.clone())?;
         planner_model = Some(format!(
@@ -406,6 +444,9 @@ async fn run_internal(
             config.chronicle.llm.model.repo,
             config.chronicle.llm.model.revision,
             config.chronicle.llm.model.file
+        ));
+        planner_runtime = Some(PlannerRuntimeSettings::from_llm_settings(
+            &config.chronicle.llm,
         ));
         let llm = Llm::new(&config.chronicle.llm, runtime.clone());
         llm.load().await?;
@@ -442,6 +483,7 @@ async fn run_internal(
         suite: suite.name,
         fixture_sha256,
         planner_model,
+        planner_runtime,
         minimum_planner_accuracy: suite.minimum_planner_accuracy,
         planner_accuracy,
         intent_family_accuracy: family_accuracy(&cases, mode),

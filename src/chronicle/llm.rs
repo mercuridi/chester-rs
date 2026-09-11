@@ -17,6 +17,10 @@ use super::{
 };
 use tracing::{info, instrument};
 
+/// Structured plans are intentionally short JSON objects, so reserve less
+/// completion space than a normal Chronicle answer.
+pub const STRUCTURED_PLAN_OUTPUT_TOKENS: usize = 256;
+
 #[async_trait::async_trait]
 pub trait LanguageModel: Send + Sync {
     fn prompt_token_budget(&self) -> usize;
@@ -208,7 +212,8 @@ impl Llm {
             operation,
             self.config_inject_full_taxonomy(),
         );
-        self.generate_with_system(&system, question, 256, 0.0).await
+        self.generate_with_system(&system, question, STRUCTURED_PLAN_OUTPUT_TOKENS, 0.0)
+            .await
     }
 
     pub async fn repair_structured_plan(
@@ -223,7 +228,8 @@ impl Llm {
             self.config_inject_full_taxonomy(),
         );
         let prompt = build_repair_prompt(question, operation, rejected_response, rejection_error);
-        self.generate_with_system(&system, &prompt, 256, 0.0).await
+        self.generate_with_system(&system, &prompt, STRUCTURED_PLAN_OUTPUT_TOKENS, 0.0)
+            .await
     }
 
     fn config_inject_full_taxonomy(&self) -> bool {
