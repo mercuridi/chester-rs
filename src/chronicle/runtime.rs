@@ -138,6 +138,7 @@ impl GpuRuntime {
             state: Arc::clone(&self.state),
             previous_state: required_state,
             operation,
+            committed: false,
         })
     }
 }
@@ -152,10 +153,11 @@ pub struct GpuLease {
     state: Arc<Mutex<RuntimeState>>,
     previous_state: RuntimeState,
     operation: RuntimeState,
+    committed: bool,
 }
 
 impl GpuLease {
-    pub fn commit_to_loaded(self) -> Result<()> {
+    pub fn commit_to_loaded(mut self) -> Result<()> {
         let result = self
             .state
             .lock()
@@ -171,12 +173,12 @@ impl GpuLease {
             });
 
         if result.is_ok() {
-            std::mem::forget(self);
+            self.committed = true;
         }
         result
     }
 
-    pub fn commit_to_idle(self) -> Result<()> {
+    pub fn commit_to_idle(mut self) -> Result<()> {
         let result = self
             .state
             .lock()
@@ -192,7 +194,7 @@ impl GpuLease {
             });
 
         if result.is_ok() {
-            std::mem::forget(self);
+            self.committed = true;
         }
         result
     }
@@ -200,6 +202,10 @@ impl GpuLease {
 
 impl Drop for GpuLease {
     fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+
         let Ok(mut state) = self.state.lock() else {
             return;
         };
@@ -213,7 +219,9 @@ impl Drop for GpuLease {
 
 #[cfg(test)]
 mod tests {
-    use super::{GpuRuntime, is_cuda_oom, report_cuda_oom};
+    use std::sync::Arc;
+
+    use super::{GpuRuntime, RuntimeState, is_cuda_oom, report_cuda_oom};
 
     #[test]
     fn recognizes_cuda_oom_anywhere_in_an_error_chain() {
@@ -250,7 +258,10 @@ mod tests {
     #[test]
     fn loading_can_commit_to_loaded() -> anyhow::Result<()> {
         let runtime = GpuRuntime::new();
-        runtime.begin_llm_load()?.commit_to_loaded()?;
+        let lease = runtime.begin_llm_load()?;
+        assert_eq!(Arc::strong_count(&runtime.state), 2);
+        lease.commit_to_loaded()?;
+        assert_eq!(Arc::strong_count(&runtime.state), 1);
         assert!(runtime.is_llm_loaded()?);
         assert!(runtime.acquire_transcription().is_err());
         Ok(())
@@ -274,9 +285,31 @@ mod tests {
         let runtime = GpuRuntime::new();
         assert!(runtime.begin_llm_unload().is_err());
         runtime.begin_llm_load()?.commit_to_loaded()?;
-        runtime.begin_llm_unload()?.commit_to_idle()?;
+        let lease = runtime.begin_llm_unload()?;
+        assert_eq!(Arc::strong_count(&runtime.state), 2);
+        lease.commit_to_idle()?;
+        assert_eq!(Arc::strong_count(&runtime.state), 1);
         assert!(!runtime.is_llm_loaded()?);
         assert!(runtime.acquire_transcription().is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn failed_commit_rolls_back_to_previous_state() -> anyhow::Result<()> {
+        let runtime = GpuRuntime::new();
+        let lease = runtime.begin_llm_load()?;
+
+        *runtime.state.lock().expect("runtime state is not poisoned") = RuntimeState::Idle;
+        assert!(lease.commit_to_loaded().is_err());
+        assert!(!runtime.is_llm_loaded()?);
+        assert_eq!(Arc::strong_count(&runtime.state), 1);
+
+        runtime.begin_llm_load()?.commit_to_loaded()?;
+        let lease = runtime.begin_llm_unload()?;
+        *runtime.state.lock().expect("runtime state is not poisoned") = RuntimeState::LlmLoaded;
+        assert!(lease.commit_to_idle().is_err());
+        assert!(runtime.is_llm_loaded()?);
+        assert_eq!(Arc::strong_count(&runtime.state), 1);
         Ok(())
     }
 
