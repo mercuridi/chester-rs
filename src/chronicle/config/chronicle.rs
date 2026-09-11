@@ -61,10 +61,16 @@ struct FileTokenizerSource {
 struct FileGenerationSettings {
     max_tokens: u32,
     context_limit: usize,
+    #[serde(default = "default_inject_full_taxonomy")]
+    inject_full_taxonomy: bool,
     temperature: f32,
     seed: u64,
     system_prompt: String,
     max_reply_length: usize,
+}
+
+fn default_inject_full_taxonomy() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,6 +133,7 @@ pub struct TokenizerSource {
 pub struct GenerationSettings {
     pub max_tokens: u32,
     pub context_limit: usize,
+    pub inject_full_taxonomy: bool,
     pub temperature: f32,
     pub seed: u64,
     pub system_prompt: String,
@@ -187,6 +194,7 @@ impl ChronicleConfig {
                 generation: GenerationSettings {
                     max_tokens: file.llm.generation.max_tokens,
                     context_limit: file.llm.generation.context_limit,
+                    inject_full_taxonomy: file.llm.generation.inject_full_taxonomy,
                     temperature: file.llm.generation.temperature,
                     seed: file.llm.generation.seed,
                     system_prompt: file.llm.generation.system_prompt,

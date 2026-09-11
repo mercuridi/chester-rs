@@ -946,6 +946,7 @@ mod tests {
             GenerationSettings {
                 max_tokens: 1,
                 context_limit: 2,
+                inject_full_taxonomy: true,
                 temperature: 0.0,
                 seed: 0,
                 system_prompt: "test".into(),
@@ -988,6 +989,7 @@ mod tests {
             GenerationSettings {
                 max_tokens: 1,
                 context_limit: 2,
+                inject_full_taxonomy: true,
                 temperature: 0.0,
                 seed: 0,
                 system_prompt: "test".into(),

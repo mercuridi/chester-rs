@@ -52,6 +52,7 @@ pub struct Llm {
     tokenizer_file: String,
     max_tokens: usize,
     context_limit: usize,
+    inject_full_taxonomy: bool,
     temperature: f64,
     seed: u64,
     system_prompt: String,
@@ -76,6 +77,7 @@ impl Llm {
             tokenizer_file: config.tokenizer.file.clone(),
             max_tokens: config.generation.max_tokens as usize,
             context_limit: config.generation.context_limit,
+            inject_full_taxonomy: config.generation.inject_full_taxonomy,
             temperature: f64::from(config.generation.temperature),
             seed: config.generation.seed,
             system_prompt: format!(
@@ -202,7 +204,10 @@ impl Llm {
         question: &str,
         operation: StructuredOperation,
     ) -> Result<String> {
-        let system = crate::chronicle::query::planner::structured_system_prompt(operation);
+        let system = crate::chronicle::query::planner::structured_system_prompt_with_taxonomy(
+            operation,
+            self.config_inject_full_taxonomy(),
+        );
         self.generate_with_system(&system, question, 256, 0.0).await
     }
 
@@ -213,9 +218,16 @@ impl Llm {
         rejected_response: &str,
         rejection_error: &str,
     ) -> Result<String> {
-        let system = crate::chronicle::query::planner::structured_system_prompt(operation);
+        let system = crate::chronicle::query::planner::structured_system_prompt_with_taxonomy(
+            operation,
+            self.config_inject_full_taxonomy(),
+        );
         let prompt = build_repair_prompt(question, operation, rejected_response, rejection_error);
         self.generate_with_system(&system, &prompt, 256, 0.0).await
+    }
+
+    fn config_inject_full_taxonomy(&self) -> bool {
+        self.inject_full_taxonomy
     }
 
     async fn generate_with_system(
@@ -464,6 +476,7 @@ mod tests {
             generation: GenerationSettings {
                 max_tokens: 256,
                 context_limit: 1024,
+                inject_full_taxonomy: true,
                 temperature: 0.5,
                 seed: 7,
                 system_prompt: "System prompt\n\n".into(),

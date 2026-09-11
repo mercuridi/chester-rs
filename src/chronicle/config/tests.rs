@@ -116,6 +116,7 @@ fn loads_complete_nested_settings_and_domain_ownership() -> Result<()> {
     let config = load(&CONFIG.replace("gm_user_ids = []", "gm_user_ids = [\"99\"]"))?;
     assert_eq!(config.chronicle.llm.model.repo, "owner/model");
     assert_eq!(config.chronicle.llm.generation.context_limit, 4096);
+    assert!(config.chronicle.llm.generation.inject_full_taxonomy);
     assert_eq!(config.chronicle.retrieval.candidate_limit, 15);
     assert_eq!(config.chronicle.synthesis.max_batches, 6);
     assert!(config.chronicle.access.is_gm(UserId::new(99)));

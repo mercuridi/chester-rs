@@ -145,6 +145,8 @@ file = "tokenizer.json"
 [chronicle.llm.generation]
 max_tokens = 512
 context_limit = 8192
+# Set false to omit the full typed taxonomy from structured planner prompts.
+inject_full_taxonomy = true
 temperature = 0.2
 seed = 42
 system_prompt = """\

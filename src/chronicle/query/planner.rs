@@ -22,6 +22,13 @@ Never replace an explicit role, status, location, relationship, or appearance re
 /// selected a structured operation. The model must not reconsider the route.
 #[allow(clippy::unreachable)]
 pub fn structured_system_prompt(operation: StructuredOperation) -> String {
+    structured_system_prompt_with_taxonomy(operation, true)
+}
+
+pub fn structured_system_prompt_with_taxonomy(
+    operation: StructuredOperation,
+    inject_full_taxonomy: bool,
+) -> String {
     let output_shape = match operation {
         StructuredOperation::Count => {
             r#"Output exactly {"operation":"count","note_type":"...","filters":{"conditions":[...]}}. Omit filters when none are requested."#
@@ -33,17 +40,24 @@ pub fn structured_system_prompt(operation: StructuredOperation) -> String {
             r#"Output exactly {"operation":"count_members","note_type":"...","subject":"[[...]]","field":"..."}."#
         }
     };
+    let taxonomy = if inject_full_taxonomy {
+        format!(
+            "Typed universal fields: {}.\nTyped fields by note type: {}.",
+            typed_fields(schema::UNIVERSAL_FIELD_DEFINITIONS),
+            schema::DOCUMENT_TYPE_DEFINITIONS
+                .iter()
+                .filter(|definition| definition.name != "template")
+                .map(|definition| {
+                    format!("{}: {}", definition.name, typed_fields(definition.fields))
+                })
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    } else {
+        "Full taxonomy injection is disabled for this run. Use only fields and note types explicitly demonstrated in these instructions; do not invent schema fields.".into()
+    };
     format!(
-        "{STRUCTURED_SYSTEM}\n\nThe route classifier has already selected `{operation:?}`. Construct only that operation. {output_shape}\nTyped universal fields: {}.\nTyped fields by note type: {}.",
-        typed_fields(schema::UNIVERSAL_FIELD_DEFINITIONS),
-        schema::DOCUMENT_TYPE_DEFINITIONS
-            .iter()
-            .filter(|definition| definition.name != "template")
-            .map(|definition| {
-                format!("{}: {}", definition.name, typed_fields(definition.fields))
-            })
-            .collect::<Vec<_>>()
-            .join("; "),
+        "{STRUCTURED_SYSTEM}\n\nThe route classifier has already selected `{operation:?}`. Construct only that operation. {output_shape}\n{taxonomy}",
     )
 }
 
@@ -470,6 +484,14 @@ mod tests {
         assert!(prompt.contains("sizes: string list"));
         assert!(prompt.contains("race: "));
         assert!(!prompt.contains("template: "));
+    }
+
+    #[test]
+    fn structured_prompt_can_disable_full_taxonomy_injection() {
+        let prompt = structured_system_prompt_with_taxonomy(StructuredOperation::Count, false);
+        assert!(prompt.contains("Full taxonomy injection is disabled"));
+        assert!(!prompt.contains("Typed fields by note type:"));
+        assert!(prompt.contains("role"));
     }
 
     #[test]
