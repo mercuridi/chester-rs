@@ -377,7 +377,7 @@ pub fn recover_recording_manifest(
     manifest.participant_failures.clear();
     manifest.finalization_error = None;
     manifest.status = ManifestStatus::Complete;
-    manifest.ended_at.get_or_insert_with(|| Local::now());
+    manifest.ended_at.get_or_insert_with(Local::now);
     manifest.save_atomically(manifest_path)?;
     Ok(manifest)
 }
@@ -1010,7 +1010,7 @@ fn allocate_recording_directory(
         let directory = guild_directory.join(&name);
         match std::fs::create_dir(&directory) {
             Ok(()) => return Ok((name, directory)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
         }
     }

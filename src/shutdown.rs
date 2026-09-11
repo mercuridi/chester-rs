@@ -21,8 +21,7 @@ pub struct ShutdownState {
 
 impl ShutdownState {
     pub fn request(&self) -> bool {
-        let first = !self.requested.swap(true, Ordering::AcqRel);
-        first
+        !self.requested.swap(true, Ordering::AcqRel)
     }
 
     pub fn is_requested(&self) -> bool {
@@ -67,14 +66,11 @@ impl ShutdownCoordinator {
 
         tracing::info!(timeout = ?self.timeout, "Beginning coordinated shutdown");
         let result = tokio::time::timeout(self.timeout, self.drain_inner()).await;
-        match result {
-            Ok(result) => result,
-            Err(_) => {
-                tracing::error!(
-                    "Shutdown drain timed out; incomplete recording state was preserved"
-                );
-                Ok(())
-            }
+        if let Ok(result) = result {
+            result
+        } else {
+            tracing::error!("Shutdown drain timed out; incomplete recording state was preserved");
+            Ok(())
         }
     }
 

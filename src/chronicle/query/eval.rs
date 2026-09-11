@@ -262,7 +262,7 @@ async fn evaluate_structured_route(
         planner::generate_or_repair_structured_plan(llm, &report.case.question, operation).await;
     report
         .query_generation_responses
-        .extend(planning.generated_response.into_iter());
+        .extend(planning.generated_response);
     report.query_generation_error = planning.generation_error;
     report.query_validation_error = planning.validation_error;
     report.repair_response = planning.repair_response;

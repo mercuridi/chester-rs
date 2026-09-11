@@ -102,7 +102,6 @@ impl RetrievalMode {
     }
 }
 
-#[allow(clippy::too_many_lines)]
 pub(in crate::chronicle::service) async fn select_answer_route(
     llm: &dyn LanguageModel,
     structured_store: &dyn StructuredStore,

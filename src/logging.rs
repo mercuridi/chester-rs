@@ -137,9 +137,8 @@ fn write_loop(state: &(Mutex<QueueState>, Condvar), mut appender: RollingFileApp
     loop {
         let item = {
             let (lock, notify) = state;
-            let mut state = match lock.lock() {
-                Ok(state) => state,
-                Err(_) => return,
+            let Ok(mut state) = lock.lock() else {
+                return;
             };
             while state.queue.is_empty() && !state.closed {
                 state = match notify.wait(state) {
