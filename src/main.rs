@@ -19,11 +19,13 @@ use tracing::info;
 use crate::{
     chronicle::{
         config::{app::Config, paths::AppPaths},
+        indexer::retriever::runtime::Retriever,
         indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,
         recording::recorder::{notify_recording_user, scan_incomplete_manifests},
         runtime::{GpuRuntime, report_cuda_oom},
-        service::Chronicle,
+        service::{Chronicle, ChronicleDependencies},
+        transcription::service::TranscriptionService,
     },
     discord::context::{Data, Error},
     jester::library::sync::{SyncConfig, sync_audio_library},
@@ -32,6 +34,7 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use std::fs::{self, OpenOptions};
 use std::path::Path;
+use std::sync::Arc;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -120,21 +123,21 @@ async fn build_chronicle(config: &Config) -> Result<Chronicle> {
 
     let (chronicle_db, _embedder) = indexer.into_parts();
     let runtime = GpuRuntime::new();
-    let llm = Llm::new(&config.chronicle.llm, runtime.clone());
+    let llm = Arc::new(Llm::new(&config.chronicle.llm, runtime.clone()));
+    let retriever = Arc::new(Retriever::new(chronicle_db.clone()));
     tracing::info!("Chronicle services initialized");
 
     Ok(Chronicle::new(
-        chronicle_db,
-        llm,
-        runtime,
-        config.chronicle.retrieval.limit,
-        config.chronicle.retrieval.candidate_limit,
-        config.chronicle.retrieval.distance_threshold,
-        config.chronicle.retrieval.near_duplicate_threshold,
-        config.chronicle.retrieval.max_chunks_per_document,
-        config.chronicle.retrieval.pagerank_weight,
+        config.chronicle.retrieval.clone(),
         config.chronicle.synthesis,
-        config.chronicle.llm.generation.max_reply_length,
+        config.chronicle.llm.generation.clone(),
+        ChronicleDependencies {
+            retriever,
+            structured_store: Arc::new(chronicle_db),
+            llm,
+            runtime: runtime.clone(),
+            transcription: TranscriptionService::new(runtime),
+        },
     ))
 }
 

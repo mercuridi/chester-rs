@@ -2,69 +2,34 @@ use anyhow::Result;
 use tracing::debug;
 
 use super::super::{
+    config::chronicle::{GenerationSettings, RetrievalSettings},
     indexer::{
         db::repository::facade::AccessScope,
         prompt,
-        retriever::{
-            api::{RetrievalOutcome, RetrieverApi},
-            settings::{
-                CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
-            },
-        },
+        retriever::api::{RetrievalOutcome, RetrieverApi},
     },
     llm::LanguageModel,
 };
 use super::answer_routing::RetrievalMode;
 
-pub(in crate::chronicle::service) struct RetrievalAnswerSettings {
-    pub(in crate::chronicle::service) limit: usize,
-    pub(in crate::chronicle::service) candidate_limit: usize,
-    pub(in crate::chronicle::service) distance_threshold: f32,
-    pub(in crate::chronicle::service) near_duplicate_threshold: f32,
-    pub(in crate::chronicle::service) max_chunks_per_document: usize,
-    pub(in crate::chronicle::service) pagerank_weight: f64,
-    pub(in crate::chronicle::service) max_reply_length: usize,
-}
-
 pub(in crate::chronicle::service) async fn answer_from_retrieval(
     retriever: &dyn RetrieverApi,
     llm: &dyn LanguageModel,
-    settings: &RetrievalAnswerSettings,
+    retrieval: &RetrievalSettings,
+    generation: &GenerationSettings,
     question: &str,
     mode: RetrievalMode,
     access: AccessScope,
 ) -> Result<String> {
     let prefix = mode.prefix();
-    let answer_limit = settings
+    let answer_limit = generation
         .max_reply_length
         .saturating_sub(prefix.chars().count());
     if answer_limit == 0 {
-        return Ok(truncate_to_char_limit(prefix, settings.max_reply_length));
+        return Ok(truncate_to_char_limit(prefix, generation.max_reply_length));
     }
     let outcome = match retriever
-        .search(
-            question,
-            SearchSettings {
-                limits: RetrievalLimits {
-                    limit: settings.limit,
-                    candidate_limit: settings.candidate_limit,
-                },
-                candidate_pool: CandidatePoolPolicy {
-                    distance_threshold: settings.distance_threshold,
-                },
-                fusion: FusionPolicy {
-                    vector_rrf_weight: 1.0,
-                    lexical_rrf_weight: 1.0,
-                    pagerank_weight: settings.pagerank_weight,
-                    rrf_rank_constant: 60.0,
-                },
-                selection: SelectionPolicy {
-                    near_duplicate_threshold: settings.near_duplicate_threshold,
-                    max_chunks_per_document: settings.max_chunks_per_document,
-                },
-            },
-            access,
-        )
+        .search(question, retrieval.search_settings(), access)
         .await
     {
         Ok(outcome) => outcome,
@@ -72,7 +37,7 @@ pub(in crate::chronicle::service) async fn answer_from_retrieval(
             tracing::warn!(%error, "Chronicle retrieval failed");
             return Ok(truncate_to_char_limit(
                 &format!("{prefix}Chronicle retrieval failed."),
-                settings.max_reply_length,
+                generation.max_reply_length,
             ));
         }
     };
@@ -82,19 +47,19 @@ pub(in crate::chronicle::service) async fn answer_from_retrieval(
         RetrievalOutcome::BadQuestion => {
             return Ok(truncate_to_char_limit(
                 &format!("{prefix}Please provide a non-empty question."),
-                settings.max_reply_length,
+                generation.max_reply_length,
             ));
         }
         RetrievalOutcome::CorpusEmpty => {
             return Ok(truncate_to_char_limit(
                 &format!("{prefix}Chronicle corpus is empty."),
-                settings.max_reply_length,
+                generation.max_reply_length,
             ));
         }
         RetrievalOutcome::NoResultMeetsThreshold => {
             return Ok(truncate_to_char_limit(
                 &format!("{prefix}No relevant Chronicle context was found."),
-                settings.max_reply_length,
+                generation.max_reply_length,
             ));
         }
     };

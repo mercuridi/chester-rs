@@ -1,11 +1,15 @@
 //! Model-backed bounded-synthesis evaluation with deterministic rubric scoring.
 use super::super::{
     config::app::Config,
-    indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
+    indexer::{
+        db::repository::facade::IndexerDb, embedder::Embedder, retriever::runtime::Retriever,
+        service::Indexer,
+    },
     llm::{LanguageModel, Llm},
     query::plan::RouteOperation,
     runtime::GpuRuntime,
-    service::{Chronicle, EffectiveRoute},
+    service::{Chronicle, ChronicleDependencies, EffectiveRoute},
+    transcription::service::TranscriptionService,
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use chrono::Utc;
@@ -13,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fs::{OpenOptions, create_dir_all},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 #[derive(Deserialize)]
@@ -1236,21 +1241,22 @@ pub async fn run(
         config.chronicle.llm.model.revision,
         config.chronicle.llm.model.file
     );
+    let retriever = Arc::new(Retriever::new(database.clone()));
+    let llm = Arc::new(llm);
     let chronicle = Chronicle::new(
-        database,
-        llm.clone(),
-        runtime.clone(),
-        config.chronicle.retrieval.limit,
-        config.chronicle.retrieval.candidate_limit,
-        config.chronicle.retrieval.distance_threshold,
-        config.chronicle.retrieval.near_duplicate_threshold,
-        config.chronicle.retrieval.max_chunks_per_document,
-        config.chronicle.retrieval.pagerank_weight,
+        config.chronicle.retrieval.clone(),
         config.chronicle.synthesis,
-        config.chronicle.llm.generation.max_reply_length,
+        config.chronicle.llm.generation.clone(),
+        ChronicleDependencies {
+            retriever,
+            structured_store: Arc::new(database),
+            llm: llm.clone(),
+            runtime: runtime.clone(),
+            transcription: TranscriptionService::new(runtime),
+        },
     );
     chronicle.start_llm().await?;
-    let judge = SynthesisJudge::new(std::sync::Arc::new(llm.clone()));
+    let judge = SynthesisJudge::new(llm.clone());
     let mut cases = Vec::new();
     for case in suite.cases {
         cases.push(evaluate_case(case, &chronicle, &judge, thresholds).await?);

@@ -1,9 +1,8 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use std::time::Instant;
 use tracing::{debug, info};
 
 use super::super::{
-    indexer::db::repository::facade::IndexerDb,
     llm::LanguageModel,
     query::{
         classifier,
@@ -11,6 +10,7 @@ use super::super::{
         planner,
     },
 };
+use super::chronicle::StructuredStore;
 
 #[derive(Clone, Copy)]
 pub(in crate::chronicle::service) enum RetrievalMode {
@@ -103,7 +103,7 @@ impl RetrievalMode {
 
 pub(in crate::chronicle::service) async fn select_answer_route(
     llm: &dyn LanguageModel,
-    db: Option<&IndexerDb>,
+    structured_store: &dyn StructuredStore,
     question: &str,
 ) -> Result<RouteSelection> {
     let selection_started = Instant::now();
@@ -293,7 +293,7 @@ pub(in crate::chronicle::service) async fn select_answer_route(
         ));
     };
     if plan.selection().is_some() {
-        db.context("Structured datastore unavailable")?
+        structured_store
             .resolve_string_or_wikilinks(&mut plan)
             .await?;
     }

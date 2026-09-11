@@ -7,6 +7,9 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serenity::all::UserId;
 
+use crate::chronicle::indexer::retriever::settings::{
+    CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
+};
 use crate::discord::constants::MESSAGE_MAX_CHARS;
 
 use super::paths::resolve_path;
@@ -276,6 +279,28 @@ impl LlmSettings {
 }
 
 impl RetrievalSettings {
+    pub fn search_settings(&self) -> SearchSettings {
+        SearchSettings {
+            limits: RetrievalLimits {
+                limit: self.limit,
+                candidate_limit: self.candidate_limit,
+            },
+            candidate_pool: CandidatePoolPolicy {
+                distance_threshold: self.distance_threshold,
+            },
+            fusion: FusionPolicy {
+                vector_rrf_weight: 1.0,
+                lexical_rrf_weight: 1.0,
+                pagerank_weight: self.pagerank_weight,
+                rrf_rank_constant: 60.0,
+            },
+            selection: SelectionPolicy {
+                near_duplicate_threshold: self.near_duplicate_threshold,
+                max_chunks_per_document: self.max_chunks_per_document,
+            },
+        }
+    }
+
     fn validate(&self) -> Result<()> {
         if self.limit == 0 || self.limit > 100 {
             bail!("Chronicle retrieval_limit must be between 1 and 100");
@@ -321,6 +346,28 @@ impl IndexingSettings {
 }
 
 impl SynthesisSettings {
+    pub fn search_settings(&self, retrieval: &RetrievalSettings) -> SearchSettings {
+        SearchSettings {
+            limits: RetrievalLimits {
+                limit: self.retrieval_limit,
+                candidate_limit: self.candidate_limit,
+            },
+            candidate_pool: CandidatePoolPolicy {
+                distance_threshold: retrieval.distance_threshold,
+            },
+            fusion: FusionPolicy {
+                vector_rrf_weight: 1.0,
+                lexical_rrf_weight: 1.0,
+                pagerank_weight: retrieval.pagerank_weight,
+                rrf_rank_constant: 60.0,
+            },
+            selection: SelectionPolicy {
+                near_duplicate_threshold: retrieval.near_duplicate_threshold,
+                max_chunks_per_document: self.max_chunks_per_document,
+            },
+        }
+    }
+
     fn validate(&self) -> Result<()> {
         if self.retrieval_limit == 0 || self.retrieval_limit > 100 {
             bail!("Chronicle synthesis_retrieval_limit must be between 1 and 100");

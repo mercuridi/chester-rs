@@ -1,21 +1,20 @@
 use super::{
     answer_routing::{self, AnswerRoute, RetrievalMode},
-    lifecycle,
-    retrieval_answer::{self, RetrievalAnswerSettings},
+    lifecycle, retrieval_answer,
     synthesis_pipeline::{self, EvidenceRetrieval},
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
 use super::super::{
-    config::chronicle::SynthesisSettings,
+    config::chronicle::{GenerationSettings, RetrievalSettings, SynthesisSettings},
     indexer::{
-        db::repository::facade::{AccessScope, IndexerDb, SearchResult},
-        retriever::{api::RetrieverApi, runtime::Retriever},
+        db::repository::facade::{AccessScope, IndexerDb, SearchResult, StructuredResult},
+        retriever::api::RetrieverApi,
     },
-    llm::{LanguageModel, Llm},
+    llm::LanguageModel,
     query::{
         plan::{Plan, RouteOperation},
         render,
@@ -29,19 +28,40 @@ pub use super::synthesis_pipeline::SynthesisDiagnostics;
 
 pub struct Chronicle {
     retriever: Arc<dyn RetrieverApi>,
-    db: Option<IndexerDb>,
+    structured_store: Arc<dyn StructuredStore>,
     llm: Arc<dyn LanguageModel>,
     runtime: GpuRuntime,
     transcription: TranscriptionService,
-    retrieval_limit: usize,
-    retrieval_candidate_limit: usize,
-    retrieval_distance_threshold: f32,
-    retrieval_near_duplicate_threshold: f32,
-    retrieval_max_chunks_per_document: usize,
-    pagerank_weight: f64,
+    retrieval: RetrievalSettings,
     synthesis: SynthesisSettings,
-    max_reply_length: usize,
+    generation: GenerationSettings,
     lifecycle: tokio::sync::Mutex<()>,
+}
+
+#[async_trait::async_trait]
+pub trait StructuredStore: Send + Sync {
+    async fn resolve_string_or_wikilinks(&self, plan: &mut Plan) -> Result<()>;
+
+    async fn execute_plan(&self, plan: &Plan, access: AccessScope) -> Result<StructuredResult>;
+}
+
+#[async_trait::async_trait]
+impl StructuredStore for IndexerDb {
+    async fn resolve_string_or_wikilinks(&self, plan: &mut Plan) -> Result<()> {
+        self.resolve_string_or_wikilinks(plan).await
+    }
+
+    async fn execute_plan(&self, plan: &Plan, access: AccessScope) -> Result<StructuredResult> {
+        self.execute_plan_for(plan, access).await
+    }
+}
+
+pub struct ChronicleDependencies {
+    pub retriever: Arc<dyn RetrieverApi>,
+    pub structured_store: Arc<dyn StructuredStore>,
+    pub llm: Arc<dyn LanguageModel>,
+    pub runtime: GpuRuntime,
+    pub transcription: TranscriptionService,
 }
 
 struct SynthesisEvidenceNotes {
@@ -97,70 +117,21 @@ impl AnswerOutcome {
 }
 
 impl Chronicle {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        db: IndexerDb,
-        llm: Llm,
-        runtime: GpuRuntime,
-        retrieval_limit: usize,
-        retrieval_candidate_limit: usize,
-        retrieval_distance_threshold: f32,
-        retrieval_near_duplicate_threshold: f32,
-        retrieval_max_chunks_per_document: usize,
-        pagerank_weight: f64,
+        retrieval: RetrievalSettings,
         synthesis: SynthesisSettings,
-        max_reply_length: usize,
+        generation: GenerationSettings,
+        dependencies: ChronicleDependencies,
     ) -> Self {
         Self {
-            retriever: Arc::new(Retriever::new(db.clone())),
-            db: Some(db),
-            llm: Arc::new(llm),
-            runtime: runtime.clone(),
-            transcription: TranscriptionService::new(runtime),
-            retrieval_limit,
-            retrieval_candidate_limit,
-            retrieval_distance_threshold,
-            retrieval_near_duplicate_threshold,
-            retrieval_max_chunks_per_document,
-            pagerank_weight,
+            retriever: dependencies.retriever,
+            structured_store: dependencies.structured_store,
+            llm: dependencies.llm,
+            runtime: dependencies.runtime,
+            transcription: dependencies.transcription,
+            retrieval,
             synthesis,
-            max_reply_length,
-            lifecycle: tokio::sync::Mutex::new(()),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "test dependency injection seam")
-    )]
-    pub fn with_dependencies(
-        retriever: Arc<dyn RetrieverApi>,
-        llm: Arc<dyn LanguageModel>,
-        runtime: GpuRuntime,
-        retrieval_limit: usize,
-        retrieval_candidate_limit: usize,
-        retrieval_distance_threshold: f32,
-        retrieval_near_duplicate_threshold: f32,
-        retrieval_max_chunks_per_document: usize,
-        pagerank_weight: f64,
-        synthesis: SynthesisSettings,
-        max_reply_length: usize,
-    ) -> Self {
-        Self {
-            retriever,
-            db: None,
-            llm,
-            runtime: runtime.clone(),
-            transcription: TranscriptionService::new(runtime),
-            retrieval_limit,
-            retrieval_candidate_limit,
-            retrieval_distance_threshold,
-            retrieval_near_duplicate_threshold,
-            retrieval_max_chunks_per_document,
-            pagerank_weight,
-            synthesis,
-            max_reply_length,
+            generation,
             lifecycle: tokio::sync::Mutex::new(()),
         }
     }
@@ -213,7 +184,12 @@ impl Chronicle {
     }
 
     async fn select_answer_route(&self, question: &str) -> Result<answer_routing::RouteSelection> {
-        answer_routing::select_answer_route(self.llm.as_ref(), self.db.as_ref(), question).await
+        answer_routing::select_answer_route(
+            self.llm.as_ref(),
+            self.structured_store.as_ref(),
+            question,
+        )
+        .await
     }
 
     fn effective_route(route: &AnswerRoute) -> EffectiveRoute {
@@ -240,7 +216,7 @@ impl Chronicle {
             AnswerRoute::Synthesis => self.answer_from_synthesis(question, access).await,
             AnswerRoute::Clarification => Ok(AnswerOutcome::bounded(
                 "Please name what you want counted or listed, and any character role or status filters.",
-                self.max_reply_length,
+                self.generation.max_reply_length,
             )),
             AnswerRoute::EmptyQuestion => Ok(AnswerOutcome::new(
                 "Please provide a non-empty question.".into(),
@@ -253,16 +229,11 @@ impl Chronicle {
         plan: &Plan,
         access: AccessScope,
     ) -> Result<AnswerOutcome> {
-        let result = self
-            .db
-            .as_ref()
-            .context("Structured datastore unavailable")?
-            .execute_plan_for(plan, access)
-            .await?;
+        let result = self.structured_store.execute_plan(plan, access).await?;
         Ok(AnswerOutcome::new(render::render(
             plan,
             &result,
-            self.max_reply_length,
+            self.generation.max_reply_length,
         )))
     }
 
@@ -272,19 +243,11 @@ impl Chronicle {
         mode: RetrievalMode,
         access: AccessScope,
     ) -> Result<AnswerOutcome> {
-        let settings = RetrievalAnswerSettings {
-            limit: self.retrieval_limit,
-            candidate_limit: self.retrieval_candidate_limit,
-            distance_threshold: self.retrieval_distance_threshold,
-            near_duplicate_threshold: self.retrieval_near_duplicate_threshold,
-            max_chunks_per_document: self.retrieval_max_chunks_per_document,
-            pagerank_weight: self.pagerank_weight,
-            max_reply_length: self.max_reply_length,
-        };
         retrieval_answer::answer_from_retrieval(
             self.retriever.as_ref(),
             self.llm.as_ref(),
-            &settings,
+            &self.retrieval,
+            &self.generation,
             question,
             mode,
             access,
@@ -300,10 +263,8 @@ impl Chronicle {
     ) -> Result<AnswerOutcome> {
         let results = match synthesis_pipeline::retrieve_evidence(
             self.retriever.as_ref(),
+            &self.retrieval,
             &self.synthesis,
-            self.retrieval_distance_threshold,
-            self.retrieval_near_duplicate_threshold,
-            self.pagerank_weight,
             question,
             access,
         )
@@ -505,10 +466,11 @@ impl Chronicle {
             "Built Chronicle synthesis answer prompt"
         );
         let answer_limit = if evidence.partial {
-            self.max_reply_length
+            self.generation
+                .max_reply_length
                 .saturating_sub(PARTIAL_SYNTHESIS_PREFIX.chars().count())
         } else {
-            self.max_reply_length
+            self.generation.max_reply_length
         };
         let (answer, retried, truncated) =
             retrieval_answer::generate_answer(self.llm.as_ref(), &final_prompt, answer_limit)
@@ -525,7 +487,7 @@ impl Chronicle {
     fn incomplete_synthesis_response(&self) -> String {
         retrieval_answer::truncate_to_char_limit(
             "Chronicle synthesis could not be completed from the retrieved notes.",
-            self.max_reply_length,
+            self.generation.max_reply_length,
         )
     }
 
@@ -554,18 +516,22 @@ impl Chronicle {
 #[allow(clippy::type_complexity, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::super::retrieval_answer::truncate_to_char_limit;
-    use super::{Chronicle, EffectiveRoute, SynthesisSettings};
+    use super::{
+        Chronicle, ChronicleDependencies, EffectiveRoute, GenerationSettings, RetrievalSettings,
+        StructuredStore, SynthesisSettings,
+    };
     use crate::chronicle::{
         indexer::{
-            db::repository::facade::{IndexerDb, SearchResult},
+            db::repository::facade::{AccessScope, IndexerDb, SearchResult, StructuredResult},
             retriever::{
                 api::{RetrievalOutcome, RetrieverApi},
                 settings::SearchSettings,
             },
         },
         llm::LanguageModel,
-        query::plan::RouteOperation,
+        query::plan::{Plan, RouteOperation},
         runtime::GpuRuntime,
+        transcription::service::TranscriptionService,
     };
     use anyhow::Context;
     use anyhow::{Result, anyhow};
@@ -600,6 +566,42 @@ mod tests {
         accesses: Mutex<Vec<crate::chronicle::indexer::db::repository::facade::AccessScope>>,
         loads: Mutex<usize>,
         unloads: Mutex<usize>,
+    }
+
+    struct FakeStructuredStore {
+        db: Mutex<Option<IndexerDb>>,
+    }
+
+    impl FakeStructuredStore {
+        fn new() -> Self {
+            Self {
+                db: Mutex::new(None),
+            }
+        }
+
+        fn set_db(&self, db: IndexerDb) -> Result<()> {
+            *self.db.lock().map_err(|_| anyhow!("database poisoned"))? = Some(db);
+            Ok(())
+        }
+
+        fn database(&self) -> Result<IndexerDb> {
+            self.db
+                .lock()
+                .map_err(|_| anyhow!("database poisoned"))?
+                .clone()
+                .ok_or_else(|| anyhow!("structured store not configured"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl StructuredStore for FakeStructuredStore {
+        async fn resolve_string_or_wikilinks(&self, plan: &mut Plan) -> Result<()> {
+            self.database()?.resolve_string_or_wikilinks(plan).await
+        }
+
+        async fn execute_plan(&self, plan: &Plan, access: AccessScope) -> Result<StructuredResult> {
+            self.database()?.execute_plan_for(plan, access).await
+        }
     }
 
     impl FakeRetriever {
@@ -888,22 +890,45 @@ mod tests {
         outputs: impl IntoIterator<Item = &'static str>,
         max_reply_length: usize,
     ) -> Result<(Chronicle, Arc<FakeRetriever>, Arc<FakeLlm>)> {
+        let structured_store = Arc::new(FakeStructuredStore::new());
+        service_with_store(outcome, outputs, max_reply_length, structured_store)
+    }
+
+    fn service_with_store(
+        outcome: FakeOutcome,
+        outputs: impl IntoIterator<Item = &'static str>,
+        max_reply_length: usize,
+        structured_store: Arc<FakeStructuredStore>,
+    ) -> Result<(Chronicle, Arc<FakeRetriever>, Arc<FakeLlm>)> {
         let runtime = GpuRuntime::new();
         runtime.begin_llm_load()?.commit_to_loaded()?;
         let retriever = Arc::new(FakeRetriever::new(outcome));
         let llm = Arc::new(FakeLlm::new(runtime.clone(), outputs));
-        let chronicle = Chronicle::with_dependencies(
-            retriever.clone(),
-            llm.clone(),
-            runtime,
-            5,
-            15,
-            0.8,
-            0.85,
-            2,
-            0.15,
+        let chronicle = Chronicle::new(
+            RetrievalSettings {
+                limit: 5,
+                candidate_limit: 15,
+                distance_threshold: 0.8,
+                near_duplicate_threshold: 0.85,
+                max_chunks_per_document: 2,
+                pagerank_weight: 0.15,
+            },
             SYNTHESIS_SETTINGS,
-            max_reply_length,
+            GenerationSettings {
+                max_tokens: 1,
+                context_limit: 2,
+                temperature: 0.0,
+                seed: 0,
+                system_prompt: "test".into(),
+                max_reply_length,
+            },
+            ChronicleDependencies {
+                retriever: retriever.clone(),
+                structured_store,
+                llm: llm.clone(),
+                runtime: runtime.clone(),
+                transcription: TranscriptionService::new(runtime),
+            },
         );
         Ok((chronicle, retriever, llm))
     }
@@ -915,9 +940,45 @@ mod tests {
             .map_err(|_| anyhow!("counter poisoned"))
     }
 
+    fn chronicle_with_dependencies(
+        retriever: Arc<dyn RetrieverApi>,
+        llm: Arc<dyn LanguageModel>,
+        runtime: GpuRuntime,
+        max_reply_length: usize,
+    ) -> Chronicle {
+        Chronicle::new(
+            RetrievalSettings {
+                limit: 5,
+                candidate_limit: 15,
+                distance_threshold: 0.8,
+                near_duplicate_threshold: 0.85,
+                max_chunks_per_document: 2,
+                pagerank_weight: 0.15,
+            },
+            SYNTHESIS_SETTINGS,
+            GenerationSettings {
+                max_tokens: 1,
+                context_limit: 2,
+                temperature: 0.0,
+                seed: 0,
+                system_prompt: "test".into(),
+                max_reply_length,
+            },
+            ChronicleDependencies {
+                retriever,
+                structured_store: Arc::new(FakeStructuredStore::new()),
+                llm,
+                transcription: TranscriptionService::new(runtime.clone()),
+                runtime,
+            },
+        )
+    }
+
     #[tokio::test]
     async fn structured_zero_and_list_bypass_retrieval_and_answer_generation() -> Result<()> {
-        let (mut chronicle, retriever, llm) = service(FakeOutcome::Error, [], 500)?;
+        let structured_store = Arc::new(FakeStructuredStore::new());
+        let (chronicle, retriever, llm) =
+            service_with_store(FakeOutcome::Error, [], 500, structured_store.clone())?;
         let directory = tempfile::tempdir()?;
         let db = IndexerDb::open(&format!(
             "sqlite://{}",
@@ -927,7 +988,7 @@ mod tests {
         let (metadata, _) = crate::chronicle::indexer::frontmatter::parse("---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\nlife_status: alive\n---\n")?.context("note")?;
         db.replace_note("Ada.md", "hash", &[], &[], &metadata)
             .await?;
-        chronicle.db = Some(db);
+        structured_store.set_db(db)?;
         *llm.plan_output.lock().map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"pc"},{"field":"life_status","operator":"equals","value":"dead"}]}}"#.into();
         let answer = chronicle.ask("How many dead PCs?").await?;
         assert!(answer.starts_with("0 canon characters recorded"));
@@ -956,7 +1017,9 @@ mod tests {
     #[tokio::test]
     async fn structured_generic_played_by_list_bypasses_retrieval_and_answer_generation()
     -> Result<()> {
-        let (mut chronicle, retriever, llm) = service(FakeOutcome::Error, [], 500)?;
+        let structured_store = Arc::new(FakeStructuredStore::new());
+        let (chronicle, retriever, llm) =
+            service_with_store(FakeOutcome::Error, [], 500, structured_store.clone())?;
         let directory = tempfile::tempdir()?;
         let db = IndexerDb::open(&format!(
             "sqlite://{}",
@@ -971,7 +1034,7 @@ mod tests {
             db.replace_note(&format!("{title}.md"), "hash", &[], &[], &metadata)
                 .await?;
         }
-        chronicle.db = Some(db);
+        structured_store.set_db(db)?;
         *llm.plan_output
             .lock()
             .map_err(|_| anyhow!("plan poisoned"))? = "This is not a JSON query plan.".into();
@@ -1579,19 +1642,7 @@ mod tests {
         let mut model = FakeLlm::new(runtime.clone(), ["unused"]);
         model.fail_count = true;
         let llm = Arc::new(model);
-        let chronicle = Chronicle::with_dependencies(
-            retriever,
-            llm,
-            runtime,
-            5,
-            15,
-            0.8,
-            0.85,
-            2,
-            0.15,
-            SYNTHESIS_SETTINGS,
-            100,
-        );
+        let chronicle = chronicle_with_dependencies(retriever, llm, runtime, 100);
         assert!(
             chronicle
                 .ask("question")
@@ -1608,19 +1659,7 @@ mod tests {
         let runtime = GpuRuntime::new();
         let retriever = Arc::new(FakeRetriever::new(FakeOutcome::Results));
         let llm = Arc::new(FakeLlm::new(runtime.clone(), []));
-        let chronicle = Chronicle::with_dependencies(
-            retriever.clone(),
-            llm.clone(),
-            runtime,
-            5,
-            15,
-            0.8,
-            0.85,
-            2,
-            0.15,
-            SYNTHESIS_SETTINGS,
-            100,
-        );
+        let chronicle = chronicle_with_dependencies(retriever.clone(), llm.clone(), runtime, 100);
         chronicle.start_llm().await?;
         assert!(chronicle.is_llm_loaded()?);
         chronicle.stop_llm().await?;
@@ -1639,19 +1678,7 @@ mod tests {
         let mut model = FakeLlm::new(runtime.clone(), []);
         model.fail_load = true;
         let llm = Arc::new(model);
-        let chronicle = Chronicle::with_dependencies(
-            retriever.clone(),
-            llm,
-            runtime.clone(),
-            5,
-            15,
-            0.8,
-            0.85,
-            2,
-            0.15,
-            SYNTHESIS_SETTINGS,
-            100,
-        );
+        let chronicle = chronicle_with_dependencies(retriever.clone(), llm, runtime.clone(), 100);
         assert!(chronicle.start_llm().await.is_err());
         assert_eq!(mutex_value(&retriever.loads)?, 1);
         assert_eq!(mutex_value(&retriever.unloads)?, 1);

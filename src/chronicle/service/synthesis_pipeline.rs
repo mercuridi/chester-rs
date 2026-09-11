@@ -1,15 +1,10 @@
 use std::collections::BTreeMap;
 
 use super::super::{
-    config::chronicle::SynthesisSettings,
+    config::chronicle::{RetrievalSettings, SynthesisSettings},
     indexer::{
         db::repository::facade::{AccessScope, SearchResult},
-        retriever::{
-            api::{RetrievalOutcome, RetrieverApi},
-            settings::{
-                CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
-            },
-        },
+        retriever::api::{RetrievalOutcome, RetrieverApi},
     },
 };
 
@@ -74,30 +69,12 @@ pub(in crate::chronicle::service) enum EvidenceRetrieval {
 
 pub(in crate::chronicle::service) async fn retrieve_evidence(
     retriever: &dyn RetrieverApi,
+    retrieval: &RetrievalSettings,
     synthesis: &SynthesisSettings,
-    distance_threshold: f32,
-    near_duplicate_threshold: f32,
-    pagerank_weight: f64,
     question: &str,
     access: AccessScope,
 ) -> EvidenceRetrieval {
-    let settings = SearchSettings {
-        limits: RetrievalLimits {
-            limit: synthesis.retrieval_limit,
-            candidate_limit: synthesis.candidate_limit,
-        },
-        candidate_pool: CandidatePoolPolicy { distance_threshold },
-        fusion: FusionPolicy {
-            vector_rrf_weight: 1.0,
-            lexical_rrf_weight: 1.0,
-            pagerank_weight,
-            rrf_rank_constant: 60.0,
-        },
-        selection: SelectionPolicy {
-            near_duplicate_threshold,
-            max_chunks_per_document: synthesis.max_chunks_per_document,
-        },
-    };
+    let settings = synthesis.search_settings(retrieval);
     match retriever.search(question, settings, access).await {
         Ok(RetrievalOutcome::Results(results)) => EvidenceRetrieval::Evidence(results),
         Ok(RetrievalOutcome::BadQuestion) => {
