@@ -244,11 +244,29 @@ impl PlayerService {
         call: Arc<Mutex<Call>>,
         transition: QueueTransition,
     ) -> Result<()> {
-        if let Some(item) = transition.current {
-            self.start_item(guild_id, call, item).await?;
-            info!(?guild_id, "Started playback");
+        let mut next = transition.current;
+        let mut first_error = None;
+
+        while let Some(item) = next {
+            match self.start_item(guild_id, call.clone(), item).await {
+                Ok(()) => {
+                    info!(?guild_id, "Started playback");
+                    return first_error.map_or(Ok(()), Err);
+                }
+                Err(error) => {
+                    error!(?guild_id, %error, "Failed to start playback item");
+                    first_error.get_or_insert(error);
+                    next = self
+                        .queues
+                        .lock()
+                        .await
+                        .get_mut(&guild_id)
+                        .and_then(|queue| queue.fail_current().current);
+                }
+            }
         }
-        Ok(())
+
+        first_error.map_or(Ok(()), Err)
     }
 
     async fn start_item(
@@ -265,14 +283,19 @@ impl PlayerService {
         let _ = source.raw.spawn_loader();
         let playback_id = self.next_playback_id.fetch_add(1, Ordering::Relaxed);
         let handle = call.lock().await.play_only_input(source.into());
-        handle.add_event(
+        if let Err(error) = handle.add_event(
             Event::Track(TrackEvent::End),
             TrackEndHandler {
                 player: Arc::downgrade(self),
                 guild_id,
                 playback_id,
             },
-        )?;
+        ) {
+            if let Err(stop_error) = handle.stop() {
+                debug!(?guild_id, %stop_error, "Failed to clean up a track whose event registration failed");
+            }
+            return Err(error.into());
+        }
         self.handles.lock().await.insert(
             guild_id,
             ActivePlayback {
@@ -330,5 +353,70 @@ impl EventHandler for TrackEndHandler {
             error!(?self.guild_id, %error, "Failed to advance playback queue");
         }
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlayerService;
+    use crate::jester::track::types::{TrackInfo, VideoId};
+    use poise::serenity_prelude::{GuildId, UserId};
+    use songbird::Call;
+    use std::{path::PathBuf, sync::Arc};
+
+    fn track(id: &str) -> TrackInfo {
+        TrackInfo {
+            id: VideoId::from(id),
+            title: id.into(),
+            artist: None,
+            origin: None,
+        }
+    }
+
+    fn call(guild_id: GuildId) -> Arc<tokio::sync::Mutex<Call>> {
+        Arc::new(tokio::sync::Mutex::new(Call::standalone(
+            guild_id,
+            UserId::new(1),
+        )))
+    }
+
+    #[tokio::test]
+    async fn play_now_does_not_leave_a_missing_file_selected() {
+        let player = Arc::new(PlayerService::new(PathBuf::from("/does/not/exist")));
+        let guild_id = GuildId::new(1);
+
+        assert!(
+            player
+                .play_now(guild_id, call(guild_id), track("missing"))
+                .await
+                .is_err()
+        );
+
+        let snapshot = player.queue_snapshot(guild_id).await;
+        assert!(snapshot.current.is_none());
+        assert!(player.history(guild_id).await.iter().any(|entry| {
+            entry.outcome == crate::jester::player::queue::HistoryOutcome::Failed
+        }));
+    }
+
+    #[tokio::test]
+    async fn enqueue_does_not_leave_a_missing_first_item_selected() {
+        let player = Arc::new(PlayerService::new(PathBuf::from("/does/not/exist")));
+        let guild_id = GuildId::new(2);
+
+        assert!(
+            player
+                .enqueue(
+                    guild_id,
+                    call(guild_id),
+                    track("missing"),
+                    UserId::new(1),
+                    false
+                )
+                .await
+                .is_err()
+        );
+
+        assert!(player.queue_snapshot(guild_id).await.current.is_none());
     }
 }

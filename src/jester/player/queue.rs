@@ -59,6 +59,7 @@ pub enum HistoryOutcome {
     Completed,
     Skipped,
     Replaced,
+    Failed,
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +99,7 @@ impl std::error::Error for QueueError {}
 /// The playback adapter owns audio handles. It must use the returned transition
 /// to stop the old input and start `current`, then report natural completion
 /// through [`GuildQueue::complete_current`].
+#[derive(Clone)]
 pub struct GuildQueue {
     current: Option<PlaybackItem>,
     upcoming: VecDeque<QueueEntry>,
@@ -215,6 +217,20 @@ impl GuildQueue {
             previous,
             current: self.current.clone(),
         })
+    }
+
+    /// Removes a current item that could not be started and advances to the
+    /// next queued item, if one exists.
+    pub fn fail_current(&mut self) -> QueueTransition {
+        let previous = self.current.take();
+        if let Some(item) = previous.as_ref() {
+            self.record(item.clone(), HistoryOutcome::Failed);
+        }
+        self.start_next();
+        QueueTransition {
+            previous,
+            current: self.current.clone(),
+        }
     }
 
     /// Removes a one-based position from upcoming tracks only.
@@ -457,6 +473,20 @@ mod tests {
         assert_eq!(transition.current.unwrap().track.title, "second");
         assert_eq!(current_title(&queue), Some("second"));
         assert_eq!(queue.history()[0].outcome, HistoryOutcome::Skipped);
+    }
+
+    #[test]
+    fn failed_current_is_recorded_and_advances_to_the_next_item() {
+        let mut queue = GuildQueue::default();
+        queue.enqueue(track("failed"), None);
+        queue.enqueue(track("next"), None);
+
+        let transition = queue.fail_current();
+
+        assert_eq!(transition.previous.unwrap().track.title, "failed");
+        assert_eq!(transition.current.unwrap().track.title, "next");
+        assert_eq!(current_title(&queue), Some("next"));
+        assert_eq!(queue.history()[0].outcome, HistoryOutcome::Failed);
     }
 
     #[test]

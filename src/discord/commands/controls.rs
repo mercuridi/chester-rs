@@ -297,6 +297,7 @@ pub async fn history(ctx: PoiseContext<'_>, #[min = 1] page: Option<usize>) -> R
             HistoryOutcome::Completed => "completed",
             HistoryOutcome::Skipped => "skipped",
             HistoryOutcome::Replaced => "replaced",
+            HistoryOutcome::Failed => "failed",
         };
         write!(
             message,
