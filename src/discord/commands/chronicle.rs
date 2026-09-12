@@ -12,8 +12,8 @@ use crate::{
     chronicle::{
         config::{app::Config, discord::AliasGroup},
         recording::recorder::{
-            RecordingManifest, SessionId, notify_recording_user, recover_recording_manifest,
-            resolve_finalized_recordings, resolve_session_directory,
+            RecordingManifest, SessionId, notify_recording_user, resolve_finalized_recordings,
+            resolve_session_directory,
         },
         transcription::{
             service::{TranscribedSegment, TranscriptionService},
@@ -447,7 +447,12 @@ pub async fn recover(
         }
     };
     let manifest_path = recording_dir.join("manifest.toml");
-    match recover_recording_manifest(&manifest_path, &recording_dir, guild_id) {
+    match ctx
+        .data()
+        .recorder
+        .recover_recording_manifest(&manifest_path, &recording_dir, guild_id)
+        .await
+    {
         Ok(manifest) => {
             ctx.say(format!(
                 "Recovered `{session}` with {} recording(s).",

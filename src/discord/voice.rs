@@ -65,13 +65,15 @@ pub async fn join_vc(
 
 pub async fn leave_vc(ctx: PoiseContext<'_>, guild_id: GuildId) -> Result<(), Error> {
     tracing::info!(?guild_id, "Leaving voice channel");
-    let recorder = ctx.data().recorder.remove(guild_id).await;
+    let recorder = ctx.data().recorder.get(guild_id).await;
 
     let recording_error = if let Some(recorder) = recorder {
         recorder.stop_recording().await.err()
     } else {
         None
     };
+
+    ctx.data().recorder.remove(guild_id).await;
 
     let manager = songbird::get(ctx.serenity_context())
         .await

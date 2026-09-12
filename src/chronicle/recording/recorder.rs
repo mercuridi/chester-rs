@@ -331,9 +331,6 @@ pub fn recover_recording_manifest(
     if manifest.guild_id != guild_id {
         anyhow::bail!("Recording manifest belongs to a different guild.");
     }
-    if manifest.status == ManifestStatus::Recording {
-        anyhow::bail!("The recording is still active and cannot be recovered yet.");
-    }
 
     let mut artifacts = Vec::new();
     for entry in std::fs::read_dir(recording_dir)? {
@@ -406,6 +403,7 @@ pub struct RecordingSession {
 #[derive(Clone)]
 pub struct RecorderManager {
     recorders: Arc<Mutex<HashMap<GuildId, Recorder>>>,
+    operation_locks: Arc<Mutex<HashMap<GuildId, Arc<Mutex<()>>>>>,
     recordings_dir: PathBuf,
     clock: Arc<dyn Clock>,
 }
@@ -418,6 +416,7 @@ impl RecorderManager {
     pub fn with_clock(recordings_dir: PathBuf, clock: Arc<dyn Clock>) -> Self {
         Self {
             recorders: Arc::new(Mutex::new(HashMap::new())),
+            operation_locks: Arc::new(Mutex::new(HashMap::new())),
             recordings_dir,
             clock,
         }
@@ -433,12 +432,42 @@ impl RecorderManager {
         match recorders.entry(guild_id) {
             Entry::Occupied(entry) => (entry.get().clone(), false),
             Entry::Vacant(entry) => {
-                let recorder =
-                    Recorder::with_clock(self.recordings_dir.clone(), Arc::clone(&self.clock));
+                let operation_lock = self.operation_lock(guild_id).await;
+                let recorder = Recorder::with_clock_and_lock(
+                    self.recordings_dir.clone(),
+                    Arc::clone(&self.clock),
+                    operation_lock,
+                );
                 entry.insert(recorder.clone());
                 (recorder, true)
             }
         }
+    }
+
+    async fn operation_lock(&self, guild_id: GuildId) -> Arc<Mutex<()>> {
+        let mut locks = self.operation_locks.lock().await;
+        locks
+            .entry(guild_id)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    pub async fn recover_recording_manifest(
+        &self,
+        manifest_path: &Path,
+        recording_dir: &Path,
+        guild_id: GuildId,
+    ) -> anyhow::Result<RecordingManifest> {
+        let operation_lock = self.operation_lock(guild_id).await;
+        let _operation = operation_lock.lock().await;
+
+        if let Some(recorder) = self.get(guild_id).await
+            && recorder.is_recording().await
+        {
+            anyhow::bail!("The recording is still active and cannot be recovered yet.");
+        }
+
+        recover_recording_manifest(manifest_path, recording_dir, guild_id)
     }
 
     pub async fn remove(&self, guild_id: GuildId) -> Option<Recorder> {
@@ -481,6 +510,7 @@ pub struct Recorder {
     recordings_dir: PathBuf,
     clock: Arc<dyn Clock>,
     manifest_persistence: ManifestPersistence,
+    operation_lock: Arc<Mutex<()>>,
 }
 
 impl Recorder {
@@ -496,6 +526,7 @@ impl Recorder {
             recordings_dir,
             clock: Arc::new(SystemClock),
             manifest_persistence: ManifestPersistence::new(),
+            operation_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -507,6 +538,23 @@ impl Recorder {
             recordings_dir,
             clock,
             manifest_persistence: ManifestPersistence::new(),
+            operation_lock: Arc::new(Mutex::new(())),
+        }
+    }
+
+    fn with_clock_and_lock(
+        recordings_dir: PathBuf,
+        clock: Arc<dyn Clock>,
+        operation_lock: Arc<Mutex<()>>,
+    ) -> Self {
+        Self {
+            id: rand::random(),
+            ssrc_to_user: Arc::new(Mutex::new(HashMap::new())),
+            recording_session: Arc::new(Mutex::new(None)),
+            recordings_dir,
+            clock,
+            manifest_persistence: ManifestPersistence::new(),
+            operation_lock,
         }
     }
 
@@ -522,6 +570,7 @@ impl Recorder {
         session_slug: String,
         initial_scene: Option<String>,
     ) -> Result<bool, Error> {
+        let _operation = self.operation_lock.lock().await;
         let started_at = self.clock.now();
         let started_instant = Instant::now();
 
@@ -625,6 +674,7 @@ impl Recorder {
     }
 
     pub async fn stop_recording(&self) -> Result<bool, Error> {
+        let _operation = self.operation_lock.lock().await;
         let Some(session) = self.take_recording_session().await else {
             return Ok(false);
         };
@@ -1243,13 +1293,67 @@ mod tests {
     }
 
     #[test]
-    fn recovery_rejects_active_manifest() -> anyhow::Result<()> {
+    fn recovery_accepts_recording_manifest_without_live_owner() -> anyhow::Result<()> {
         let directory = tempdir()?;
         let manifest_path = directory.path().join("manifest.toml");
+        fs::write(directory.path().join("recording-20.opus"), [1, 2, 3])?;
         manifest()?.save_atomically(&manifest_path)?;
-        assert!(
-            recover_recording_manifest(&manifest_path, directory.path(), GuildId::new(10)).is_err()
+        let recovered =
+            recover_recording_manifest(&manifest_path, directory.path(), GuildId::new(10))?;
+        assert_eq!(recovered.status, ManifestStatus::Complete);
+        assert_eq!(recovered.finalized_recordings.unwrap().len(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn manager_recovery_rejects_live_recording() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let manager = RecorderManager::with_clock(
+            directory.path().into(),
+            Arc::new(FixedClock(fixed_time()?)),
         );
+        let (recorder, created) = manager.get_or_create(GuildId::new(10)).await;
+        assert!(created);
+        recorder
+            .start_recording(
+                GuildId::new(10),
+                ChannelId::new(2),
+                ChannelId::new(3),
+                UserId::new(4),
+                "Session".into(),
+                "session".into(),
+                None,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+        let recording_dir =
+            recording_directory(directory.path(), GuildId::new(10), "session", fixed_time()?);
+        let error = manager
+            .recover_recording_manifest(
+                &recording_dir.join("manifest.toml"),
+                &recording_dir,
+                GuildId::new(10),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("still active"));
+        manager.drain().await?;
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_accepts_stale_finalizing_manifest() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let manifest_path = directory.path().join("manifest.toml");
+        let mut manifest = manifest()?;
+        manifest.status = ManifestStatus::Finalizing;
+        fs::write(directory.path().join("recording-20.opus"), [1, 2, 3])?;
+        manifest.save_atomically(&manifest_path)?;
+
+        let recovered =
+            recover_recording_manifest(&manifest_path, directory.path(), GuildId::new(10))?;
+        assert_eq!(recovered.status, ManifestStatus::Complete);
         Ok(())
     }
 
