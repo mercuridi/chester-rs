@@ -525,18 +525,6 @@ impl Recorder {
         }
     }
 
-    pub fn with_clock(recordings_dir: PathBuf, clock: Arc<dyn Clock>) -> Self {
-        Self {
-            id: rand::random(),
-            ssrc_to_user: Arc::new(Mutex::new(HashMap::new())),
-            recording_session: Arc::new(Mutex::new(None)),
-            recordings_dir,
-            clock,
-            manifest_persistence: ManifestPersistence::new(),
-            operation_lock: Arc::new(Mutex::new(())),
-        }
-    }
-
     fn with_clock_and_lock(
         recordings_dir: PathBuf,
         clock: Arc<dyn Clock>,
@@ -1226,6 +1214,7 @@ mod tests {
     use serenity::model::id::{ChannelId, GuildId, UserId};
     use std::{fs, sync::Arc};
     use tempfile::tempdir;
+    use tokio::sync::Mutex;
 
     struct FixedClock(DateTime<Local>);
 
@@ -1521,8 +1510,11 @@ mod tests {
     #[tokio::test]
     async fn recorder_lifecycle_persists_manifest_and_scene() -> anyhow::Result<()> {
         let directory = tempdir()?;
-        let recorder =
-            Recorder::with_clock(directory.path().into(), Arc::new(FixedClock(fixed_time()?)));
+        let recorder = Recorder::with_clock_and_lock(
+            directory.path().into(),
+            Arc::new(FixedClock(fixed_time()?)),
+            Arc::new(Mutex::new(())),
+        );
         let started = recorder
             .start_recording(
                 GuildId::new(1),
