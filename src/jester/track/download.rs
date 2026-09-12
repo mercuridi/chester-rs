@@ -138,6 +138,15 @@ impl Downloader {
     ) -> Result<DownloadedArtifact> {
         let lock = self.id_lock(&id).await;
         let _id_guard = lock.lock().await;
+        self.download_unlocked(id, source, include_metadata).await
+    }
+
+    async fn download_unlocked(
+        &self,
+        id: VideoId,
+        source: String,
+        include_metadata: bool,
+    ) -> Result<DownloadedArtifact> {
         let final_path = self.config.audio_dir.join(format!("{}.mp3", id.as_str()));
         if tokio::fs::try_exists(&final_path).await.unwrap_or(false) {
             let metadata = self
@@ -281,10 +290,16 @@ pub async fn download_track(
 ) -> Result<TrackInfo> {
     let video_id =
         VideoId::from(get_youtube_id(&yt_link).ok_or_else(|| anyhow!("Invalid YouTube link"))?);
+
+    let lock = downloader.id_lock(&video_id).await;
+    let _id_guard = lock.lock().await;
+
     if let Some(track) = lookup_track(db_pool, &video_id).await? {
         return Ok(track);
     }
-    let artifact = downloader.download(video_id.clone(), yt_link, true).await?;
+    let artifact = downloader
+        .download_unlocked(video_id.clone(), yt_link, true)
+        .await?;
     let metadata = artifact
         .metadata
         .as_ref()
@@ -306,6 +321,13 @@ pub async fn download_track(
     )
     .await
     {
+        // A database-level race may still occur across Downloader instances or
+        // processes. If another caller completed registration, this operation
+        // is successful from the caller's perspective and the finalized audio
+        // belongs to the registered track, so it must not be removed.
+        if let Some(track) = lookup_track(db_pool, &video_id).await? {
+            return Ok(track);
+        }
         let _ = tokio::fs::remove_file(&artifact.audio_path).await;
         return Err(error);
     }
@@ -340,6 +362,17 @@ mod tests {
                 .ok_or_else(|| anyhow!("download output path argument missing"))?
                 .replace("%(ext)s", "mp3");
             std::fs::write(path, b"audio")?;
+            if args.iter().any(|arg| arg == "--write-info-json") {
+                let base = args
+                    .iter()
+                    .find(|arg| arg.contains("%(ext)s"))
+                    .expect("output path was found above")
+                    .replace(".%(ext)s", "");
+                std::fs::write(
+                    format!("{base}.info.json"),
+                    r#"{"id":"abc","upload_date":"20260101","title":"Downloaded","channel":"Test Artist"}"#,
+                )?;
+            }
             Ok(Output {
                 status: std::process::ExitStatus::from_raw(0),
                 stdout: vec![],
@@ -388,6 +421,55 @@ mod tests {
             1
         );
         assert!(dir.path().join("abc.mp3").exists());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_track_registration_is_idempotent_and_preserves_audio() -> Result<()> {
+        let dir = tempdir()?;
+        let database_url = format!("sqlite://{}", dir.path().join("jester.db").display());
+        let pool = crate::database::pool::open_sqlite_pool(&database_url, "test").await?;
+        crate::jester::db::schema::initialise(&pool).await?;
+
+        let executor = Arc::new(FakeExecutor {
+            calls: Mutex::new(0),
+        });
+        let downloader = Downloader::with_executor(config(dir.path()), executor.clone());
+        let (first, second) = tokio::join!(
+            download_track(
+                &pool,
+                "https://www.youtube.com/watch?v=abc".into(),
+                None,
+                None,
+                None,
+                downloader.clone(),
+            ),
+            download_track(
+                &pool,
+                "https://www.youtube.com/watch?v=abc".into(),
+                None,
+                None,
+                None,
+                downloader,
+            ),
+        );
+
+        assert_eq!(first?.id, VideoId::from("abc"));
+        assert_eq!(second?.id, VideoId::from("abc"));
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tracks WHERE id = 'abc'")
+                .fetch_one(&pool)
+                .await?,
+            1
+        );
+        assert!(dir.path().join("abc.mp3").exists());
+        assert_eq!(
+            *executor
+                .calls
+                .lock()
+                .map_err(|_| anyhow!("fake executor call counter poisoned"))?,
+            1
+        );
         Ok(())
     }
 }
