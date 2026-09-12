@@ -1,8 +1,9 @@
 use anyhow::Result;
 use tracing::debug;
 
-use super::super::{
-    config::chronicle::{GenerationSettings, RetrievalSettings},
+use super::answer_routing::RetrievalMode;
+use crate::chronicle::{
+    config::{GenerationSettings, RetrievalSettings},
     indexer::{
         db::repository::facade::AccessScope,
         prompt,
@@ -10,7 +11,6 @@ use super::super::{
     },
     llm::LanguageModel,
 };
-use super::answer_routing::RetrievalMode;
 
 pub(in crate::chronicle::service) async fn answer_from_retrieval(
     retriever: &dyn RetrieverApi,

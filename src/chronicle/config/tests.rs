@@ -5,7 +5,7 @@ use serenity::all::{GuildId, UserId};
 use tempfile::tempdir;
 
 use super::{
-    app::Config,
+    Config,
     paths::{AppPaths, resolve_path, resolve_sqlite_url},
 };
 

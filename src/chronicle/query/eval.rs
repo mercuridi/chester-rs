@@ -5,7 +5,7 @@ use super::{
     planner,
 };
 use crate::chronicle::{
-    config::app::Config,
+    config::Config,
     indexer::{
         db::repository::facade::{AccessScope, IndexerDb, StructuredResult},
         scanner,
@@ -98,7 +98,7 @@ struct PlannerRuntimeSettings {
 }
 
 impl PlannerRuntimeSettings {
-    fn from_llm_settings(settings: &crate::chronicle::config::chronicle::LlmSettings) -> Self {
+    fn from_llm_settings(settings: &crate::chronicle::config::LlmSettings) -> Self {
         Self {
             model_repo: settings.model.repo.clone(),
             model_revision: settings.model.revision.clone(),
@@ -410,7 +410,7 @@ fn create_report_file(requested_path: Option<&Path>, log_dir: &Path) -> Result<(
 pub async fn run(
     suite_path: &Path,
     requested_report_path: Option<&Path>,
-    paths: &crate::chronicle::config::paths::AppPaths,
+    paths: &crate::chronicle::config::AppPaths,
 ) -> Result<()> {
     run_internal(
         suite_path,
@@ -424,7 +424,7 @@ pub async fn run(
 pub async fn run_planner(
     suite_path: &Path,
     requested_report_path: Option<&Path>,
-    paths: &crate::chronicle::config::paths::AppPaths,
+    paths: &crate::chronicle::config::AppPaths,
 ) -> Result<()> {
     run_internal(
         suite_path,
@@ -439,7 +439,7 @@ async fn run_internal(
     suite_path: &Path,
     requested_report_path: Option<&Path>,
     mode: EvaluationMode,
-    paths: &crate::chronicle::config::paths::AppPaths,
+    paths: &crate::chronicle::config::AppPaths,
 ) -> Result<()> {
     if let Some(path) = requested_report_path {
         ensure!(!path.exists(), "Report path must be a new file");

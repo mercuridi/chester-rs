@@ -8,8 +8,8 @@ use serde::Serialize;
 use std::sync::Arc;
 use tracing::{debug, info, instrument};
 
-use super::super::{
-    config::chronicle::{GenerationSettings, RetrievalSettings, SynthesisSettings},
+use crate::chronicle::{
+    config::{GenerationSettings, RetrievalSettings, SynthesisSettings},
     indexer::{
         db::repository::facade::{AccessScope, IndexerDb, SearchResult, StructuredResult},
         retriever::api::RetrieverApi,

@@ -20,7 +20,7 @@ use tracing::info;
 
 use crate::{
     chronicle::{
-        config::{app::Config, paths::AppPaths},
+        config::{AppPaths, Config},
         indexer::retriever::runtime::Retriever,
         indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,

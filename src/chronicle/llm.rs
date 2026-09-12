@@ -11,7 +11,7 @@ use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::Tokenizer;
 
 use super::{
-    config::chronicle::LlmSettings,
+    config::LlmSettings,
     query::plan::StructuredOperation,
     runtime::{GpuRuntime, report_cuda_oom},
 };
@@ -512,7 +512,7 @@ fn plan_repair_guidance(rejection_error: &str) -> &'static str {
 mod tests {
     use super::Llm;
     use crate::chronicle::{
-        config::chronicle::{GenerationSettings, LlmSettings, ModelSource, TokenizerSource},
+        config::{GenerationSettings, LlmSettings, ModelSource, TokenizerSource},
         runtime::GpuRuntime,
     };
 

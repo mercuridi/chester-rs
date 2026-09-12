@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use super::super::{
-    config::chronicle::{RetrievalSettings, SynthesisSettings},
+use crate::chronicle::{
+    config::{RetrievalSettings, SynthesisSettings},
     indexer::{
         db::repository::facade::{AccessScope, SearchResult},
         retriever::api::{RetrievalOutcome, RetrieverApi},

@@ -1,6 +1,6 @@
 //! Model-backed bounded-synthesis evaluation with deterministic rubric scoring.
-use super::super::{
-    config::app::Config,
+use crate::chronicle::{
+    config::Config,
     indexer::{
         db::repository::facade::IndexerDb, embedder::Embedder, retriever::runtime::Retriever,
         service::Indexer,
@@ -1208,7 +1208,7 @@ async fn evaluate_case(
 pub async fn run(
     suite_path: &Path,
     requested_report: Option<&Path>,
-    paths: &crate::chronicle::config::paths::AppPaths,
+    paths: &crate::chronicle::config::AppPaths,
 ) -> Result<()> {
     let suite: Suite = toml::from_str(&std::fs::read_to_string(suite_path)?)?;
     validate(&suite)?;
