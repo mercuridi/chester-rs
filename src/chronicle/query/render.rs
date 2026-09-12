@@ -56,7 +56,7 @@ fn list_text(header: &str, names: &[String], total: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chronicle::{indexer::db::StructuredNote, query::plan::Filters};
+    use crate::chronicle::{indexer::db::StructuredNote, query::Filters};
     #[test]
     fn lists_report_total_and_do_not_silently_truncate_names() -> anyhow::Result<()> {
         let plan = StructuredPlan::try_from(Plan::List {

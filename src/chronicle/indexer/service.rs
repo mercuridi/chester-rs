@@ -689,8 +689,8 @@ mod tests {
         assert_eq!(second.unchanged, 1);
         assert!(!second.graph_rebuilt);
         assert!(!second.pagerank_rebuilt);
-        let plan = crate::chronicle::query::plan::StructuredPlan::try_from(
-            crate::chronicle::query::planner::parse(
+        let plan = crate::chronicle::query::StructuredPlan::try_from(
+            crate::chronicle::query::parse_plan(
                 r#"{"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"}]}}"#,
             )?,
         )?;

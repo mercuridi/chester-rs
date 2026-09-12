@@ -15,10 +15,7 @@ use crate::chronicle::{
         retriever::RetrieverApi,
     },
     llm::LanguageModel,
-    query::{
-        plan::{RouteOperation, StructuredPlan},
-        render,
-    },
+    query::{RouteOperation, StructuredPlan, render_query},
     runtime::GpuRuntime,
     synthesis::{self, EvidenceNote},
     transcription::service::TranscriptionService,
@@ -249,7 +246,7 @@ impl Chronicle {
         access: AccessScope,
     ) -> Result<AnswerOutcome> {
         let result = self.structured_store.execute_plan(plan, access).await?;
-        Ok(AnswerOutcome::new(render::render(
+        Ok(AnswerOutcome::new(render_query(
             plan,
             &result,
             self.generation.max_reply_length,
@@ -545,7 +542,7 @@ mod tests {
             retriever::{RetrievalOutcome, RetrieverApi, SearchSettings},
         },
         llm::LanguageModel,
-        query::plan::{RouteOperation, StructuredOperation, StructuredPlan},
+        query::{RouteOperation, StructuredOperation, StructuredPlan},
         runtime::GpuRuntime,
         transcription::service::TranscriptionService,
     };

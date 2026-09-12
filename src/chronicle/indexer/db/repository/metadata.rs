@@ -7,10 +7,10 @@ use super::{AccessScope, IndexerDb, StructuredNote, StructuredResult};
 impl IndexerDb {
     pub async fn execute_plan_for(
         &self,
-        plan: &crate::chronicle::query::plan::StructuredPlan,
+        plan: &crate::chronicle::query::StructuredPlan,
         access: AccessScope,
     ) -> Result<StructuredResult> {
-        use crate::chronicle::query::{plan::Plan, render::LIST_LIMIT};
+        use crate::chronicle::query::{LIST_LIMIT, Plan};
         let plan = plan.as_plan();
         if let Plan::CountMembers {
             note_type,
@@ -104,12 +104,12 @@ impl IndexerDb {
     /// cannot turn arbitrary prose into a link query.
     pub async fn resolve_string_or_wikilinks(
         &self,
-        plan: &mut crate::chronicle::query::plan::StructuredPlan,
+        plan: &mut crate::chronicle::query::StructuredPlan,
         access: AccessScope,
     ) -> Result<()> {
         let (note_type, filters) = match plan.as_plan_mut() {
-            crate::chronicle::query::plan::Plan::Count { note_type, filters }
-            | crate::chronicle::query::plan::Plan::List { note_type, filters } => {
+            crate::chronicle::query::Plan::Count { note_type, filters }
+            | crate::chronicle::query::Plan::List { note_type, filters } => {
                 (note_type.as_str(), filters)
             }
             _ => return Ok(()),
@@ -164,10 +164,10 @@ impl IndexerDb {
 fn structured_query<'a>(
     select: &str,
     note_type: &'a str,
-    filters: &'a crate::chronicle::query::plan::Filters,
+    filters: &'a crate::chronicle::query::Filters,
     access: AccessScope,
 ) -> Result<QueryBuilder<'a, Sqlite>> {
-    use crate::chronicle::query::plan::ConditionOperator;
+    use crate::chronicle::query::ConditionOperator;
 
     let mut query = QueryBuilder::new(select);
     query

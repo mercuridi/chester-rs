@@ -1,9 +1,13 @@
 //! Separate structured-query evaluation; leaves the retrieval baseline unchanged.
-use super::{
-    classifier,
-    plan::{Plan, RouteOperation, StructuredOperation, StructuredPlan},
-    planner,
+use anyhow::{Context, Result, ensure};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    fs::{File, OpenOptions, create_dir_all},
+    path::{Path, PathBuf},
 };
+
 use crate::chronicle::{
     config::Config,
     indexer::{
@@ -13,13 +17,11 @@ use crate::chronicle::{
     llm::{Llm, ROUTE_CLASSIFIER_OUTPUT_TOKENS, STRUCTURED_PLAN_OUTPUT_TOKENS},
     runtime::GpuRuntime,
 };
-use anyhow::{Context, Result, ensure};
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::BTreeMap,
-    fs::{File, OpenOptions, create_dir_all},
-    path::{Path, PathBuf},
+
+use super::{
+    parse_route,
+    plan::{Plan, RouteOperation, StructuredOperation, StructuredPlan},
+    planner::{self, PredeterminedRoute},
 };
 
 #[derive(Deserialize)]
@@ -271,7 +273,7 @@ async fn evaluate(case: Case, db: &IndexerDb, llm: Option<&Llm>) -> Result<CaseR
         match llm.classify_route(&report.case.question).await {
             Ok(response) => {
                 report.classifier_response = Some(response.clone());
-                match classifier::parse(&response) {
+                match parse_route(&response) {
                     Ok(operation) => {
                         report.classified_operation = Some(operation);
                         report.route_correct = Some(operation == report.expected_operation);
@@ -299,7 +301,7 @@ async fn evaluate(case: Case, db: &IndexerDb, llm: Option<&Llm>) -> Result<CaseR
     Ok(report)
 }
 
-fn accept_predetermined_route(report: &mut CaseReport, route: planner::PredeterminedRoute) {
+fn accept_predetermined_route(report: &mut CaseReport, route: PredeterminedRoute) {
     let operation = route.operation();
     let plan = plan_for_operation(operation)
         .expect("predetermined routes must map to a non-structured plan");

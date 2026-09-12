@@ -12,7 +12,7 @@ use tokenizers::Tokenizer;
 
 use super::{
     config::LlmSettings,
-    query::plan::StructuredOperation,
+    query::{StructuredOperation, route_system_prompt, structured_system_prompt_with_taxonomy},
     runtime::{GpuRuntime, report_cuda_oom},
 };
 use tracing::{info, instrument};
@@ -201,7 +201,7 @@ impl Llm {
 
     pub async fn classify_route(&self, question: &str) -> Result<String> {
         self.generate_with_system(
-            crate::chronicle::query::classifier::system_prompt(),
+            route_system_prompt(),
             question,
             ROUTE_CLASSIFIER_OUTPUT_TOKENS,
             0.0,
@@ -217,10 +217,8 @@ impl Llm {
         operation: StructuredOperation,
     ) -> Result<String> {
         let taxonomy_mode = self.taxonomy_mode();
-        let system = crate::chronicle::query::planner::structured_system_prompt_with_taxonomy(
-            operation,
-            self.config_inject_full_taxonomy(),
-        );
+        let system =
+            structured_system_prompt_with_taxonomy(operation, self.config_inject_full_taxonomy());
         self.generate_with_system(
             &system,
             question,
@@ -240,10 +238,8 @@ impl Llm {
         rejection_error: &str,
     ) -> Result<String> {
         let taxonomy_mode = self.taxonomy_mode();
-        let system = crate::chronicle::query::planner::structured_system_prompt_with_taxonomy(
-            operation,
-            self.config_inject_full_taxonomy(),
-        );
+        let system =
+            structured_system_prompt_with_taxonomy(operation, self.config_inject_full_taxonomy());
         let prompt = build_repair_prompt(question, operation, rejected_response, rejection_error);
         self.generate_with_system(
             &system,
@@ -576,7 +572,7 @@ mod tests {
     fn repair_prompt_requires_full_reconstruction_and_constraint_preservation() {
         let prompt = super::build_repair_prompt(
             "Q",
-            crate::chronicle::query::plan::StructuredOperation::List,
+            crate::chronicle::query::StructuredOperation::List,
             "P",
             "E",
         );

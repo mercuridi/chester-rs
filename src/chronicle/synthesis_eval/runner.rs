@@ -3,7 +3,7 @@ use crate::chronicle::{
     config::Config,
     indexer::{db::IndexerDb, embedder::Embedder, retriever::Retriever, service::Indexer},
     llm::{LanguageModel, Llm},
-    query::plan::RouteOperation,
+    query::RouteOperation,
     runtime::GpuRuntime,
     service::{Chronicle, ChronicleDependencies, EffectiveRoute},
     transcription::service::TranscriptionService,

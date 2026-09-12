@@ -6,9 +6,9 @@ use super::super::{
     indexer::db::AccessScope,
     llm::LanguageModel,
     query::{
-        classifier,
-        plan::{RouteOperation, StructuredOperation},
-        planner,
+        PredeterminedRoute, RouteOperation, StructuredOperation, StructuredPlan,
+        StructuredPlanningResult, generate_or_repair_structured_plan, parse_route,
+        predetermined_route as query_predetermined_route,
     },
 };
 use super::chronicle::StructuredStore;
@@ -24,7 +24,7 @@ pub(in crate::chronicle::service) enum RetrievalMode {
 /// A validated answer path. Route selection is complete before route execution begins, keeping
 /// structured-query, retrieval, and synthesis policies from leaking into one another.
 pub(in crate::chronicle::service) enum AnswerRoute {
-    Structured(crate::chronicle::query::plan::StructuredPlan),
+    Structured(StructuredPlan),
     Retrieval(RetrievalMode),
     Synthesis,
     Clarification,
@@ -127,16 +127,16 @@ pub(in crate::chronicle::service) async fn select_answer_route(
 }
 
 fn predetermined_route(question: &str, started: Instant) -> Option<RouteSelection> {
-    match planner::predetermined_route(question)? {
-        planner::PredeterminedRoute::EmptyQuestion => {
+    match query_predetermined_route(question)? {
+        PredeterminedRoute::EmptyQuestion => {
             emit_route_selection(RouteOperation::Clarify, "routed", "classifier", started);
             Some(RouteSelection::predetermined(AnswerRoute::EmptyQuestion))
         }
-        planner::PredeterminedRoute::UnresolvedCollectionReference => {
+        PredeterminedRoute::UnresolvedCollectionReference => {
             emit_route_selection(RouteOperation::Clarify, "routed", "classifier", started);
             Some(RouteSelection::predetermined(AnswerRoute::Clarification))
         }
-        planner::PredeterminedRoute::UnsupportedStructuredRequest => {
+        PredeterminedRoute::UnsupportedStructuredRequest => {
             debug!(
                 question_len = question.chars().count(),
                 "Skipping query planner for a definitely unsupported structured request"
@@ -166,7 +166,7 @@ async fn classify_route(
         classifier_response_len = response.chars().count(),
         "Route classifier response received"
     );
-    let operation = match classifier::parse(&response) {
+    let operation = match parse_route(&response) {
         Ok(operation) => operation,
         Err(error) => {
             debug!(question_len = question.chars().count(), classifier_response_len = response.chars().count(), %error, "Route classification response rejected");
@@ -232,8 +232,7 @@ async fn select_structured_route(
 ) -> Result<RouteSelection> {
     let structured_operation = StructuredOperation::try_from(operation)?;
     let generator_started = Instant::now();
-    let planning =
-        planner::generate_or_repair_structured_plan(llm, question, structured_operation).await;
+    let planning = generate_or_repair_structured_plan(llm, question, structured_operation).await;
     emit_structured_planning_outcome(&planning, operation, question, generator_started);
     let plan = planning.plan;
 
@@ -258,7 +257,7 @@ async fn select_structured_route(
 }
 
 fn emit_structured_planning_outcome(
-    planning: &planner::StructuredPlanningResult,
+    planning: &StructuredPlanningResult,
     operation: RouteOperation,
     question: &str,
     started: Instant,
