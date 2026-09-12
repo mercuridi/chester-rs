@@ -15,12 +15,12 @@ use tokio::{
 };
 use tracing::{info, instrument, warn};
 
-use crate::jester::db::{insert_new_track_with_metadata, lookup_track};
-use crate::jester::track::{
+use super::{
     metadata::{metadata_sidecar_path, process_ytdlp_json_at, read_metadata_sidecar},
     types::{TrackInfo, VideoId},
     youtube::get_youtube_id,
 };
+use crate::jester::db::{insert_new_track_with_metadata, lookup_track};
 
 #[async_trait]
 pub trait DownloadExecutor: Send + Sync {

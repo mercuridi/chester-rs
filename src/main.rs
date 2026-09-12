@@ -28,7 +28,7 @@ use crate::{
     discord::context::{Data, Error},
     jester::{
         library::{SyncConfig, sync_audio_library},
-        track::download::Downloader,
+        track::{DownloadConfig, Downloader},
     },
 };
 use anyhow::{Context, Result, bail};
@@ -608,9 +608,7 @@ async fn initialize_bot_services(config: &Config) -> Result<(SqlitePool, Arc<Chr
 }
 
 async fn synchronize_audio_library(config: &Config, pool: &SqlitePool) -> Result<Arc<Downloader>> {
-    let downloader = Downloader::new(crate::jester::track::download::DownloadConfig::from(
-        &config.paths,
-    ));
+    let downloader = Downloader::new(DownloadConfig::from(&config.paths));
     let sync_stats = sync_audio_library(
         pool,
         SyncConfig {

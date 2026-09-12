@@ -4,7 +4,7 @@ use sqlx::{FromRow, SqliteConnection, SqlitePool};
 
 use crate::jester::{
     db::MetadataKind,
-    track::types::{TrackInfo, VideoId},
+    track::{TrackInfo, VideoId},
 };
 
 const TAXONOMY_SUMMARY: &str = "TRIM(COALESCE(tracks.mood, '') || CASE WHEN tracks.intensity IS NULL THEN '' ELSE ', ' || tracks.intensity END || CASE WHEN tracks.function_tag IS NULL THEN '' ELSE ', ' || tracks.function_tag END || CASE WHEN EXISTS (SELECT 1 FROM track_environments WHERE track_id = tracks.id) THEN ', ' || (SELECT GROUP_CONCAT(environment, ', ') FROM track_environments WHERE track_id = tracks.id) ELSE '' END, ', ')";

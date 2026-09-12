@@ -9,8 +9,7 @@ use crate::jester::db::{
     insert_track_environment, insert_track_label, insert_track_texture, require_track,
     require_value, set_track_taxonomy, update_track_metadata,
 };
-use crate::jester::track::download::download_track;
-use crate::jester::track::types::{TrackInfo, VideoId};
+use crate::jester::track::{TrackInfo, VideoId, download_track};
 
 pub async fn download_direct(
     ctx: PoiseContext<'_>,

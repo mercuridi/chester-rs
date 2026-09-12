@@ -1,14 +1,13 @@
-use crate::{
-    jester::db::lookup_track,
-    jester::track::{
-        download::{Downloader, download_track},
-        types::{TrackInfo, VideoId},
-        youtube::get_youtube_id,
-    },
-};
 use anyhow::Result;
 use sqlx::SqlitePool;
 use tracing::{debug, info, instrument};
+
+use super::{
+    download::{Downloader, download_track},
+    types::{TrackInfo, VideoId},
+    youtube::get_youtube_id,
+};
+use crate::jester::db::lookup_track;
 
 #[instrument]
 pub fn normalise_track_input(input: &str) -> VideoId {

@@ -9,7 +9,7 @@ use crate::{
     jester::{
         db::{MIX_LIMIT, MixFilter, fetch_mix_tracks, parse_filter},
         player::{HistoryOutcome, RepeatMode},
-        track::resolver::resolve_track,
+        track::{TrackInfo, resolve_track},
     },
     utils::format::lightweight_trim,
 };
@@ -22,7 +22,7 @@ pub fn pause_message(resumed: bool) -> &'static str {
     }
 }
 
-fn play_message(track: &crate::jester::track::types::TrackInfo) -> String {
+fn play_message(track: &TrackInfo) -> String {
     format!(
         "Now playing: `{}` by `{}`, from `{}`.",
         track.title,
@@ -31,7 +31,7 @@ fn play_message(track: &crate::jester::track::types::TrackInfo) -> String {
     )
 }
 
-fn now_playing_message(track: Option<&crate::jester::track::types::TrackInfo>) -> String {
+fn now_playing_message(track: Option<&TrackInfo>) -> String {
     track.map_or_else(
         || "No track is currently playing.".into(),
         |track| {

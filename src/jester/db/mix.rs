@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 
 use crate::jester::{
     db::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES},
-    track::types::{TrackInfo, VideoId},
+    track::{TrackInfo, VideoId},
 };
 
 pub const MIX_LIMIT: usize = 25;

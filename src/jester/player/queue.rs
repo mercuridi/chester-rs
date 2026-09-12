@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::jester::track::types::TrackInfo;
+use crate::jester::track::TrackInfo;
 
 /// A track explicitly submitted to the guild queue.
 #[derive(Clone, Debug)]
@@ -301,7 +301,7 @@ impl Default for GuildQueue {
 #[allow(clippy::unwrap_used, clippy::redundant_closure_for_method_calls)]
 mod tests {
     use super::{GuildQueue, HistoryOutcome, PlaybackSource, QueueError, RepeatMode};
-    use crate::jester::track::types::{TrackInfo, VideoId};
+    use crate::jester::track::{TrackInfo, VideoId};
 
     fn track(title: &str) -> TrackInfo {
         TrackInfo {

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use sqlx::SqlitePool;
 
-use crate::jester::track::{download::Downloader, types::VideoId};
+use crate::jester::track::{Downloader, VideoId};
 
 use super::constants::DOWNLOAD_CONCURRENCY;
 

@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 
 use crate::{
     chronicle::{Chronicle, Config, RecorderManager},
-    jester::{player::PlayerService, track::download::Downloader},
+    jester::{player::PlayerService, track::Downloader},
     shutdown::ShutdownState,
 };
 

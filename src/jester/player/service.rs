@@ -21,7 +21,7 @@ use tracing::{debug, error, info};
 use super::queue::{
     GuildQueue, HistoryEntry, PlaybackItem, QueueEntry, QueueTransition, RepeatMode,
 };
-use crate::jester::track::types::TrackInfo;
+use crate::jester::track::TrackInfo;
 
 struct ActivePlayback {
     id: u64,
@@ -372,7 +372,7 @@ impl EventHandler for TrackEndHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::jester::track::types::{TrackInfo, VideoId};
+    use crate::jester::track::{TrackInfo, VideoId};
     use anyhow::anyhow;
     use poise::serenity_prelude::{GuildId, UserId};
     use songbird::Call;
