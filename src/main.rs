@@ -27,7 +27,7 @@ use crate::{
     },
     discord::context::{Data, Error},
     jester::{
-        library::sync::{SyncConfig, sync_audio_library},
+        library::{SyncConfig, sync_audio_library},
         track::download::Downloader,
     },
 };

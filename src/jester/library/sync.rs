@@ -1,11 +1,12 @@
-use crate::jester::{
-    library::constants::DOWNLOAD_CONCURRENCY,
-    track::{download::Downloader, types::VideoId},
-};
+use std::sync::Arc;
+
 use anyhow::{Context, Result};
 use futures::stream::{self, StreamExt};
 use sqlx::SqlitePool;
-use std::sync::Arc;
+
+use crate::jester::track::{download::Downloader, types::VideoId};
+
+use super::constants::DOWNLOAD_CONCURRENCY;
 
 #[derive(Debug)]
 pub struct SyncStats {
