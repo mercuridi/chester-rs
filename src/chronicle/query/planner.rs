@@ -154,6 +154,7 @@ fn canonicalize_filters(value: &mut Value) {
                 crate::chronicle::indexer::schema::field_definition(&note_type, field)?;
             let mut value = value.as_str()?.to_owned();
             wrap_wikilink_if_required(&mut value, definition.value_type);
+            canonicalize_fixed_enum_case(&mut value, definition.value_type);
             Some((field.clone(), definition.value_type, value))
         })
         .collect::<Vec<_>>();
@@ -218,6 +219,7 @@ fn canonicalize_condition_wikilinks(note_type: &str, filters: &mut serde_json::M
             continue;
         };
         wrap_wikilink_if_required(&mut value, definition.value_type);
+        canonicalize_fixed_enum_case(&mut value, definition.value_type);
         condition.insert("value".into(), Value::String(value));
     }
 }
@@ -234,6 +236,21 @@ fn wrap_wikilink_if_required(
         && !value.contains(['[', ']'])
     {
         *value = format!("[[{}]]", value.trim());
+    }
+}
+
+/// Fixed vocabularies are case-insensitive at the model boundary, but plans
+/// always retain the schema spelling used by validation and query execution.
+fn canonicalize_fixed_enum_case(value: &mut String, value_type: ValueType) {
+    let ValueType::FixedEnum(vocabulary) = value_type else {
+        return;
+    };
+    if let Some(canonical) = vocabulary
+        .values
+        .iter()
+        .find(|candidate| candidate.eq_ignore_ascii_case(value))
+    {
+        *value = (*canonical).into();
     }
 }
 
@@ -578,6 +595,22 @@ mod tests {
             r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"location","operator":"equals","value":"[[Northmere]]"},{"field":"life_status_cause","operator":"equals","value":"old age"},{"field":"appearances","operator":"contains","value":"[[Blueskies]]"}]}}"#,
         )?;
         assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn canonicalizes_fixed_enum_filter_casing() -> Result<()> {
+        let actual = parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"ex-PC"}]}}"#,
+        )?;
+        let expected = parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"ex-pc"}]}}"#,
+        )?;
+        assert_eq!(actual, expected);
+        assert!(parse(
+            r#"{"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"ex-player"}]}}"#,
+        )
+        .is_err());
         Ok(())
     }
 
