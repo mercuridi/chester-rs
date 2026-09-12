@@ -4,12 +4,12 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use tokenizers::Encoding;
+use tracing::{debug, info, instrument, warn};
 
 use crate::chronicle::{
     indexer::document::{Chunk, ChunkVisibility, Document},
     runtime::report_cuda_oom,
 };
-use tracing::{debug, info, instrument, warn};
 
 use super::{
     chunker,
@@ -632,7 +632,7 @@ mod tests {
             self.batches
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(vec![
-                vec![0.0; super::super::embedder::EMBEDDING_DIMENSIONS];
+                vec![0.0; crate::chronicle::indexer::embedder::EMBEDDING_DIMENSIONS];
                 encodings.len()
             ])
         }
@@ -679,7 +679,8 @@ mod tests {
         let initial_batches = batches.load(Ordering::SeqCst);
         assert!(initial_batches > 0);
         let docs = db.all_documents().await?;
-        let (mut metadata, _) = super::super::frontmatter::parse(source)?.context("note")?;
+        let (mut metadata, _) =
+            crate::chronicle::indexer::frontmatter::parse(source)?.context("note")?;
         // Simulate an existing index whose generic field row has not been populated.
         metadata.fields.remove("role");
         db.refresh_metadata(docs[0].id, &docs[0].content_hash, &metadata)
