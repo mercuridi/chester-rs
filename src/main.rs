@@ -20,14 +20,10 @@ use tracing::info;
 
 use crate::{
     chronicle::{
-        config::{AppPaths, Config},
-        indexer::retriever::Retriever,
-        indexer::{db::IndexerDb, embedder::Embedder, service::Indexer},
-        llm::Llm,
-        recording::{notify_recording_user, scan_incomplete_manifests},
-        runtime::{GpuRuntime, report_cuda_oom},
-        service::{Chronicle, ChronicleDependencies},
-        transcription::TranscriptionService,
+        AppPaths, Chronicle, ChronicleDependencies, Config, Embedder, GpuRuntime, Indexer,
+        IndexerDb, Llm, RecorderManager, Retriever, TranscriptionService, notify_recording_user,
+        report_cuda_oom, run_eval, run_planner, run_query, run_synthesis_eval,
+        scan_incomplete_manifests,
     },
     discord::context::{Data, Error},
     jester::{
@@ -549,19 +545,19 @@ async fn run(invocation: Invocation, paths: AppPaths) -> Result<()> {
         Invocation::Evaluation(EvaluationCommand::Synthesis {
             suite_path,
             report_path,
-        }) => chronicle::synthesis_eval::run(&suite_path, report_path.as_deref(), &paths).await,
+        }) => run_synthesis_eval(&suite_path, report_path.as_deref(), &paths).await,
         Invocation::Evaluation(EvaluationCommand::Query {
             suite_path,
             report_path,
-        }) => chronicle::query::run(&suite_path, report_path.as_deref(), &paths).await,
+        }) => run_query(&suite_path, report_path.as_deref(), &paths).await,
         Invocation::Evaluation(EvaluationCommand::QueryPlanner {
             suite_path,
             report_path,
-        }) => chronicle::query::run_planner(&suite_path, report_path.as_deref(), &paths).await,
+        }) => run_planner(&suite_path, report_path.as_deref(), &paths).await,
         Invocation::Evaluation(EvaluationCommand::Chronicle {
             suite_path,
             report_path,
-        }) => chronicle::eval::run(&suite_path, report_path.as_deref(), &paths).await,
+        }) => run_eval(&suite_path, report_path.as_deref(), &paths).await,
     }
 }
 
@@ -656,8 +652,7 @@ async fn run_discord_client(
     let songbird_config =
         SongbirdConfig::default().decode_mode(DecodeMode::Decode(DecodeConfig::default()));
     let songbird = songbird::Songbird::serenity_from_config(songbird_config.clone());
-    let recorder =
-        crate::chronicle::recording::RecorderManager::new(config.paths.recordings_dir.clone());
+    let recorder = RecorderManager::new(config.paths.recordings_dir.clone());
     let player = Arc::new(jester::player::service::PlayerService::new(
         config.paths.audio_dir.clone(),
     ));

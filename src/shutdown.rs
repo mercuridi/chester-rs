@@ -10,8 +10,7 @@ use songbird::Songbird;
 use sqlx::SqlitePool;
 
 use crate::{
-    chronicle::transcription::TranscriptionService,
-    chronicle::{recording::RecorderManager, service::Chronicle},
+    chronicle::{Chronicle, RecorderManager, TranscriptionService},
     jester::player::service::PlayerService,
 };
 

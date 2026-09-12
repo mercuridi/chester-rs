@@ -3,7 +3,7 @@ use std::sync::Arc;
 use sqlx::SqlitePool;
 
 use crate::{
-    chronicle::{config::Config, recording::RecorderManager, service::Chronicle},
+    chronicle::{Chronicle, Config, RecorderManager},
     jester::{player::service::PlayerService, track::download::Downloader},
     shutdown::ShutdownState,
 };
