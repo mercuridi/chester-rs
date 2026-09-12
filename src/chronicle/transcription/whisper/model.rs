@@ -1,7 +1,3 @@
-use crate::{
-    chronicle::transcription::constants::{MODEL_ID, MODEL_REVISION},
-    chronicle::transcription::whisper::{tokens::token_id, transcriber::WhisperTranscriber},
-};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow};
@@ -10,6 +6,9 @@ use candle_nn::VarBuilder;
 use candle_transformers::models::whisper::{self as m, Config};
 use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::Tokenizer;
+
+use super::{WhisperTranscriber, tokens::token_id};
+use crate::chronicle::transcription::constants::{MODEL_ID, MODEL_REVISION};
 
 pub enum Model {
     Normal(m::model::Whisper),

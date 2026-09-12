@@ -7,7 +7,8 @@ use tokenizers::Tokenizer;
 
 use crate::chronicle::transcription::audio::AudioSource;
 use crate::chronicle::transcription::constants::MODEL_SAMPLE_RATE;
-use crate::chronicle::transcription::whisper::model::Model;
+
+use super::model::Model;
 
 pub struct TranscriptSegment {
     pub start: f64,

@@ -1,8 +1,8 @@
-use crate::chronicle::transcription::whisper::transcriber::WhisperTranscriber;
-
 use anyhow::{Result, anyhow};
 use candle_core::{IndexOp, Tensor};
 use candle_nn::ops::softmax;
+
+use super::WhisperTranscriber;
 
 pub struct Decoded {
     pub tokens: Vec<u32>,

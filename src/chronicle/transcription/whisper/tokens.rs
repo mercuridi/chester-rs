@@ -1,9 +1,7 @@
-use crate::chronicle::transcription::whisper::transcriber::{
-    TranscriptSegment, WhisperTranscriber,
-};
-
 use anyhow::{Result, anyhow};
 use tokenizers::Tokenizer;
+
+use super::{TranscriptSegment, WhisperTranscriber};
 
 pub fn token_id(tokenizer: &Tokenizer, token: &str) -> Result<u32> {
     tokenizer
