@@ -1,6 +1,21 @@
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
-use std::fs;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
+
+pub fn metadata_sidecar_path(audio_dir: &Path, file_id: &str) -> PathBuf {
+    audio_dir.join(format!("{file_id}.metadata.json"))
+}
+
+pub fn read_metadata_sidecar(audio_dir: &Path, file_id: &str) -> Result<Value> {
+    let path = metadata_sidecar_path(audio_dir, file_id);
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read metadata sidecar {}", path.display()))?;
+    serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse metadata sidecar {}", path.display()))
+}
 
 pub fn process_ytdlp_json_at(
     audio_dir: &std::path::Path,

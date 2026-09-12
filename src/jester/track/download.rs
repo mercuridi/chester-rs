@@ -17,7 +17,7 @@ use tracing::{info, instrument, warn};
 
 use crate::jester::db::repository::{insert_new_track_with_metadata, lookup_track};
 use crate::jester::track::{
-    metadata::process_ytdlp_json_at,
+    metadata::{metadata_sidecar_path, process_ytdlp_json_at, read_metadata_sidecar},
     types::{TrackInfo, VideoId},
     youtube::get_youtube_id,
 };
@@ -149,13 +149,39 @@ impl Downloader {
     ) -> Result<DownloadedArtifact> {
         let final_path = self.config.audio_dir.join(format!("{}.mp3", id.as_str()));
         if tokio::fs::try_exists(&final_path).await.unwrap_or(false) {
-            let metadata = self
+            let cached_metadata = self
                 .completed_metadata
                 .lock()
                 .await
                 .get(&id)
                 .cloned()
                 .flatten();
+            let metadata = if !include_metadata {
+                cached_metadata
+            } else if cached_metadata.is_some() {
+                cached_metadata
+            } else if tokio::fs::try_exists(metadata_sidecar_path(
+                &self.config.audio_dir,
+                id.as_str(),
+            ))
+            .await
+            .unwrap_or(false)
+            {
+                let metadata = read_metadata_sidecar(&self.config.audio_dir, id.as_str())?;
+                self.completed_metadata
+                    .lock()
+                    .await
+                    .insert(id.clone(), Some(metadata.clone()));
+                Some(metadata)
+            } else {
+                let metadata = self.fetch_metadata(&id, &source).await?;
+                self.persist_metadata(&id, &metadata).await?;
+                self.completed_metadata
+                    .lock()
+                    .await
+                    .insert(id.clone(), Some(metadata.clone()));
+                Some(metadata)
+            };
             return Ok(DownloadedArtifact {
                 audio_path: final_path,
                 metadata,
@@ -172,6 +198,9 @@ impl Downloader {
         let (staged_audio, metadata) = self
             .download_attempts(&id, &source, &staged_base, include_metadata, deadline)
             .await?;
+        if let Some(metadata) = &metadata {
+            self.persist_metadata(&id, metadata).await?;
+        }
         tokio::fs::rename(staged_audio, &final_path)
             .await
             .context("Failed to finalize downloaded audio")?;
@@ -183,6 +212,80 @@ impl Downloader {
             audio_path: final_path,
             metadata,
         })
+    }
+
+    async fn persist_metadata(&self, id: &VideoId, metadata: &Value) -> Result<()> {
+        let path = metadata_sidecar_path(&self.config.audio_dir, id.as_str());
+        let temporary = tempfile::NamedTempFile::new_in(&self.config.audio_dir)
+            .context("Failed to create temporary metadata sidecar")?;
+        let temporary_path = temporary.path().to_path_buf();
+        let content =
+            serde_json::to_vec_pretty(metadata).context("Failed to serialize metadata")?;
+        tokio::fs::write(&temporary_path, content)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to write metadata sidecar {}",
+                    temporary_path.display()
+                )
+            })?;
+        tokio::fs::rename(&temporary_path, &path)
+            .await
+            .with_context(|| format!("Failed to finalize metadata sidecar {}", path.display()))?;
+        Ok(())
+    }
+
+    async fn fetch_metadata(&self, id: &VideoId, source: &str) -> Result<Value> {
+        let _permit = self.permits.acquire().await.context("Downloader stopped")?;
+        tokio::fs::create_dir_all(&self.config.audio_dir)
+            .await
+            .context("Failed to create audio directory")?;
+        let staging = tempfile::tempdir_in(&self.config.audio_dir)
+            .context("Failed to create metadata staging directory")?;
+        let staged_base = staging.path().join(id.as_str());
+        let attempts = self.config.retries.max(1);
+        let deadline = tokio::time::Instant::now() + self.config.deadline;
+
+        for attempt in 1..=attempts {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let args = vec![
+                "--skip-download".into(),
+                "--write-info-json".into(),
+                "--no-playlist".into(),
+                "--no-progress".into(),
+                "-o".into(),
+                format!("{}.%(ext)s", staged_base.display()),
+                "--cookies".into(),
+                self.config.cookies_path.to_string_lossy().into_owned(),
+                source.into(),
+            ];
+            let output = match tokio::time::timeout(
+                remaining,
+                self.executor
+                    .output(&self.config.ytdlp_path.to_string_lossy(), &args),
+            )
+            .await
+            {
+                Ok(Ok(output)) => output,
+                Ok(Err(error)) => {
+                    warn!(track_id = %id.as_str(), attempt, error = %error, "yt-dlp metadata process failed");
+                    continue;
+                }
+                Err(_) => break,
+            };
+            if output.status.success() {
+                return process_ytdlp_json_at(staging.path(), id.as_str())
+                    .context("Failed to process recovered yt-dlp metadata");
+            }
+            warn!(track_id = %id.as_str(), attempt, stderr = %String::from_utf8_lossy(&output.stderr), "yt-dlp metadata fetch returned non-zero exit");
+        }
+        Err(anyhow!(
+            "All yt-dlp metadata attempts failed for video ID {}",
+            id.as_str()
+        ))
     }
 
     async fn download_attempts(
@@ -329,6 +432,11 @@ pub async fn download_track(
             return Ok(track);
         }
         let _ = tokio::fs::remove_file(&artifact.audio_path).await;
+        let _ = tokio::fs::remove_file(metadata_sidecar_path(
+            &downloader.config.audio_dir,
+            video_id.as_str(),
+        ))
+        .await;
         return Err(error);
     }
     info!(track_id = %video_id.as_str(), %title, "Track downloaded and added to library");
@@ -468,6 +576,46 @@ mod tests {
                 .calls
                 .lock()
                 .map_err(|_| anyhow!("fake executor call counter poisoned"))?,
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn existing_audio_can_be_registered_by_a_fresh_downloader() -> Result<()> {
+        let dir = tempdir()?;
+        let database_url = format!("sqlite://{}", dir.path().join("jester.db").display());
+        let pool = crate::database::pool::open_sqlite_pool(&database_url, "test").await?;
+        crate::jester::db::schema::initialise(&pool).await?;
+        let executor = Arc::new(FakeExecutor {
+            calls: Mutex::new(0),
+        });
+        let first = Downloader::with_executor(config(dir.path()), executor.clone());
+        first
+            .download(
+                VideoId::from("abc"),
+                "https://youtube.test/abc".into(),
+                true,
+            )
+            .await?;
+
+        let second = Downloader::with_executor(config(dir.path()), executor.clone());
+        let track = download_track(
+            &pool,
+            "https://www.youtube.com/watch?v=abc".into(),
+            None,
+            None,
+            None,
+            second,
+        )
+        .await?;
+        assert_eq!(track.title, "Downloaded");
+        assert!(metadata_sidecar_path(dir.path(), "abc").exists());
+        assert_eq!(
+            *executor
+                .calls
+                .lock()
+                .map_err(|_| anyhow!("counter poisoned"))?,
             1
         );
         Ok(())
