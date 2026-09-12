@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn parses_full_values_and_preserves_unknown_fields() -> Result<()> {
         let (metadata, body) = parse(&note(
-            "aliases: [Someone]\ntags: [npc, garden]\nsummary: A gardener\nrace: '[[Human]]'\nrole: npc\nlife_status: alive\nallies: ['[[Ember Guild]]']\nplayed_by: Ada\ncustom: [one, two]\n",
+            "aliases: [Someone]\ntags: [npc, garden]\nsummary: A gardener\nauthor: Ada\nrace: '[[Human]]'\nrole: npc\nlife_status: alive\nallies: ['[[Ember Guild]]']\nplayed_by: Ada\nsexuality: bisexual\ncustom: [one, two]\n",
         ))?
         .context("Expected parsed note")?;
         assert_eq!(metadata.id, "test");
@@ -445,8 +445,16 @@ mod tests {
         assert_eq!(metadata.created, "2026-09-07");
         assert_eq!(metadata.updated, "2026-09-07");
         assert_eq!(
+            metadata.fields.get("author"),
+            Some(&MetadataValue::String("Ada".into()))
+        );
+        assert_eq!(
             metadata.fields.get("race"),
             Some(&MetadataValue::Wikilink("[[Human]]".into()))
+        );
+        assert_eq!(
+            metadata.fields.get("sexuality"),
+            Some(&MetadataValue::String("bisexual".into()))
         );
         assert!(metadata.unknown_fields.contains_key("custom"));
         assert_eq!(body, "# Story\nHello");

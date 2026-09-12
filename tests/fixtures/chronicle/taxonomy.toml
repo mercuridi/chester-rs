@@ -2,6 +2,7 @@
 
 [universal_fields.id]
 [universal_fields.type]
+[universal_fields.author]
 [universal_fields.aliases]
 [universal_fields.tags]
 [universal_fields.summary]
@@ -16,7 +17,7 @@ fields = ["adventure_status", "start_date", "end_date", "party", "regions", "rel
 [types.aspect]
 fields = ["ruling_deities", "native_races"]
 [types.character]
-fields = ["race", "role", "life_status", "life_status_cause", "life_status_since", "affiliations", "allies", "enemies", "parents", "siblings", "children", "partners", "other_family", "location", "patron_deities", "birthplace", "birth_year", "nationality", "played_by", "pronouns"]
+fields = ["race", "role", "life_status", "life_status_cause", "life_status_since", "affiliations", "allies", "enemies", "parents", "siblings", "children", "partners", "other_family", "location", "patron_deities", "birthplace", "birth_year", "nationality", "played_by", "pronouns", "sexuality"]
 [types.deity]
 fields = ["deity_type", "domain", "antidomain", "alignment", "form", "crystal", "rival_deities", "worshippers", "holy_sites", "associated_aspects"]
 [types.event]

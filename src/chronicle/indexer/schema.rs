@@ -160,6 +160,7 @@ pub const HISTORICITY: Vocabulary = Vocabulary {
 const UNIVERSAL_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::required("id", ValueType::String),
     FieldDefinition::required("type", ValueType::FixedEnum(&DOCUMENT_TYPES_VOCABULARY)),
+    FieldDefinition::optional("author", ValueType::String),
     FieldDefinition::default_empty_list("aliases"),
     FieldDefinition::default_empty_list("tags"),
     FieldDefinition::default_empty_string_with_warning("summary"),
@@ -209,6 +210,7 @@ const CHARACTER_FIELDS: &[FieldDefinition] = &[
     FieldDefinition::optional("nationality", ValueType::String),
     FieldDefinition::optional("played_by", ValueType::String),
     FieldDefinition::optional("pronouns", ValueType::String),
+    FieldDefinition::optional("sexuality", ValueType::String),
 ];
 
 const DEITY_FIELDS: &[FieldDefinition] = &[

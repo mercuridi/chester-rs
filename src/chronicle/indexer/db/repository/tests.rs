@@ -583,7 +583,7 @@ async fn player_structured_queries_exclude_secret_notes() -> Result<()> {
 #[tokio::test]
 async fn replacing_a_note_type_removes_the_old_type_metadata() -> Result<()> {
     let (_directory, db) = test_database().await?;
-    let character = "---\nid: shifting-note\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\nlife_status: alive\nlocation: '[[Northmere]]'\n---\n";
+    let character = "---\nid: shifting-note\ntype: character\nauthor: Ada\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\nlife_status: alive\nsexuality: bisexual\nlocation: '[[Northmere]]'\n---\n";
     let (metadata, _) =
         crate::chronicle::indexer::frontmatter::parse(character)?.context("character")?;
     let document_id = db
@@ -598,11 +598,23 @@ async fn replacing_a_note_type_removes_the_old_type_metadata() -> Result<()> {
         .await?,
         1
     );
+    let author: Option<String> =
+        sqlx::query_scalar("SELECT author FROM note_metadata WHERE document_id = ?")
+            .bind(document_id)
+            .fetch_one(&db.pool)
+            .await?;
+    assert_eq!(author.as_deref(), Some("Ada"));
+    let sexuality: Option<String> =
+        sqlx::query_scalar("SELECT sexuality FROM character_metadata WHERE document_id = ?")
+            .bind(document_id)
+            .fetch_one(&db.pool)
+            .await?;
+    assert_eq!(sexuality.as_deref(), Some("bisexual"));
 
     let organisation = character
         .replace("type: character", "type: organisation")
         .replace(
-            "role: npc\nlife_status: alive\nlocation: '[[Northmere]]'",
+            "role: npc\nlife_status: alive\nsexuality: bisexual\nlocation: '[[Northmere]]'",
             "organisation_type: guild\npatron_deities: ['[[Aurelia]]']",
         );
     let (metadata, _) =
