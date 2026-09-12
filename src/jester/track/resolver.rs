@@ -1,5 +1,5 @@
 use crate::{
-    jester::db::repository::lookup_track,
+    jester::db::lookup_track,
     jester::track::{
         download::{Downloader, download_track},
         types::{TrackInfo, VideoId},

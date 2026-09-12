@@ -1,7 +1,7 @@
 use crate::discord::constants::{ELLIPSIS, MAX_RESULTS_PER_PAGE, META_MAX_CHARS, TITLE_MAX_CHARS};
 
 use crate::discord::context::{Error, PoiseContext};
-use crate::jester::db::repository::{
+use crate::jester::db::{
     LibraryGroupEntry, LibraryTrack, fetch_library_all, fetch_library_by_artist,
     fetch_library_by_incomplete, fetch_library_by_origin, fetch_library_by_tag,
 };
@@ -200,7 +200,7 @@ fn paginate(lines: &[String], mode: &str) -> Vec<String> {
 mod tests {
     use super::{format_flat, format_grouped, meta_line, paginate, trunc};
     use crate::discord::constants::{MAX_RESULTS_PER_PAGE, META_MAX_CHARS, TITLE_MAX_CHARS};
-    use crate::jester::db::repository::{LibraryGroupEntry, LibraryTrack};
+    use crate::jester::db::{LibraryGroupEntry, LibraryTrack};
 
     #[test]
     fn truncates_unicode_and_reserves_room_for_ellipsis() {

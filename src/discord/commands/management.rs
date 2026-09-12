@@ -4,12 +4,10 @@ use crate::discord::autocomplete::{
     autocomplete_texture, autocomplete_track,
 };
 use crate::discord::context::{Error, PoiseContext};
-use crate::jester::db::repository::{
-    clear_track_taxonomy, insert_track_environment, insert_track_label, insert_track_texture,
-    require_track, set_track_taxonomy, update_track_metadata,
-};
-use crate::jester::db::taxonomy::{
-    ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES, require_value,
+use crate::jester::db::{
+    ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES, clear_track_taxonomy,
+    insert_track_environment, insert_track_label, insert_track_texture, require_track,
+    require_value, set_track_taxonomy, update_track_metadata,
 };
 use crate::jester::track::download::download_track;
 use crate::jester::track::types::{TrackInfo, VideoId};

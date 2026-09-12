@@ -596,7 +596,7 @@ async fn initialize_bot_services(config: &Config) -> Result<(SqlitePool, Arc<Chr
     let pool = database::open_sqlite_pool(&config.database.jester, "Jester")
         .await
         .context("Failed to open the Jester database")?;
-    jester::db::schema::initialise(&pool)
+    jester::db::initialise(&pool)
         .await
         .context("Failed to initialize the Jester database schema")?;
     let chronicle = Arc::new(

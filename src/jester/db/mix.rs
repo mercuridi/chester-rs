@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use sqlx::SqlitePool;
 
 use crate::jester::{
-    db::taxonomy::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES},
+    db::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES},
     track::types::{TrackInfo, VideoId},
 };
 

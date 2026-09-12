@@ -7,7 +7,7 @@ use crate::{
         voice::{ensure_vc, leave_vc, require_guild},
     },
     jester::{
-        db::mix::{MIX_LIMIT, MixFilter, fetch_mix_tracks, parse_filter},
+        db::{MIX_LIMIT, MixFilter, fetch_mix_tracks, parse_filter},
         player::queue::{HistoryOutcome, RepeatMode},
         track::resolver::resolve_track,
     },

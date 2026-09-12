@@ -5,11 +5,10 @@ use crate::chronicle::recording::{RecordingManifest, SessionId, resolve_session_
 use crate::discord::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
 use crate::discord::context::PoiseContext;
 use crate::discord::voice::require_guild;
-use crate::jester::db::metadata::MetadataKind;
-use crate::jester::db::repository::{
-    TrackSearchResult, search_incomplete_tracks, search_labels, search_metadata, search_tracks,
+use crate::jester::db::{
+    ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, MetadataKind, TEXTURES, TrackSearchResult,
+    search_incomplete_tracks, search_labels, search_metadata, search_tracks,
 };
-use crate::jester::db::taxonomy::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES};
 use crate::utils::format::{build_autocomplete_display, lightweight_trim};
 
 fn autocomplete_limit() -> i64 {

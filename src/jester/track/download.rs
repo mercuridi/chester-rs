@@ -15,7 +15,7 @@ use tokio::{
 };
 use tracing::{info, instrument, warn};
 
-use crate::jester::db::repository::{insert_new_track_with_metadata, lookup_track};
+use crate::jester::db::{insert_new_track_with_metadata, lookup_track};
 use crate::jester::track::{
     metadata::{metadata_sidecar_path, process_ytdlp_json_at, read_metadata_sidecar},
     types::{TrackInfo, VideoId},
@@ -537,7 +537,7 @@ mod tests {
         let dir = tempdir()?;
         let database_url = format!("sqlite://{}", dir.path().join("jester.db").display());
         let pool = crate::database::open_sqlite_pool(&database_url, "test").await?;
-        crate::jester::db::schema::initialise(&pool).await?;
+        crate::jester::db::initialise(&pool).await?;
 
         let executor = Arc::new(FakeExecutor {
             calls: Mutex::new(0),
@@ -586,7 +586,7 @@ mod tests {
         let dir = tempdir()?;
         let database_url = format!("sqlite://{}", dir.path().join("jester.db").display());
         let pool = crate::database::open_sqlite_pool(&database_url, "test").await?;
-        crate::jester::db::schema::initialise(&pool).await?;
+        crate::jester::db::initialise(&pool).await?;
         let executor = Arc::new(FakeExecutor {
             calls: Mutex::new(0),
         });

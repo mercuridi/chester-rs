@@ -2,9 +2,9 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use sqlx::{FromRow, SqliteConnection, SqlitePool};
 
-use crate::{
-    jester::db::metadata::MetadataKind,
-    jester::track::types::{TrackInfo, VideoId},
+use crate::jester::{
+    db::MetadataKind,
+    track::types::{TrackInfo, VideoId},
 };
 
 const TAXONOMY_SUMMARY: &str = "TRIM(COALESCE(tracks.mood, '') || CASE WHEN tracks.intensity IS NULL THEN '' ELSE ', ' || tracks.intensity END || CASE WHEN tracks.function_tag IS NULL THEN '' ELSE ', ' || tracks.function_tag END || CASE WHEN EXISTS (SELECT 1 FROM track_environments WHERE track_id = tracks.id) THEN ', ' || (SELECT GROUP_CONCAT(environment, ', ') FROM track_environments WHERE track_id = tracks.id) ELSE '' END, ', ')";
@@ -531,7 +531,7 @@ mod tests {
         let directory = tempdir()?;
         let database_url = format!("sqlite://{}", directory.path().join("jester.db").display());
         let pool = crate::database::open_sqlite_pool(&database_url, "test").await?;
-        crate::jester::db::schema::initialise(&pool).await?;
+        crate::jester::db::initialise(&pool).await?;
         Ok((directory, pool))
     }
 
