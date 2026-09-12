@@ -549,10 +549,7 @@ async fn run(invocation: Invocation, paths: AppPaths) -> Result<()> {
         Invocation::Evaluation(EvaluationCommand::Synthesis {
             suite_path,
             report_path,
-        }) => {
-            chronicle::synthesis_eval::runner::run(&suite_path, report_path.as_deref(), &paths)
-                .await
-        }
+        }) => chronicle::synthesis_eval::run(&suite_path, report_path.as_deref(), &paths).await,
         Invocation::Evaluation(EvaluationCommand::Query {
             suite_path,
             report_path,

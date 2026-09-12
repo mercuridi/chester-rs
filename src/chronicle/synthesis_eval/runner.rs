@@ -1,20 +1,22 @@
 //! Model-backed bounded-synthesis evaluation with deterministic rubric scoring.
+use std::{
+    fs::{OpenOptions, create_dir_all},
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+use anyhow::{Context, Result, anyhow, ensure};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
+
 use crate::chronicle::{
     config::Config,
     indexer::{db::IndexerDb, embedder::Embedder, retriever::Retriever, service::Indexer},
     llm::{LanguageModel, Llm},
     query::RouteOperation,
     runtime::GpuRuntime,
-    service::{Chronicle, ChronicleDependencies, EffectiveRoute},
+    service::{Chronicle, ChronicleDependencies, EffectiveRoute, SynthesisDiagnostics},
     transcription::service::TranscriptionService,
-};
-use anyhow::{Context, Result, anyhow, ensure};
-use chrono::Utc;
-use serde::{Deserialize, Serialize};
-use std::{
-    fs::{OpenOptions, create_dir_all},
-    path::{Path, PathBuf},
-    sync::Arc,
 };
 
 #[derive(Deserialize)]
@@ -497,7 +499,7 @@ struct CaseReport {
     effective_route: EffectiveRoute,
     route_correct: bool,
     answer: String,
-    synthesis_diagnostics: Option<super::super::service::SynthesisDiagnostics>,
+    synthesis_diagnostics: Option<SynthesisDiagnostics>,
     required_fact_recall: f64,
     core_recall: f64,
     supporting_recall: f64,
