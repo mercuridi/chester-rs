@@ -4,12 +4,12 @@ use poise::serenity_prelude::AutocompleteChoice;
 use crate::chronicle::recording::{RecordingManifest, SessionId, resolve_session_directory};
 use crate::discord::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
 use crate::discord::context::PoiseContext;
+use crate::discord::format::{build_autocomplete_display, lightweight_trim};
 use crate::discord::voice::require_guild;
 use crate::jester::db::{
     ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, MetadataKind, TEXTURES, TrackSearchResult,
     search_incomplete_tracks, search_labels, search_metadata, search_tracks,
 };
-use crate::utils::{build_autocomplete_display, lightweight_trim};
 
 fn autocomplete_limit() -> i64 {
     i64::try_from(AUTOCOMPLETE_MAX_CHOICES).unwrap_or(i64::MAX)

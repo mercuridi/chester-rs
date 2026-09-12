@@ -6,7 +6,6 @@ mod discord;
 mod jester;
 mod logging;
 mod shutdown;
-mod utils;
 
 use app::cli::StartupOptions;
 

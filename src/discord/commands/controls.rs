@@ -4,6 +4,7 @@ use crate::{
     discord::{
         autocomplete::{autocomplete_mix_filter, autocomplete_queue_position, autocomplete_track},
         context::{Error, PoiseContext},
+        format::lightweight_trim,
         voice::{ensure_vc, leave_vc, require_guild},
     },
     jester::{
@@ -11,7 +12,6 @@ use crate::{
         player::{HistoryOutcome, RepeatMode},
         track::{TrackInfo, resolve_track},
     },
-    utils::lightweight_trim,
 };
 
 pub fn pause_message(resumed: bool) -> &'static str {
