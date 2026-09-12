@@ -1,13 +1,13 @@
-pub mod chunker;
-pub mod db;
-pub mod document;
-pub mod embedder;
-pub mod prompt;
-pub mod retriever;
-pub mod scanner;
-pub mod schema;
-pub mod service;
+pub(crate) mod chunker;
+pub(crate) mod db;
+pub(crate) mod document;
+pub(crate) mod embedder;
+pub(crate) mod prompt;
+pub(crate) mod retriever;
+pub(crate) mod scanner;
+pub(crate) mod schema;
+pub(crate) mod service;
 
-pub mod frontmatter;
-pub mod link_resolver;
-pub mod pagerank;
+pub(crate) mod frontmatter;
+pub(crate) mod link_resolver;
+pub(crate) mod pagerank;

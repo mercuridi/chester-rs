@@ -1,6 +1,3 @@
-mod repository;
-mod schema;
-
 #[cfg(test)]
 pub(crate) use repository::StructuredNote;
 #[cfg(test)]
@@ -9,3 +6,6 @@ pub(crate) use repository::{
     AccessScope, IndexedChunk, IndexedDocument, IndexerDb, PageRankSignal, SearchResult,
     StructuredResult,
 };
+
+mod repository;
+mod schema;
