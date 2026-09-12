@@ -29,7 +29,7 @@ use crate::{
     chronicle::recording::constants::{
         RING_BUFFER_CAPACITY, RecordedFrame, SILENCE_FRAME, STEREO_FRAME_SAMPLES,
     },
-    chronicle::recording::encoder::run_encoder,
+    chronicle::recording::encoder::{EncoderWakeup, run_encoder},
     discord::context::Error,
 };
 use tracing::{debug, info, instrument, warn};
@@ -386,6 +386,7 @@ pub struct UserRecording {
     pub path: PathBuf,
     pub producer: Producer<RecordedFrame>,
     pub stop_tx: oneshot::Sender<u64>,
+    pub wakeup: EncoderWakeup,
     pub encoder: JoinHandle<Result<(), Error>>,
 }
 
@@ -723,11 +724,13 @@ impl Recorder {
                     path,
                     producer,
                     stop_tx,
+                    wakeup,
                     encoder,
                 } = user_recording;
 
                 // Tell the encoder that no more data should be expected.
                 let _ = stop_tx.send(final_tick);
+                wakeup.notify();
 
                 // The producer must remain alive while the encoder drains the samples
                 // already committed to the ring buffer. Once the encoder has been told
@@ -790,6 +793,7 @@ impl Recorder {
         let (producer, consumer) = RingBuffer::<RecordedFrame>::new(RING_BUFFER_CAPACITY);
 
         let (stop_tx, stop_rx) = oneshot::channel();
+        let wakeup = EncoderWakeup::new();
 
         let path = recording_path(
             &self.recordings_dir,
@@ -800,12 +804,14 @@ impl Recorder {
         );
 
         let encoder_path = path.clone();
+        let encoder_wakeup = wakeup.clone();
         let encoder = tokio::task::spawn_blocking(move || {
             run_encoder(
                 user_id,
                 &encoder_path,
                 consumer,
                 stop_rx,
+                encoder_wakeup,
                 initial_silence_ticks,
             )
         });
@@ -814,6 +820,7 @@ impl Recorder {
             path,
             producer,
             stop_tx,
+            wakeup,
             encoder,
         }
     }
@@ -941,7 +948,13 @@ impl EventHandler for Recorder {
                 for (&user_id, user_recording) in &mut session.users {
                     let audio = tick_audio.get(&user_id).copied().unwrap_or(&SILENCE_FRAME);
 
-                    write_pcm(&mut user_recording.producer, session.tick, audio, user_id);
+                    write_pcm(
+                        &mut user_recording.producer,
+                        &user_recording.wakeup,
+                        session.tick,
+                        audio,
+                        user_id,
+                    );
                 }
 
                 // Advance our recording timeline by one 20 ms tick.
@@ -955,7 +968,13 @@ impl EventHandler for Recorder {
     }
 }
 
-fn write_pcm(producer: &mut Producer<RecordedFrame>, tick: u64, samples: &[i16], user_id: UserId) {
+fn write_pcm(
+    producer: &mut Producer<RecordedFrame>,
+    wakeup: &EncoderWakeup,
+    tick: u64,
+    samples: &[i16],
+    user_id: UserId,
+) {
     if producer.slots() == 0 {
         tracing::warn!(
             ?user_id,
@@ -983,6 +1002,7 @@ fn write_pcm(producer: &mut Producer<RecordedFrame>, tick: u64, samples: &[i16],
             }
 
             chunk.commit_all();
+            wakeup.notify();
         }
 
         Err(error) => {
@@ -1151,8 +1171,8 @@ pub async fn notify_recording_user(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        Clock, FinalizedRecording, ManifestStatus, RecordedFrame, Recorder, RecorderManager,
-        RecordingManifest, allocate_recording_directory, default_manifest_status,
+        Clock, EncoderWakeup, FinalizedRecording, ManifestStatus, RecordedFrame, Recorder,
+        RecorderManager, RecordingManifest, allocate_recording_directory, default_manifest_status,
         recording_directory, recording_path, recover_recording_manifest,
         resolve_finalized_recordings, scan_incomplete_manifests, validate_scene_name, write_pcm,
     };
@@ -1319,7 +1339,8 @@ mod tests {
     #[test]
     fn write_pcm_commits_timestamped_frames_and_drops_when_full() -> anyhow::Result<()> {
         let (mut producer, mut consumer) = RingBuffer::<RecordedFrame>::new(1);
-        write_pcm(&mut producer, 7, &[1, 2, 3], UserId::new(1));
+        let wakeup = EncoderWakeup::new();
+        write_pcm(&mut producer, &wakeup, 7, &[1, 2, 3], UserId::new(1));
         let chunk = consumer
             .read_chunk(1)
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;
@@ -1329,8 +1350,8 @@ mod tests {
         assert!(frame.samples[3..].iter().all(|sample| *sample == 0));
         chunk.commit_all();
 
-        write_pcm(&mut producer, 8, &[4, 5], UserId::new(1));
-        write_pcm(&mut producer, 9, &[6, 7], UserId::new(1));
+        write_pcm(&mut producer, &wakeup, 8, &[4, 5], UserId::new(1));
+        write_pcm(&mut producer, &wakeup, 9, &[6, 7], UserId::new(1));
         let frame = consumer
             .read_chunk(1)
             .map_err(|error| anyhow::anyhow!("{error:?}"))?;

@@ -1,4 +1,8 @@
-use std::{fs::File, path::Path};
+use std::{
+    fs::File,
+    path::Path,
+    sync::{Arc, Condvar, Mutex},
+};
 
 use ogg::{PacketWriteEndInfo, PacketWriter};
 use opus::{Application, Channels, Encoder as OpusEncoder};
@@ -23,11 +27,43 @@ struct EncoderState {
     pending_packet: Option<(Vec<u8>, u64)>,
 }
 
+#[derive(Clone)]
+pub struct EncoderWakeup {
+    state: Arc<(Mutex<bool>, Condvar)>,
+}
+
+impl EncoderWakeup {
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new((Mutex::new(false), Condvar::new())),
+        }
+    }
+
+    pub fn notify(&self) {
+        let (lock, notify) = &*self.state;
+        let mut signaled = lock.lock().expect("encoder wakeup mutex poisoned");
+        *signaled = true;
+        notify.notify_one();
+    }
+
+    fn wait(&self) {
+        let (lock, notify) = &*self.state;
+        let mut signaled = lock.lock().expect("encoder wakeup mutex poisoned");
+        while !*signaled {
+            signaled = notify
+                .wait(signaled)
+                .expect("encoder wakeup mutex poisoned");
+        }
+        *signaled = false;
+    }
+}
+
 pub fn run_encoder(
     user_id: UserId,
     path: &Path,
     consumer: Consumer<RecordedFrame>,
     stop_rx: oneshot::Receiver<u64>,
+    wakeup: EncoderWakeup,
     initial_silence_ticks: u64,
 ) -> Result<(), Error> {
     let file = File::create(path)?;
@@ -63,6 +99,7 @@ pub fn run_encoder(
         user_id,
         consumer,
         stop_rx,
+        wakeup,
         initial_silence_ticks,
         &mut state,
         &mut ogg,
@@ -99,6 +136,7 @@ fn drain_recording_frames(
     user_id: UserId,
     mut consumer: Consumer<RecordedFrame>,
     mut stop_rx: oneshot::Receiver<u64>,
+    wakeup: EncoderWakeup,
     initial_silence_ticks: u64,
     state: &mut EncoderState,
     ogg: &mut PacketWriter<impl std::io::Write>,
@@ -151,7 +189,7 @@ fn drain_recording_frames(
                 stopping = true;
             }
             Err(oneshot::error::TryRecvError::Empty) => {
-                std::thread::yield_now();
+                wakeup.wait();
             }
         }
     }
@@ -272,7 +310,7 @@ fn write_opus_headers<W: std::io::Write>(
 
 #[cfg(test)]
 mod tests {
-    use super::{downmix_stereo_frame, run_encoder};
+    use super::{EncoderWakeup, downmix_stereo_frame, run_encoder};
     use crate::chronicle::recording::constants::{
         MONO_FRAME_SAMPLES, RecordedFrame, STEREO_FRAME_SAMPLES,
     };
@@ -326,10 +364,11 @@ mod tests {
         }
 
         let (stop_tx, stop_rx) = oneshot::channel();
+        let wakeup = EncoderWakeup::new();
         stop_tx
             .send(final_tick)
             .map_err(|tick| anyhow::anyhow!("failed to send final tick {tick}"))?;
-        run_encoder(UserId::new(1), &path, consumer, stop_rx, 0)
+        run_encoder(UserId::new(1), &path, consumer, stop_rx, wakeup, 0)
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
         let mut packets = PacketReader::new(BufReader::new(File::open(path)?));
@@ -384,9 +423,19 @@ mod tests {
         let path = directory.path().join("recording.opus");
         let (mut producer, consumer) = RingBuffer::new(8);
         let (stop_tx, stop_rx) = oneshot::channel();
+        let wakeup = EncoderWakeup::new();
         let encoder_path = path.clone();
-        let handle =
-            thread::spawn(move || run_encoder(UserId::new(1), &encoder_path, consumer, stop_rx, 0));
+        let encoder_wakeup = wakeup.clone();
+        let handle = thread::spawn(move || {
+            run_encoder(
+                UserId::new(1),
+                &encoder_path,
+                consumer,
+                stop_rx,
+                encoder_wakeup,
+                0,
+            )
+        });
 
         for tick in 0..2 {
             let mut chunk = producer.write_chunk(1)?;
@@ -397,6 +446,7 @@ mod tests {
                 *slot = frame(tick, 100);
             }
             chunk.commit_all();
+            wakeup.notify();
         }
 
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
@@ -423,6 +473,7 @@ mod tests {
         stop_tx
             .send(2)
             .map_err(|tick| anyhow::anyhow!("failed to stop encoder at tick {tick}"))?;
+        wakeup.notify();
         drop(producer);
         handle
             .join()
@@ -430,6 +481,31 @@ mod tests {
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
         assert!(audio_seen, "audio was not written before recording stopped");
+        Ok(())
+    }
+
+    #[test]
+    fn idle_encoder_stops_when_notified() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("recording.opus");
+        let (_producer, consumer) = RingBuffer::<RecordedFrame>::new(8);
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let wakeup = EncoderWakeup::new();
+        let encoder_wakeup = wakeup.clone();
+        let handle = thread::spawn(move || {
+            run_encoder(UserId::new(1), &path, consumer, stop_rx, encoder_wakeup, 0)
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        stop_tx
+            .send(0)
+            .map_err(|tick| anyhow::anyhow!("failed to stop encoder at tick {tick}"))?;
+        wakeup.notify();
+
+        handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("encoder thread panicked"))?
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         Ok(())
     }
 }
