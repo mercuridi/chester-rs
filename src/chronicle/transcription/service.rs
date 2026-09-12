@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
 use serenity::model::id::UserId;
@@ -10,6 +10,69 @@ use super::{
 };
 use crate::chronicle::runtime::{GpuRuntime, report_cuda_oom};
 use tracing::{debug, info, instrument};
+
+#[derive(Default)]
+struct WorkerTracker {
+    state: Mutex<WorkerState>,
+    completed: tokio::sync::Notify,
+}
+
+#[derive(Default)]
+struct WorkerState {
+    active: usize,
+    closing: bool,
+}
+
+impl WorkerTracker {
+    fn start(&self) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        if state.closing {
+            return false;
+        }
+        state.active += 1;
+        true
+    }
+
+    fn finish(&self) {
+        let Ok(mut state) = self.state.lock() else {
+            return;
+        };
+        state.active = state.active.saturating_sub(1);
+        if state.active == 0 {
+            self.completed.notify_waiters();
+        }
+    }
+
+    fn close(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.closing = true;
+            if state.active == 0 {
+                self.completed.notify_waiters();
+            }
+        }
+    }
+
+    async fn wait(&self) {
+        loop {
+            let completed = self.completed.notified();
+            let is_empty = self.state.lock().map_or(true, |state| state.active == 0);
+            if is_empty {
+                return;
+            }
+            completed.await;
+        }
+    }
+}
+
+struct WorkerGuard(Arc<WorkerTracker>);
+
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
+}
 
 fn user_id_from_recording_path(path: &std::path::Path) -> Result<UserId> {
     path.file_stem()
@@ -55,6 +118,7 @@ pub struct TranscribedSegment {
 pub struct TranscriptionService {
     runtime: GpuRuntime,
     factory: Arc<dyn TranscriberFactory>,
+    workers: Arc<WorkerTracker>,
 }
 
 impl TranscriptionService {
@@ -62,6 +126,7 @@ impl TranscriptionService {
         Self {
             runtime,
             factory: Arc::new(CudaTranscriberFactory),
+            workers: Arc::new(WorkerTracker::default()),
         }
     }
 
@@ -70,7 +135,11 @@ impl TranscriptionService {
         expect(dead_code, reason = "test dependency injection seam")
     )]
     pub fn with_factory(runtime: GpuRuntime, factory: Arc<dyn TranscriberFactory>) -> Self {
-        Self { runtime, factory }
+        Self {
+            runtime,
+            factory,
+            workers: Arc::new(WorkerTracker::default()),
+        }
     }
 
     /// Transcribe a set of per-user Opus recordings with exclusive GPU access.
@@ -81,9 +150,15 @@ impl TranscriptionService {
     ) -> Result<Vec<TranscribedSegment>> {
         let gpu_lease = self.runtime.acquire_transcription()?;
 
+        if !self.workers.start() {
+            anyhow::bail!("Transcription is unavailable during shutdown");
+        }
+
         info!("Starting recording transcription");
         let factory = Arc::clone(&self.factory);
+        let workers = Arc::clone(&self.workers);
         let result = tokio::task::spawn_blocking(move || {
+            let _worker_guard = WorkerGuard(workers);
             // The blocking worker, rather than the async caller, owns the GPU
             // lease. Aborting the caller must not release the lease while this
             // work is still using the GPU.
@@ -125,6 +200,11 @@ impl TranscriptionService {
             report_cuda_oom(error, "transcription", "transcribe");
         }
         result
+    }
+
+    pub async fn drain(&self) {
+        self.workers.close();
+        self.workers.wait().await;
     }
 }
 
@@ -226,6 +306,7 @@ mod tests {
             release: Mutex::new(Some(release_rx)),
         });
         let service = TranscriptionService::with_factory(runtime.clone(), factory);
+        let drain_service = service.clone();
 
         let task = tokio::spawn(async move { service.transcribe_recordings(Vec::new()).await });
         started_rx
@@ -236,19 +317,34 @@ mod tests {
         let _ = task.await;
         assert!(runtime.acquire_transcription().is_err());
 
+        let mut drain = Box::pin(drain_service.drain());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut drain)
+                .await
+                .is_err(),
+            "transcription drain completed before the blocking worker finished"
+        );
+
         release_tx
             .send(())
             .map_err(|_| anyhow::anyhow!("blocking transcription worker already stopped"))?;
 
+        let mut released = false;
         for _ in 0..100 {
             if let Ok(lease) = runtime.acquire_transcription() {
                 drop(lease);
-                return Ok(());
+                released = true;
+                break;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
 
-        anyhow::bail!("transcription GPU lease was not released after worker completion");
+        drain.await;
+        assert!(
+            released,
+            "transcription GPU lease was not released after worker completion"
+        );
+        Ok(())
     }
 
     #[tokio::test]

@@ -49,6 +49,7 @@ const DEFAULT_CHRONICLE_SYNTHESIS_EVAL_SUITE: &str =
     "tests/fixtures/chronicle-synthesis/suite.toml";
 const DEFAULT_LOG_LEVEL: &str = "info";
 const DEFAULT_LOG_FILTER: &str = "chester_rs=info,warn";
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Functions
@@ -332,9 +333,18 @@ fn main() {
         }
     };
 
-    if let Err(error) = runtime.block_on(run(startup.invocation, paths)) {
+    let run_result = runtime.block_on(run(startup.invocation, paths));
+    if let Err(error) = &run_result {
         tracing::error!("Chester failed to start: {error:#}");
         tracing::debug!(error = ?error, "Startup error chain");
+    }
+
+    // Tokio otherwise waits indefinitely for outstanding spawn_blocking workers
+    // when the runtime is dropped. This is the final process-level shutdown
+    // boundary after the application coordinator has attempted its drain.
+    runtime.shutdown_timeout(SHUTDOWN_TIMEOUT);
+
+    if run_result.is_err() {
         std::process::exit(1);
     }
 }
@@ -663,7 +673,8 @@ async fn run_discord_client(
         chronicle.clone(),
         pool.clone(),
         songbird.clone(),
-        Duration::from_secs(20),
+        chronicle.transcription_service(),
+        SHUTDOWN_TIMEOUT,
     ));
 
     let data = Data::new(

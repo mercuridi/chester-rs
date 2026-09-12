@@ -10,6 +10,7 @@ use songbird::Songbird;
 use sqlx::SqlitePool;
 
 use crate::{
+    chronicle::transcription::service::TranscriptionService,
     chronicle::{recording::recorder::RecorderManager, service::Chronicle},
     jester::player::service::PlayerService,
 };
@@ -36,6 +37,7 @@ pub struct ShutdownCoordinator {
     chronicle: Arc<Chronicle>,
     pool: SqlitePool,
     songbird: Arc<Songbird>,
+    transcription: TranscriptionService,
     timeout: Duration,
 }
 
@@ -46,6 +48,7 @@ impl ShutdownCoordinator {
         chronicle: Arc<Chronicle>,
         pool: SqlitePool,
         songbird: Arc<Songbird>,
+        transcription: TranscriptionService,
         timeout: Duration,
     ) -> Self {
         Self {
@@ -55,6 +58,7 @@ impl ShutdownCoordinator {
             chronicle,
             pool,
             songbird,
+            transcription,
             timeout,
         }
     }
@@ -80,6 +84,8 @@ impl ShutdownCoordinator {
         if let Err(error) = self.recorder.drain().await {
             errors.push(format!("recordings: {error}"));
         }
+
+        self.transcription.drain().await;
 
         self.player.shutdown().await;
 
