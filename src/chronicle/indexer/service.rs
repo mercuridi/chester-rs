@@ -313,9 +313,16 @@ impl Indexer {
                 let document = scanner::load_document(&candidate)?;
                 pending.push((document, path, false));
             }
+
+            if pending.len() == PREPARATION_BATCH_DOCUMENTS {
+                self.index_pending_documents(&pending, &mut stats).await?;
+                pending.clear();
+            }
         }
 
-        self.index_pending_documents(&pending, &mut stats).await?;
+        if !pending.is_empty() {
+            self.index_pending_documents(&pending, &mut stats).await?;
+        }
         Ok((stats, seen_paths))
     }
 
