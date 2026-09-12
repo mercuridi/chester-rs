@@ -290,13 +290,16 @@ pub struct StructuredPlanningResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PredeterminedRoute {
     EmptyQuestion,
+    UnresolvedCollectionReference,
     UnsupportedStructuredRequest,
 }
 
 impl PredeterminedRoute {
     pub fn operation(self) -> super::plan::RouteOperation {
         match self {
-            Self::EmptyQuestion => super::plan::RouteOperation::Clarify,
+            Self::EmptyQuestion | Self::UnresolvedCollectionReference => {
+                super::plan::RouteOperation::Clarify
+            }
             Self::UnsupportedStructuredRequest => super::plan::RouteOperation::Unsupported,
         }
     }
@@ -308,6 +311,9 @@ impl PredeterminedRoute {
 pub fn predetermined_route(question: &str) -> Option<PredeterminedRoute> {
     if question.trim().is_empty() {
         return Some(PredeterminedRoute::EmptyQuestion);
+    }
+    if has_unresolved_collection_reference(question) {
+        return Some(PredeterminedRoute::UnresolvedCollectionReference);
     }
     is_definitely_unsupported_structured_request(question)
         .then_some(PredeterminedRoute::UnsupportedStructuredRequest)
@@ -405,6 +411,33 @@ fn has_structured_request_intent(question: &str) -> bool {
         })
 }
 
+/// Identifies standalone requests whose collection subject is only a
+/// conversational reference. They cannot safely become an unfiltered query.
+fn has_unresolved_collection_reference(question: &str) -> bool {
+    let words = normalized_words(question);
+    let reference_only = |words: &[String]| {
+        !words.is_empty()
+            && words.iter().all(|word| {
+                matches!(
+                    word.as_str(),
+                    "them" | "those" | "these" | "there" | "all" | "of" | "are"
+                )
+            })
+            && words
+                .iter()
+                .any(|word| matches!(word.as_str(), "them" | "those" | "these" | "there"))
+    };
+    let count_request = words
+        .get(0..2)
+        .is_some_and(|prefix| prefix[0] == "how" && prefix[1] == "many")
+        && reference_only(&words[2..]);
+    let list_request = words
+        .first()
+        .is_some_and(|verb| matches!(verb.as_str(), "list" | "name" | "identify"))
+        && reference_only(&words[1..]);
+    count_request || list_request
+}
+
 fn has_unsupported_structured_modifier(question: &str) -> bool {
     let words = normalized_words(question);
     words.iter().any(|word| {
@@ -494,6 +527,23 @@ mod tests {
             predetermined_route("How many NPCs were alive last year?"),
             Some(PredeterminedRoute::UnsupportedStructuredRequest)
         );
+        for question in [
+            "List them.",
+            "Name those.",
+            "Identify these.",
+            "List all of them.",
+            "How many are there?",
+            "How many of them?",
+        ] {
+            assert_eq!(
+                predetermined_route(question),
+                Some(PredeterminedRoute::UnresolvedCollectionReference),
+                "{question}"
+            );
+        }
+        for question in ["List the characters.", "How many NPCs are there?"] {
+            assert_eq!(predetermined_route(question), None, "{question}");
+        }
         assert_eq!(
             predetermined_route("Why did the rebellion not succeed?"),
             None

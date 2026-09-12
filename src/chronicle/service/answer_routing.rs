@@ -132,6 +132,10 @@ fn predetermined_route(question: &str, started: Instant) -> Option<RouteSelectio
             emit_route_selection(RouteOperation::Clarify, "routed", "classifier", started);
             Some(RouteSelection::predetermined(AnswerRoute::EmptyQuestion))
         }
+        planner::PredeterminedRoute::UnresolvedCollectionReference => {
+            emit_route_selection(RouteOperation::Clarify, "routed", "classifier", started);
+            Some(RouteSelection::predetermined(AnswerRoute::Clarification))
+        }
         planner::PredeterminedRoute::UnsupportedStructuredRequest => {
             debug!(
                 question_len = question.chars().count(),

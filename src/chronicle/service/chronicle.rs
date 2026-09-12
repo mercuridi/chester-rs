@@ -1121,10 +1121,16 @@ mod tests {
                 .map_err(|_| anyhow!("prompts poisoned"))?[0]
                 .contains("planner did not produce a valid plan")
         );
+        let classifier_calls_before_clarification = mutex_value(&llm.plan_calls)?;
         *llm.plan_output
             .lock()
             .map_err(|_| anyhow!("plan poisoned"))? = r#"{"operation":"clarify"}"#.into();
         assert!(chronicle.ask("List them").await?.starts_with("Please name"));
+        assert_eq!(
+            mutex_value(&llm.plan_calls)?,
+            classifier_calls_before_clarification,
+            "unresolved references must clarify before classifier inference"
+        );
         assert_eq!(
             retriever
                 .calls
