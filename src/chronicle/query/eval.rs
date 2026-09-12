@@ -10,7 +10,7 @@ use crate::chronicle::{
         db::repository::facade::{AccessScope, IndexerDb, StructuredResult},
         scanner,
     },
-    llm::{Llm, STRUCTURED_PLAN_OUTPUT_TOKENS},
+    llm::{Llm, ROUTE_CLASSIFIER_OUTPUT_TOKENS, STRUCTURED_PLAN_OUTPUT_TOKENS},
     runtime::GpuRuntime,
 };
 use anyhow::{Context, Result, ensure};
@@ -107,7 +107,7 @@ impl PlannerRuntimeSettings {
             tokenizer_file: settings.tokenizer.file.clone(),
             context_limit: settings.generation.context_limit,
             planner_output_budget: STRUCTURED_PLAN_OUTPUT_TOKENS,
-            classifier_output_budget: 32,
+            classifier_output_budget: ROUTE_CLASSIFIER_OUTPUT_TOKENS,
             inject_full_taxonomy: settings.generation.inject_full_taxonomy,
             temperature: settings.generation.temperature,
             seed: settings.generation.seed,

@@ -20,6 +20,7 @@ use tracing::{info, instrument};
 /// Structured plans are intentionally short JSON objects, so reserve less
 /// completion space than a normal Chronicle answer.
 pub const STRUCTURED_PLAN_OUTPUT_TOKENS: usize = 256;
+pub const ROUTE_CLASSIFIER_OUTPUT_TOKENS: usize = 32;
 
 #[async_trait::async_trait]
 pub trait LanguageModel: Send + Sync {
@@ -189,6 +190,8 @@ impl Llm {
             prompt,
             self.max_tokens,
             self.temperature,
+            "answer",
+            "none",
         )
         .await
     }
@@ -197,8 +200,10 @@ impl Llm {
         self.generate_with_system(
             crate::chronicle::query::classifier::system_prompt(),
             question,
-            32,
+            ROUTE_CLASSIFIER_OUTPUT_TOKENS,
             0.0,
+            "route_classifier",
+            "none",
         )
         .await
     }
@@ -208,12 +213,20 @@ impl Llm {
         question: &str,
         operation: StructuredOperation,
     ) -> Result<String> {
+        let taxonomy_mode = self.taxonomy_mode();
         let system = crate::chronicle::query::planner::structured_system_prompt_with_taxonomy(
             operation,
             self.config_inject_full_taxonomy(),
         );
-        self.generate_with_system(&system, question, STRUCTURED_PLAN_OUTPUT_TOKENS, 0.0)
-            .await
+        self.generate_with_system(
+            &system,
+            question,
+            STRUCTURED_PLAN_OUTPUT_TOKENS,
+            0.0,
+            "structured_plan",
+            taxonomy_mode,
+        )
+        .await
     }
 
     pub async fn repair_structured_plan(
@@ -223,17 +236,33 @@ impl Llm {
         rejected_response: &str,
         rejection_error: &str,
     ) -> Result<String> {
+        let taxonomy_mode = self.taxonomy_mode();
         let system = crate::chronicle::query::planner::structured_system_prompt_with_taxonomy(
             operation,
             self.config_inject_full_taxonomy(),
         );
         let prompt = build_repair_prompt(question, operation, rejected_response, rejection_error);
-        self.generate_with_system(&system, &prompt, STRUCTURED_PLAN_OUTPUT_TOKENS, 0.0)
-            .await
+        self.generate_with_system(
+            &system,
+            &prompt,
+            STRUCTURED_PLAN_OUTPUT_TOKENS,
+            0.0,
+            "structured_plan_repair",
+            taxonomy_mode,
+        )
+        .await
     }
 
     fn config_inject_full_taxonomy(&self) -> bool {
         self.inject_full_taxonomy
+    }
+
+    fn taxonomy_mode(&self) -> &'static str {
+        if self.inject_full_taxonomy {
+            "typed"
+        } else {
+            "compact"
+        }
     }
 
     async fn generate_with_system(
@@ -242,6 +271,8 @@ impl Llm {
         prompt: &str,
         max_tokens: usize,
         temperature: f64,
+        request_kind: &'static str,
+        taxonomy_mode: &'static str,
     ) -> Result<String> {
         let model = Arc::clone(&self.model);
         let user_prompt = format_chat_prompt(system, prompt);
@@ -266,6 +297,16 @@ impl Llm {
                 .encode(user_prompt, true)
                 .map_err(|error| anyhow!("Failed to tokenize LLM prompt: {error}"))?;
             let prompt_tokens = encoded.get_ids();
+
+            tracing::info!(
+                request_kind,
+                taxonomy_mode,
+                input_tokens = prompt_tokens.len(),
+                output_token_budget = max_tokens,
+                context_limit,
+                input_token_budget = context_limit.saturating_sub(max_tokens),
+                "LLM inference input tokenized"
+            );
 
             if prompt_tokens.is_empty() {
                 bail!("LLM tokenizer produced an empty prompt");

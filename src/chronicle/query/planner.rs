@@ -54,11 +54,37 @@ pub fn structured_system_prompt_with_taxonomy(
                 .join("; "),
         )
     } else {
-        "Full taxonomy injection is disabled for this run. Use only fields and note types explicitly demonstrated in these instructions; do not invent schema fields.".into()
+        compact_schema_index()
     };
     format!(
         "{STRUCTURED_SYSTEM}\n\nThe route classifier has already selected `{operation:?}`. Construct only that operation. {output_shape}\n{taxonomy}",
     )
+}
+
+/// The low-memory taxonomy form used before typed schema injection was added.
+/// It preserves every field name and its note-type applicability without
+/// spending context on value types and enum vocabularies.
+fn compact_schema_index() -> String {
+    let universal = schema::UNIVERSAL_FIELD_DEFINITIONS
+        .iter()
+        .map(|field| field.name)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let per_type = schema::DOCUMENT_TYPE_DEFINITIONS
+        .iter()
+        .filter(|definition| definition.name != "template")
+        .map(|definition| {
+            let fields = definition
+                .fields
+                .iter()
+                .map(|field| field.name)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}: {fields}", definition.name)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("Declared universal fields: {universal}.\nDeclared type fields: {per_type}.")
 }
 
 fn typed_fields(fields: &[schema::FieldDefinition]) -> String {
@@ -531,11 +557,16 @@ mod tests {
     }
 
     #[test]
-    fn structured_prompt_can_disable_full_taxonomy_injection() {
-        let prompt = structured_system_prompt_with_taxonomy(StructuredOperation::Count, false);
-        assert!(prompt.contains("Full taxonomy injection is disabled"));
-        assert!(!prompt.contains("Typed fields by note type:"));
-        assert!(prompt.contains("role"));
+    fn structured_prompt_uses_compact_schema_when_typed_taxonomy_is_disabled() {
+        let compact = structured_system_prompt_with_taxonomy(StructuredOperation::Count, false);
+        let typed = structured_system_prompt(StructuredOperation::Count);
+        assert!(compact.contains("Declared universal fields:"));
+        assert!(compact.contains("political_affiliations"));
+        assert!(compact.contains("patron_deities"));
+        assert!(compact.contains("sizes"));
+        assert!(!compact.contains("Typed fields by note type:"));
+        assert!(!compact.contains("political_affiliations: wikilink list"));
+        assert!(compact.len() < typed.len());
     }
 
     #[test]

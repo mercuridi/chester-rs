@@ -145,7 +145,9 @@ file = "tokenizer.json"
 [chronicle.llm.generation]
 max_tokens = 512
 context_limit = 8192
-# Set false to omit the full typed taxonomy from structured planner prompts.
+# Set false to use the compact names-only schema index instead of the full typed
+# taxonomy in planner prompts. This saves context and VRAM while retaining every
+# allowed field name and its note-type applicability.
 inject_full_taxonomy = true
 temperature = 0.2
 seed = 42
