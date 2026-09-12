@@ -475,7 +475,7 @@ mod tests {
                 let base = args
                     .iter()
                     .find(|arg| arg.contains("%(ext)s"))
-                    .expect("output path was found above")
+                    .ok_or_else(|| anyhow!("download output path argument missing"))?
                     .replace(".%(ext)s", "");
                 std::fs::write(
                     format!("{base}.info.json"),

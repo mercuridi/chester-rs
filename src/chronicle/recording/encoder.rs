@@ -38,18 +38,22 @@ impl EncoderWakeup {
 
     pub fn notify(&self) {
         let (lock, notify) = &*self.state;
-        let mut signaled = lock.lock().expect("encoder wakeup mutex poisoned");
+        let mut signaled = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *signaled = true;
         notify.notify_one();
     }
 
     fn wait(&self) {
         let (lock, notify) = &*self.state;
-        let mut signaled = lock.lock().expect("encoder wakeup mutex poisoned");
+        let mut signaled = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         while !*signaled {
             signaled = notify
                 .wait(signaled)
-                .expect("encoder wakeup mutex poisoned");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         *signaled = false;
     }
@@ -60,7 +64,7 @@ pub fn run_encoder(
     path: &Path,
     consumer: Consumer<RecordedFrame>,
     stop_rx: oneshot::Receiver<u64>,
-    wakeup: EncoderWakeup,
+    wakeup: &EncoderWakeup,
     initial_silence_ticks: u64,
 ) -> Result<(), Error> {
     let file = File::create(path)?;
@@ -133,7 +137,7 @@ fn drain_recording_frames(
     user_id: UserId,
     mut consumer: Consumer<RecordedFrame>,
     mut stop_rx: oneshot::Receiver<u64>,
-    wakeup: EncoderWakeup,
+    wakeup: &EncoderWakeup,
     initial_silence_ticks: u64,
     state: &mut EncoderState,
     ogg: &mut PacketWriter<impl std::io::Write>,
@@ -365,7 +369,7 @@ mod tests {
         stop_tx
             .send(final_tick)
             .map_err(|tick| anyhow::anyhow!("failed to send final tick {tick}"))?;
-        run_encoder(UserId::new(1), &path, consumer, stop_rx, wakeup, 0)
+        run_encoder(UserId::new(1), &path, consumer, stop_rx, &wakeup, 0)
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
 
         let mut packets = PacketReader::new(BufReader::new(File::open(path)?));
@@ -429,7 +433,7 @@ mod tests {
                 &encoder_path,
                 consumer,
                 stop_rx,
-                encoder_wakeup,
+                &encoder_wakeup,
                 0,
             )
         });
@@ -490,7 +494,7 @@ mod tests {
         let wakeup = EncoderWakeup::new();
         let encoder_wakeup = wakeup.clone();
         let handle = thread::spawn(move || {
-            run_encoder(UserId::new(1), &path, consumer, stop_rx, encoder_wakeup, 0)
+            run_encoder(UserId::new(1), &path, consumer, stop_rx, &encoder_wakeup, 0)
         });
 
         thread::sleep(Duration::from_millis(20));

@@ -300,9 +300,16 @@ async fn evaluate(case: Case, db: &IndexerDb, llm: Option<&Llm>) -> Result<CaseR
 
 fn accept_predetermined_route(report: &mut CaseReport, route: PredeterminedRoute) {
     let operation = route.operation();
-    let plan = plan_for_operation(operation)
-        .expect("predetermined routes must map to a non-structured plan");
     report.route_correct = Some(operation == report.expected_operation);
+
+    let Some(plan) = plan_for_operation(operation) else {
+        report.classifier_error = Some(format!(
+            "predetermined route mapped to structured operation {operation:?}"
+        ));
+        report.end_to_end_correct = Some(false);
+        return;
+    };
+
     report.end_to_end_correct = Some(plan == report.case.plan);
     report.actual_plan = Some(plan);
 }

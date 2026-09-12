@@ -844,7 +844,7 @@ impl Recorder {
                 &encoder_path,
                 consumer,
                 stop_rx,
-                encoder_wakeup,
+                &encoder_wakeup,
                 initial_silence_ticks,
             )
         });
