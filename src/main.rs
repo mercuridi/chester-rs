@@ -593,7 +593,7 @@ fn load_bot_startup(paths: AppPaths) -> Result<(Config, String)> {
 }
 
 async fn initialize_bot_services(config: &Config) -> Result<(SqlitePool, Arc<Chronicle>)> {
-    let pool = database::pool::open_sqlite_pool(&config.database.jester, "Jester")
+    let pool = database::open_sqlite_pool(&config.database.jester, "Jester")
         .await
         .context("Failed to open the Jester database")?;
     jester::db::schema::initialise(&pool)

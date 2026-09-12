@@ -25,7 +25,7 @@ mod tests {
     async fn schema_file_creates_the_complete_index() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
         crate::chronicle::indexer::db::register_sqlite_vec();
-        let pool = crate::database::pool::open_sqlite_pool(
+        let pool = crate::database::open_sqlite_pool(
             &format!(
                 "sqlite://{}",
                 directory.path().join("index.sqlite3").display()

@@ -1,6 +1,7 @@
+use std::{path::Path, str::FromStr};
+
 use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
-use std::{path::Path, str::FromStr};
 
 pub async fn open_sqlite_pool(database_url: &str, database_name: &str) -> Result<SqlitePool> {
     let options = SqliteConnectOptions::from_str(database_url)

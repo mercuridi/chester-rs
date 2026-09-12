@@ -530,7 +530,7 @@ mod tests {
     async fn test_pool() -> TestResult<(tempfile::TempDir, SqlitePool)> {
         let directory = tempdir()?;
         let database_url = format!("sqlite://{}", directory.path().join("jester.db").display());
-        let pool = crate::database::pool::open_sqlite_pool(&database_url, "test").await?;
+        let pool = crate::database::open_sqlite_pool(&database_url, "test").await?;
         crate::jester::db::schema::initialise(&pool).await?;
         Ok((directory, pool))
     }

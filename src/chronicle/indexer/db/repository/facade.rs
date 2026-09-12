@@ -83,7 +83,7 @@ impl IndexerDb {
     pub async fn open(path: &str) -> Result<Self> {
         register_sqlite_vec();
         let database_url = versioned_database_url(path);
-        let pool = crate::database::pool::open_sqlite_pool(&database_url, "Chronicle").await?;
+        let pool = crate::database::open_sqlite_pool(&database_url, "Chronicle").await?;
         initialise(&pool).await?;
         Ok(Self { pool })
     }

@@ -536,7 +536,7 @@ mod tests {
     async fn concurrent_track_registration_is_idempotent_and_preserves_audio() -> Result<()> {
         let dir = tempdir()?;
         let database_url = format!("sqlite://{}", dir.path().join("jester.db").display());
-        let pool = crate::database::pool::open_sqlite_pool(&database_url, "test").await?;
+        let pool = crate::database::open_sqlite_pool(&database_url, "test").await?;
         crate::jester::db::schema::initialise(&pool).await?;
 
         let executor = Arc::new(FakeExecutor {
@@ -585,7 +585,7 @@ mod tests {
     async fn existing_audio_can_be_registered_by_a_fresh_downloader() -> Result<()> {
         let dir = tempdir()?;
         let database_url = format!("sqlite://{}", dir.path().join("jester.db").display());
-        let pool = crate::database::pool::open_sqlite_pool(&database_url, "test").await?;
+        let pool = crate::database::open_sqlite_pool(&database_url, "test").await?;
         crate::jester::db::schema::initialise(&pool).await?;
         let executor = Arc::new(FakeExecutor {
             calls: Mutex::new(0),
