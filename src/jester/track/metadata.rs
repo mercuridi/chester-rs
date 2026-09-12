@@ -1,9 +1,10 @@
-use anyhow::{Context, Result};
-use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
 };
+
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
 
 pub fn metadata_sidecar_path(audio_dir: &Path, file_id: &str) -> PathBuf {
     audio_dir.join(format!("{file_id}.metadata.json"))

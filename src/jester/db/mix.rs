@@ -1,6 +1,6 @@
-use anyhow::{Context, Result, anyhow};
 use std::fmt::Write as _;
 
+use anyhow::{Context, Result, anyhow};
 use sqlx::SqlitePool;
 
 use crate::jester::{

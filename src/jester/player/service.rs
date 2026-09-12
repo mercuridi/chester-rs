@@ -1,4 +1,3 @@
-use anyhow::{Result, anyhow};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -8,6 +7,7 @@ use std::{
     },
 };
 
+use anyhow::{Result, anyhow};
 use poise::serenity_prelude::GuildId;
 use songbird::{
     Call, Event, EventContext, EventHandler, TrackEvent,
