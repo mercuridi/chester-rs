@@ -42,7 +42,7 @@ impl PreparedDocument {
         chunk_overlap_tokens: usize,
     ) -> Result<Vec<Chunk>> {
         let mut chunks =
-            chunker::chunk::chunk(document, tokenizer, max_chunk_tokens, chunk_overlap_tokens)?;
+            chunker::chunk(document, tokenizer, max_chunk_tokens, chunk_overlap_tokens)?;
         let primary_visibility = if document.metadata.visibility == "secret" {
             ChunkVisibility::Secret
         } else {
@@ -56,7 +56,7 @@ impl PreparedDocument {
             secret_document.content.clone_from(secret_content);
             secret_document.secret_content.clear();
             let offset = chunks.len();
-            let mut secret_chunks = chunker::chunk::chunk(
+            let mut secret_chunks = chunker::chunk(
                 &secret_document,
                 tokenizer,
                 max_chunk_tokens,

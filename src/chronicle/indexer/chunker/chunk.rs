@@ -1,12 +1,12 @@
 use anyhow::{Result, anyhow};
 use tokenizers::Tokenizer;
 
-use super::super::document::{Chunk, ChunkVisibility, Document};
 use super::markdown::parse_blocks;
 use super::overlap::apply_overlap;
 use super::split::split_block;
 use super::tokenizer::encoded_len;
 use super::types::{BlockKind, PlannedChunk};
+use crate::chronicle::indexer::document::{Chunk, ChunkVisibility, Document};
 
 /// Split Markdown into token-bounded chunks while retaining the original source text.
 pub fn chunk(
