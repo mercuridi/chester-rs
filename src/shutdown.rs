@@ -11,7 +11,7 @@ use sqlx::SqlitePool;
 
 use crate::{
     chronicle::transcription::service::TranscriptionService,
-    chronicle::{recording::recorder::RecorderManager, service::Chronicle},
+    chronicle::{recording::RecorderManager, service::Chronicle},
     jester::player::service::PlayerService,
 };
 

@@ -11,7 +11,7 @@ use crate::{
     chronicle::transcription::constants::TRANSCRIPT_PAGE_LIMIT,
     chronicle::{
         config::{AliasGroup, Config},
-        recording::recorder::{
+        recording::{
             RecordingManifest, SessionId, notify_recording_user, resolve_finalized_recordings,
             resolve_session_directory,
         },
@@ -911,7 +911,7 @@ mod tests {
     };
     use crate::chronicle::{
         config::AliasGroup,
-        recording::recorder::{ManifestStatus, RecordingManifest, SceneEvent, SessionId},
+        recording::{ManifestStatus, RecordingManifest, SceneEvent, SessionId},
         transcription::{
             constants::TRANSCRIPT_PAGE_LIMIT, service::TranscribedSegment,
             transcript::TranscriptEntry,

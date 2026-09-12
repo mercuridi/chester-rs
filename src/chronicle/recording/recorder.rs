@@ -23,16 +23,11 @@ use tokio::{
     sync::{Mutex, mpsc, oneshot},
     task::JoinHandle,
 };
-
-use crate::{
-    chronicle::atomic_write::write_atomic,
-    chronicle::recording::constants::{
-        RING_BUFFER_CAPACITY, RecordedFrame, SILENCE_FRAME, STEREO_FRAME_SAMPLES,
-    },
-    chronicle::recording::encoder::{EncoderWakeup, run_encoder},
-    discord::context::Error,
-};
 use tracing::{debug, info, instrument, warn};
+
+use super::constants::{RING_BUFFER_CAPACITY, RecordedFrame, SILENCE_FRAME, STEREO_FRAME_SAMPLES};
+use super::encoder::{EncoderWakeup, run_encoder};
+use crate::{chronicle::atomic_write::write_atomic, discord::context::Error};
 
 pub trait Clock: Send + Sync {
     fn now(&self) -> DateTime<Local>;

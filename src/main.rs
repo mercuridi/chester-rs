@@ -24,7 +24,7 @@ use crate::{
         indexer::retriever::Retriever,
         indexer::{db::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,
-        recording::recorder::{notify_recording_user, scan_incomplete_manifests},
+        recording::{notify_recording_user, scan_incomplete_manifests},
         runtime::{GpuRuntime, report_cuda_oom},
         service::{Chronicle, ChronicleDependencies},
         transcription::service::TranscriptionService,
@@ -659,9 +659,8 @@ async fn run_discord_client(
     let songbird_config =
         SongbirdConfig::default().decode_mode(DecodeMode::Decode(DecodeConfig::default()));
     let songbird = songbird::Songbird::serenity_from_config(songbird_config.clone());
-    let recorder = crate::chronicle::recording::recorder::RecorderManager::new(
-        config.paths.recordings_dir.clone(),
-    );
+    let recorder =
+        crate::chronicle::recording::RecorderManager::new(config.paths.recordings_dir.clone());
     let player = Arc::new(jester::player::service::PlayerService::new(
         config.paths.audio_dir.clone(),
     ));

@@ -1,9 +1,7 @@
 use chrono::NaiveDateTime;
 use poise::serenity_prelude::AutocompleteChoice;
 
-use crate::chronicle::recording::recorder::{
-    RecordingManifest, SessionId, resolve_session_directory,
-};
+use crate::chronicle::recording::{RecordingManifest, SessionId, resolve_session_directory};
 use crate::discord::constants::{AUTOCOMPLETE_MAX_CHOICES, AUTOCOMPLETE_MAX_LENGTH};
 use crate::discord::context::PoiseContext;
 use crate::discord::voice::require_guild;

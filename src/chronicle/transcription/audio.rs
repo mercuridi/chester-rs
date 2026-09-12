@@ -5,7 +5,7 @@ use std::{
     path::Path,
 };
 
-use crate::chronicle::recording::constants::OPUS_SAMPLE_RATE;
+use crate::chronicle::recording::OPUS_SAMPLE_RATE;
 use anyhow::{Result, anyhow};
 use ogg::PacketReader;
 use opus::{Channels, Decoder as OpusDecoder};

@@ -10,14 +10,11 @@ use rtrb::Consumer;
 use serenity::all::UserId;
 use tokio::sync::oneshot;
 
-use crate::{
-    chronicle::recording::constants::RecordedFrame,
-    chronicle::recording::constants::{
-        MAX_OPUS_PACKET_SIZE, MONO_FRAME_SAMPLES, OPUS_SAMPLE_RATE, PCM_CHANNELS,
-        STEREO_FRAME_SAMPLES,
-    },
-    discord::context::Error,
+use super::constants::{
+    MAX_OPUS_PACKET_SIZE, MONO_FRAME_SAMPLES, OPUS_SAMPLE_RATE, PCM_CHANNELS, RecordedFrame,
+    STEREO_FRAME_SAMPLES,
 };
+use crate::discord::context::Error;
 
 struct EncoderState {
     opus: OpusEncoder,
