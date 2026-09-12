@@ -479,9 +479,9 @@ pub async fn ask(
     ctx.defer().await?;
 
     let access = if ctx.data().config.is_chronicle_gm(ctx.author().id) {
-        crate::chronicle::indexer::db::repository::facade::AccessScope::Gm
+        crate::chronicle::indexer::db::AccessScope::Gm
     } else {
-        crate::chronicle::indexer::db::repository::facade::AccessScope::Player
+        crate::chronicle::indexer::db::AccessScope::Player
     };
     let access_scope = if access.is_gm() { "gm" } else { "player" };
     let elapsed_ms = || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);

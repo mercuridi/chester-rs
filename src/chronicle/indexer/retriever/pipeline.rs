@@ -7,7 +7,7 @@ use super::{
     selection::apply_selection_constraints,
     settings::SearchSettings,
 };
-use crate::chronicle::indexer::db::repository::facade::{PageRankSignal, SearchResult};
+use crate::chronicle::indexer::db::{PageRankSignal, SearchResult};
 
 /// The production selection pipeline, also used by offline evaluation. Diagnostics
 /// contain identities and scores only and are never part of `SearchResult` or prompts.

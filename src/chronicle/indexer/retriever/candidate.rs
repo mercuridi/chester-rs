@@ -1,5 +1,5 @@
 use super::diagnostics::CandidateDiagnostic;
-use crate::chronicle::indexer::db::repository::facade::{PageRankSignal, SearchResult};
+use crate::chronicle::indexer::db::{PageRankSignal, SearchResult};
 
 pub(super) type CandidateKey = (String, i64);
 

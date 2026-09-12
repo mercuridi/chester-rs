@@ -11,7 +11,7 @@ use super::{
     settings::SearchSettings,
 };
 use crate::chronicle::indexer::{
-    db::repository::facade::{AccessScope, IndexerDb},
+    db::{AccessScope, IndexerDb},
     embedder::Embedder,
 };
 

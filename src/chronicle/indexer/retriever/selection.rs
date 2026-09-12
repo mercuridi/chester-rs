@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{candidate::RankedCandidate, settings::SelectionPolicy};
-use crate::chronicle::indexer::db::repository::facade::SearchResult;
+use crate::chronicle::indexer::db::SearchResult;
 
 pub(super) fn apply_selection_constraints(
     candidates: &mut [RankedCandidate],

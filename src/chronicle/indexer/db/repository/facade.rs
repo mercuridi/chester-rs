@@ -4,9 +4,12 @@
 //! structured-metadata work can evolve independently while callers keep using
 //! `IndexerDb`.
 
+use std::path::Path;
+
 use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
-use std::path::Path;
+
+use crate::chronicle::indexer::db::schema::{INDEX_FORMAT_VERSION, initialise};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -81,7 +84,7 @@ impl IndexerDb {
         register_sqlite_vec();
         let database_url = versioned_database_url(path);
         let pool = crate::database::pool::open_sqlite_pool(&database_url, "Chronicle").await?;
-        super::super::schema::initialise(&pool).await?;
+        initialise(&pool).await?;
         Ok(Self { pool })
     }
 }
@@ -104,7 +107,7 @@ pub fn versioned_database_url(database_url: &str) -> String {
     let filename = format!(
         "{}.index-v{}.{}",
         stem.to_string_lossy(),
-        super::super::schema::INDEX_FORMAT_VERSION,
+        INDEX_FORMAT_VERSION,
         extension.to_string_lossy()
     );
     let versioned_path = path.with_file_name(filename);

@@ -13,13 +13,13 @@ use tracing::{debug, info, instrument, warn};
 
 use super::{
     chunker,
-    db::repository::facade::{IndexedChunk, IndexedDocument, IndexerDb},
+    db::{IndexedChunk, IndexedDocument, IndexerDb},
     embedder::{Embedder, EmbeddingModel},
     link_resolver, scanner,
 };
 
 #[cfg(test)]
-use super::db::repository::facade::AccessScope;
+use super::db::AccessScope;
 
 const EMBEDDING_BATCH_SIZE: usize = 16;
 const PREPARATION_BATCH_DOCUMENTS: usize = 8;

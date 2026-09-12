@@ -3,7 +3,7 @@ use std::time::Instant;
 use tracing::{debug, info};
 
 use super::super::{
-    indexer::db::repository::facade::AccessScope,
+    indexer::db::AccessScope,
     llm::LanguageModel,
     query::{
         classifier,

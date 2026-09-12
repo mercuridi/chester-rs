@@ -1,10 +1,11 @@
 // Document indexing, replacement, synchronization, and metadata persistence.
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use sqlx::Row;
-use std::path::Path;
 
-use super::facade::{IndexedChunk, IndexedDocument, IndexerDb};
+use super::{IndexedChunk, IndexedDocument, IndexerDb};
 
 impl IndexerDb {
     pub async fn all_documents(&self) -> Result<Vec<IndexedDocument>> {

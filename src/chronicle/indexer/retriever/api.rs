@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::settings::SearchSettings;
-use crate::chronicle::indexer::db::repository::facade::{AccessScope, SearchResult};
+use crate::chronicle::indexer::db::{AccessScope, SearchResult};
 
 #[async_trait::async_trait]
 pub trait RetrieverApi: Send + Sync {

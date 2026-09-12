@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use sqlx::Row;
 
-use super::facade::{AccessScope, IndexerDb, SearchResult};
+use super::{AccessScope, IndexerDb, SearchResult};
 
 impl IndexerDb {
     pub async fn search_lexical_for(

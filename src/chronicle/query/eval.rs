@@ -7,7 +7,7 @@ use super::{
 use crate::chronicle::{
     config::Config,
     indexer::{
-        db::repository::facade::{AccessScope, IndexerDb, StructuredResult},
+        db::{AccessScope, IndexerDb, StructuredResult},
         scanner,
     },
     llm::{Llm, ROUTE_CLASSIFIER_OUTPUT_TOKENS, STRUCTURED_PLAN_OUTPUT_TOKENS},

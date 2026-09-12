@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 use sqlx::{QueryBuilder, Row, Sqlite};
 
-use super::facade::{AccessScope, IndexerDb, StructuredNote, StructuredResult};
+use super::{AccessScope, IndexerDb, StructuredNote, StructuredResult};
 
 impl IndexerDb {
     pub async fn execute_plan_for(

@@ -2,7 +2,7 @@
 use anyhow::{Context, Result, bail};
 use sqlx::{QueryBuilder, Row, Sqlite};
 
-use super::facade::{AccessScope, GraphStats, IndexerDb, PageRankSignal, PageRankStats};
+use super::{AccessScope, GraphStats, IndexerDb, PageRankSignal, PageRankStats};
 
 const GRAPH_STATE_KEY: &str = "document-graph-input-v1";
 

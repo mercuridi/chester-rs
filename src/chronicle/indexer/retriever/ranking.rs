@@ -4,7 +4,7 @@ use super::{
     candidate::RankedCandidate,
     settings::{CandidatePoolPolicy, FusionPolicy},
 };
-use crate::chronicle::indexer::db::repository::facade::{PageRankSignal, SearchResult};
+use crate::chronicle::indexer::db::{PageRankSignal, SearchResult};
 
 pub(super) fn build_ranked_candidates(
     vector: Vec<SearchResult>,

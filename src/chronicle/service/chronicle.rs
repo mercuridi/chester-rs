@@ -11,7 +11,7 @@ use tracing::{debug, info, instrument};
 use crate::chronicle::{
     config::{GenerationSettings, RetrievalSettings, SynthesisSettings},
     indexer::{
-        db::repository::facade::{AccessScope, IndexerDb, SearchResult, StructuredResult},
+        db::{AccessScope, IndexerDb, SearchResult, StructuredResult},
         retriever::api::RetrieverApi,
     },
     llm::LanguageModel,
@@ -541,7 +541,7 @@ mod tests {
     };
     use crate::chronicle::{
         indexer::{
-            db::repository::facade::{AccessScope, IndexerDb, SearchResult, StructuredResult},
+            db::{AccessScope, IndexerDb, SearchResult, StructuredResult},
             retriever::{
                 api::{RetrievalOutcome, RetrieverApi},
                 settings::SearchSettings,
@@ -582,7 +582,7 @@ mod tests {
     struct FakeRetriever {
         outcome: FakeOutcome,
         calls: Mutex<Vec<(String, usize, usize, f32, f32, usize)>>,
-        accesses: Mutex<Vec<crate::chronicle::indexer::db::repository::facade::AccessScope>>,
+        accesses: Mutex<Vec<crate::chronicle::indexer::db::AccessScope>>,
         embedder_loaded: Mutex<bool>,
         loads: Mutex<usize>,
         unloads: Mutex<usize>,
@@ -653,7 +653,7 @@ mod tests {
             &self,
             query: &str,
             settings: SearchSettings,
-            _access: crate::chronicle::indexer::db::repository::facade::AccessScope,
+            _access: crate::chronicle::indexer::db::AccessScope,
         ) -> Result<RetrievalOutcome> {
             self.calls
                 .lock()
@@ -1355,7 +1355,7 @@ mod tests {
             chronicle
                 .ask_for(
                     "Summarise the history of Northmere.",
-                    crate::chronicle::indexer::db::repository::facade::AccessScope::Gm,
+                    crate::chronicle::indexer::db::AccessScope::Gm,
                 )
                 .await?,
             "answer"
@@ -1366,7 +1366,7 @@ mod tests {
                 .lock()
                 .map_err(|_| anyhow!("accesses poisoned"))?
                 .as_slice(),
-            &[crate::chronicle::indexer::db::repository::facade::AccessScope::Gm]
+            &[crate::chronicle::indexer::db::AccessScope::Gm]
         );
         Ok(())
     }
@@ -1624,10 +1624,7 @@ mod tests {
         let (chronicle, retriever, _) = service(FakeOutcome::Results, ["answer"], 100)?;
         assert_eq!(
             chronicle
-                .ask_for(
-                    "question",
-                    crate::chronicle::indexer::db::repository::facade::AccessScope::Gm,
-                )
+                .ask_for("question", crate::chronicle::indexer::db::AccessScope::Gm,)
                 .await?,
             "answer"
         );
@@ -1637,7 +1634,7 @@ mod tests {
                 .lock()
                 .map_err(|_| anyhow!("accesses poisoned"))?
                 .as_slice(),
-            &[crate::chronicle::indexer::db::repository::facade::AccessScope::Gm]
+            &[crate::chronicle::indexer::db::AccessScope::Gm]
         );
         Ok(())
     }

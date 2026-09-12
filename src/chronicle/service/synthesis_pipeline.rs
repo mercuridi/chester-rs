@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::chronicle::{
     config::{RetrievalSettings, SynthesisSettings},
     indexer::{
-        db::repository::facade::{AccessScope, SearchResult},
+        db::{AccessScope, SearchResult},
         retriever::api::{RetrievalOutcome, RetrieverApi},
     },
 };

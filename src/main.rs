@@ -22,7 +22,7 @@ use crate::{
     chronicle::{
         config::{AppPaths, Config},
         indexer::retriever::runtime::Retriever,
-        indexer::{db::repository::facade::IndexerDb, embedder::Embedder, service::Indexer},
+        indexer::{db::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,
         recording::recorder::{notify_recording_user, scan_incomplete_manifests},
         runtime::{GpuRuntime, report_cuda_oom},

@@ -1,10 +1,7 @@
 //! Model-backed bounded-synthesis evaluation with deterministic rubric scoring.
 use crate::chronicle::{
     config::Config,
-    indexer::{
-        db::repository::facade::IndexerDb, embedder::Embedder, retriever::runtime::Retriever,
-        service::Indexer,
-    },
+    indexer::{db::IndexerDb, embedder::Embedder, retriever::runtime::Retriever, service::Indexer},
     llm::{LanguageModel, Llm},
     query::plan::RouteOperation,
     runtime::GpuRuntime,

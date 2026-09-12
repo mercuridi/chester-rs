@@ -5,7 +5,7 @@ use super::answer_routing::RetrievalMode;
 use crate::chronicle::{
     config::{GenerationSettings, RetrievalSettings},
     indexer::{
-        db::repository::facade::AccessScope,
+        db::AccessScope,
         prompt,
         retriever::api::{RetrievalOutcome, RetrieverApi},
     },

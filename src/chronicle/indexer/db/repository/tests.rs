@@ -1,13 +1,15 @@
-use anyhow::{Context, Result};
-use sqlx::Row;
 use std::{collections::HashSet, fs, path::Path};
 
-use super::facade::{versioned_database_url, *};
+use anyhow::{Context, Result};
+use sqlx::Row;
+use tempfile::tempdir;
+
 use crate::chronicle::indexer::link_resolver::{
     self, LinkOrigin, LinkResolution, LinkVisibility, ResolvedLink,
 };
 use crate::chronicle::indexer::scanner::{self, DocumentCandidate};
-use tempfile::tempdir;
+
+use super::{AccessScope, IndexedChunk, IndexerDb, versioned_database_url};
 
 fn embedding(value: f32) -> Vec<f32> {
     vec![value; crate::chronicle::indexer::embedder::EMBEDDING_DIMENSIONS]
@@ -60,7 +62,7 @@ fn versioned_database_filename_selects_the_current_index_format() {
         versioned_database_url("sqlite:///data/chronicle.sqlite3?mode=rwc"),
         format!(
             "sqlite:///data/chronicle.index-v{}.sqlite3?mode=rwc",
-            super::super::schema::INDEX_FORMAT_VERSION
+            crate::chronicle::indexer::db::schema::INDEX_FORMAT_VERSION
         )
     );
     assert_eq!(
