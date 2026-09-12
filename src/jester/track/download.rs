@@ -157,9 +157,7 @@ impl Downloader {
                 .get(&id)
                 .cloned()
                 .flatten();
-            let metadata = if !include_metadata {
-                cached_metadata
-            } else if cached_metadata.is_some() {
+            let metadata = if !include_metadata || cached_metadata.is_some() {
                 cached_metadata
             } else if tokio::fs::try_exists(metadata_sidecar_path(
                 &self.config.audio_dir,
