@@ -8,7 +8,7 @@ use crate::{
     },
     jester::{
         db::{MIX_LIMIT, MixFilter, fetch_mix_tracks, parse_filter},
-        player::queue::{HistoryOutcome, RepeatMode},
+        player::{HistoryOutcome, RepeatMode},
         track::resolver::resolve_track,
     },
     utils::format::lightweight_trim,

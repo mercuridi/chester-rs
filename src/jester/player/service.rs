@@ -18,12 +18,10 @@ use songbird::{
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
-use crate::jester::{
-    player::queue::{
-        GuildQueue, HistoryEntry, PlaybackItem, QueueEntry, QueueTransition, RepeatMode,
-    },
-    track::types::TrackInfo,
+use super::queue::{
+    GuildQueue, HistoryEntry, PlaybackItem, QueueEntry, QueueTransition, RepeatMode,
 };
+use crate::jester::track::types::TrackInfo;
 
 struct ActivePlayback {
     id: u64,
@@ -448,7 +446,7 @@ mod tests {
                 .history(guild_id)
                 .await
                 .iter()
-                .any(|entry| entry.outcome == crate::jester::player::queue::HistoryOutcome::Failed)
+                .any(|entry| entry.outcome == crate::jester::player::HistoryOutcome::Failed)
         );
     }
 

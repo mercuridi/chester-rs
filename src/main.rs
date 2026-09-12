@@ -653,7 +653,7 @@ async fn run_discord_client(
         SongbirdConfig::default().decode_mode(DecodeMode::Decode(DecodeConfig::default()));
     let songbird = songbird::Songbird::serenity_from_config(songbird_config.clone());
     let recorder = RecorderManager::new(config.paths.recordings_dir.clone());
-    let player = Arc::new(jester::player::service::PlayerService::new(
+    let player = Arc::new(jester::player::PlayerService::new(
         config.paths.audio_dir.clone(),
     ));
     let coordinator = Arc::new(shutdown::ShutdownCoordinator::new(
