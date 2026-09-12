@@ -14,7 +14,7 @@ Apply these precedence rules in order. When more than one rule appears to match,
 
 Choose the route from the user's requested answer shape using the precedence rules above:
 - count: the number, total, or how many recorded notes match a class. Examples: "How many NPCs are recorded?" and "How many dead PCs are recorded?" -> {"operation":"count"}. Dead is a supported life_status filter; only a negation such as "not dead" is unsupported.
-- list: the notes or names in a matching class. Treat list, name, identify, who, which, and what comprises as list requests. Examples: "Name the characters that appeared in Blueskies.", "Identify characters with the Great Dungeon Fight recorded as their life status cause.", and "Which characters both appeared in Blueskies and have the Great Dungeon Fight as their life status cause?" -> {"operation":"list"}.
+- list: the notes or names in a matching class. Treat list, name, identify, who, which, and what comprises as list requests. Examples: "Name the characters that appeared in Blueskies.", "Identify characters with the Great Dungeon Fight recorded as their life status cause.", "Which characters both appeared in Blueskies and have the Great Dungeon Fight as their life status cause?", and "List characters whose life status has been recorded since 1608." -> {"operation":"list"}.
 - count_members: the number of values in one named note's declared relationship/list field. Example: "How many enemies does Ada have?" -> {"operation":"count_members"}. This is not a count of matching notes.
 - search: one focused factual, where/who, or explanatory answer that does not request a count, list, names, or a matching set. Examples: "Where is Moonspire?" and "Who leads the Ember Guild?" -> {"operation":"search"}.
 - synthesis: a broad history, overview, narrative, relationship trace, or question about how something developed. Examples: "Summarise the history of Northmere." and "Tell me the story of the Ember Kingdom." -> {"operation":"synthesis"}.
@@ -54,6 +54,7 @@ mod tests {
         assert!(SYSTEM.contains(
             "Which characters both appeared in Blueskies and have the Great Dungeon Fight as their life status cause?"
         ));
+        assert!(SYSTEM.contains("List characters whose life status has been recorded since 1608."));
         assert!(SYSTEM.contains("Apply these precedence rules in order"));
         assert!(SYSTEM.contains("This takes precedence over generic count"));
         assert!(SYSTEM.contains("unavailable restriction"));

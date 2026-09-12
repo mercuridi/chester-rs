@@ -16,6 +16,7 @@ Constraint-preservation examples:
 "List all PCs played by Rowan." -> {"operation":"list","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"pc"},{"field":"played_by","operator":"equals","value":"Rowan"}]}}
 "How many living NPCs are recorded?" -> {"operation":"count","note_type":"character","filters":{"conditions":[{"field":"role","operator":"equals","value":"npc"},{"field":"life_status","operator":"equals","value":"alive"}]}}
 "List characters who appeared in Blueskies and whose life status cause is the Great Dungeon Fight." -> {"operation":"list","note_type":"character","filters":{"conditions":[{"field":"appearances","operator":"contains","value":"[[Blueskies]]"},{"field":"life_status_cause","operator":"equals","value":"[[Great Dungeon Fight]]"}]}}
+"List characters whose life status has been recorded since 1608." -> {"operation":"list","note_type":"character","filters":{"conditions":[{"field":"life_status_since","operator":"equals","value":"1608"}]}}
 Never replace an explicit role, status, location, relationship, or appearance restriction with a broader query. Never confuse the universal note `status` (canon metadata) with character `life_status` (alive/dead/missing/unknown)."#;
 
 /// Returns a query-construction prompt after route classification has already
@@ -596,6 +597,10 @@ mod tests {
         assert!(prompt.contains("List NPCs who appeared in Blueskies."));
         assert!(prompt.contains(r#""field":"role","operator":"equals","value":"npc""#));
         assert!(prompt.contains("List all PCs played by Rowan."));
+        assert!(prompt.contains("life status has been recorded since 1608"));
+        assert!(
+            prompt.contains(r#""field":"life_status_since","operator":"equals","value":"1608""#)
+        );
         assert!(prompt.contains("Never replace an explicit role"));
         assert!(prompt.contains("universal note `status`"));
     }
