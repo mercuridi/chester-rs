@@ -8,7 +8,7 @@ use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::Tokenizer;
 
 use super::{WhisperTranscriber, tokens::token_id};
-use crate::chronicle::transcription::constants::{MODEL_ID, MODEL_REVISION};
+use crate::chronicle::transcription::{MODEL_ID, MODEL_REVISION};
 
 pub enum Model {
     Normal(m::model::Whisper),

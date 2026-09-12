@@ -19,7 +19,7 @@ use crate::chronicle::{
     query::{RouteOperation, StructuredPlan, render_query},
     runtime::GpuRuntime,
     synthesis::{self, EvidenceNote},
-    transcription::service::TranscriptionService,
+    transcription::TranscriptionService,
 };
 
 pub use super::synthesis_pipeline::SynthesisDiagnostics;
@@ -545,7 +545,7 @@ mod tests {
         llm::LanguageModel,
         query::{RouteOperation, StructuredOperation, StructuredPlan},
         runtime::GpuRuntime,
-        transcription::service::TranscriptionService,
+        transcription::TranscriptionService,
     };
     use anyhow::Context;
     use anyhow::{Result, anyhow};

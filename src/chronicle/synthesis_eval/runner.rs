@@ -16,7 +16,7 @@ use crate::chronicle::{
     query::RouteOperation,
     runtime::GpuRuntime,
     service::{Chronicle, ChronicleDependencies, EffectiveRoute, SynthesisDiagnostics},
-    transcription::service::TranscriptionService,
+    transcription::TranscriptionService,
 };
 
 #[derive(Deserialize)]

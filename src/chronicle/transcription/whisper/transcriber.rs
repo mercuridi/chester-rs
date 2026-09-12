@@ -5,8 +5,7 @@ use candle_core::{Device, Tensor};
 use candle_transformers::models::whisper::{self as m, audio};
 use tokenizers::Tokenizer;
 
-use crate::chronicle::transcription::audio::AudioSource;
-use crate::chronicle::transcription::constants::MODEL_SAMPLE_RATE;
+use crate::chronicle::transcription::{AudioSource, MODEL_SAMPLE_RATE, Transcriber};
 
 use super::model::Model;
 
@@ -169,7 +168,7 @@ impl WhisperTranscriber {
     }
 }
 
-impl crate::chronicle::transcription::service::Transcriber for WhisperTranscriber {
+impl Transcriber for WhisperTranscriber {
     fn transcribe_stream(&mut self, audio: &mut dyn AudioSource) -> Result<Vec<TranscriptSegment>> {
         Self::transcribe_stream(self, audio)
     }

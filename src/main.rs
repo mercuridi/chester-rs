@@ -27,7 +27,7 @@ use crate::{
         recording::{notify_recording_user, scan_incomplete_manifests},
         runtime::{GpuRuntime, report_cuda_oom},
         service::{Chronicle, ChronicleDependencies},
-        transcription::service::TranscriptionService,
+        transcription::TranscriptionService,
     },
     discord::context::{Data, Error},
     jester::{

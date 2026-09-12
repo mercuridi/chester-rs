@@ -3,13 +3,11 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
 use serenity::model::id::UserId;
-
-use crate::chronicle::runtime::{GpuRuntime, report_cuda_oom};
-use crate::chronicle::transcription::{
-    audio::{AudioSource, open_opus},
-    whisper::{TranscriptSegment, WhisperTranscriber},
-};
 use tracing::{debug, info, instrument};
+
+use super::audio::open_opus;
+use super::{AudioSource, TranscriptSegment, WhisperTranscriber};
+use crate::chronicle::runtime::{GpuRuntime, report_cuda_oom};
 
 #[derive(Default)]
 struct WorkerTracker {
@@ -223,8 +221,8 @@ mod tests {
     impl super::Transcriber for NoopTranscriber {
         fn transcribe_stream(
             &mut self,
-            _audio: &mut dyn crate::chronicle::transcription::audio::AudioSource,
-        ) -> Result<Vec<crate::chronicle::transcription::whisper::TranscriptSegment>> {
+            _audio: &mut dyn super::AudioSource,
+        ) -> Result<Vec<super::TranscriptSegment>> {
             Ok(Vec::new())
         }
     }
