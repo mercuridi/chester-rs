@@ -1,8 +1,9 @@
-use anyhow::Result;
 use std::time::Instant;
+
+use anyhow::Result;
 use tracing::{debug, info};
 
-use super::super::{
+use crate::chronicle::{
     indexer::db::AccessScope,
     llm::LanguageModel,
     query::{
@@ -11,6 +12,7 @@ use super::super::{
         predetermined_route as query_predetermined_route,
     },
 };
+
 use super::chronicle::StructuredStore;
 
 #[derive(Clone, Copy)]

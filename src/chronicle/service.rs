@@ -5,3 +5,5 @@ mod retrieval_answer;
 mod synthesis_pipeline;
 
 pub use chronicle::{Chronicle, ChronicleDependencies, EffectiveRoute, SynthesisDiagnostics};
+#[cfg(test)]
+pub(crate) use retrieval_answer::truncate_to_char_limit;

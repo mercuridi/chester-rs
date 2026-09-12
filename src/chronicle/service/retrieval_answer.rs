@@ -117,9 +117,6 @@ pub(in crate::chronicle::service) async fn generate_answer(
     Ok((answer, retried, truncated))
 }
 
-pub(in crate::chronicle::service) fn truncate_to_char_limit(
-    answer: &str,
-    max_length: usize,
-) -> String {
+pub(crate) fn truncate_to_char_limit(answer: &str, max_length: usize) -> String {
     answer.chars().take(max_length).collect()
 }

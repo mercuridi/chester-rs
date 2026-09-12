@@ -1,13 +1,14 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use serde::Serialize;
+use tracing::{debug, info, instrument};
+
 use super::{
     answer_routing::{self, AnswerRoute, RetrievalMode},
     lifecycle, retrieval_answer,
     synthesis_pipeline::{self, EvidenceRetrieval},
 };
-use anyhow::Result;
-use serde::Serialize;
-use std::sync::Arc;
-use tracing::{debug, info, instrument};
-
 use crate::chronicle::{
     config::{GenerationSettings, RetrievalSettings, SynthesisSettings},
     indexer::{
@@ -531,11 +532,11 @@ impl Chronicle {
 #[cfg(test)]
 #[allow(clippy::type_complexity, clippy::expect_used, clippy::unwrap_used)]
 mod tests {
-    use super::super::retrieval_answer::truncate_to_char_limit;
     use super::{
         Chronicle, ChronicleDependencies, EffectiveRoute, GenerationSettings, RetrievalSettings,
         StructuredStore, SynthesisSettings,
     };
+    use crate::chronicle::service::truncate_to_char_limit;
     use crate::chronicle::{
         indexer::{
             db::{AccessScope, IndexerDb, SearchResult, StructuredResult},
@@ -1512,7 +1513,7 @@ mod tests {
                 question,
                 &[1, 2, 3, 4]
                     .into_iter()
-                    .map(|index| super::super::super::synthesis::EvidenceNote {
+                    .map(|index| crate::chronicle::synthesis::EvidenceNote {
                         source_labels: vec![format!("S{index}")],
                         text: format!("m{index}"),
                     })
@@ -1597,7 +1598,7 @@ mod tests {
                 question,
                 &[1, 2, 3, 4, 5, 6, 7, 8]
                     .into_iter()
-                    .map(|index| super::super::super::synthesis::EvidenceNote {
+                    .map(|index| crate::chronicle::synthesis::EvidenceNote {
                         source_labels: vec![format!("S{index}")],
                         text: format!("m{index}"),
                     })
