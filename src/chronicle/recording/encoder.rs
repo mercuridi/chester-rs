@@ -24,6 +24,15 @@ struct EncoderState {
     pending_packet: Option<(Vec<u8>, u64)>,
 }
 
+struct EncoderContext<'a, 'b, W: std::io::Write> {
+    user_id: UserId,
+    wakeup: &'a EncoderWakeup,
+    initial_silence_ticks: u64,
+    state: &'a mut EncoderState,
+    ogg: &'a mut PacketWriter<'b, W>,
+    serial: u32,
+}
+
 #[derive(Clone)]
 pub struct EncoderWakeup {
     state: Arc<(Mutex<bool>, Condvar)>,
@@ -96,16 +105,15 @@ pub fn run_encoder(
         pending_packet: None,
     };
     encode_initial_silence(initial_silence_ticks, &mut state, &mut ogg, serial)?;
-    let (next_tick, final_tick) = drain_recording_frames(
+    let mut context = EncoderContext {
         user_id,
-        consumer,
-        stop_rx,
         wakeup,
         initial_silence_ticks,
-        &mut state,
-        &mut ogg,
+        state: &mut state,
+        ogg: &mut ogg,
         serial,
-    )?;
+    };
+    let (next_tick, final_tick) = drain_recording_frames(consumer, stop_rx, &mut context)?;
     pad_final_silence(final_tick, next_tick, &mut state, &mut ogg, serial)?;
     if let Some((packet, granule_position)) = state.pending_packet.take() {
         ogg.write_packet(
@@ -133,19 +141,14 @@ fn encode_initial_silence<W: std::io::Write>(
     Ok(())
 }
 
-fn drain_recording_frames(
-    user_id: UserId,
+fn drain_recording_frames<W: std::io::Write>(
     mut consumer: Consumer<RecordedFrame>,
     mut stop_rx: oneshot::Receiver<u64>,
-    wakeup: &EncoderWakeup,
-    initial_silence_ticks: u64,
-    state: &mut EncoderState,
-    ogg: &mut PacketWriter<impl std::io::Write>,
-    serial: u32,
+    context: &mut EncoderContext<'_, '_, W>,
 ) -> Result<(u64, Option<u64>), Error> {
     let mut stopping = false;
     let mut final_tick = None;
-    let mut next_tick = initial_silence_ticks;
+    let mut next_tick = context.initial_silence_ticks;
 
     loop {
         while let Ok(chunk) = consumer.read_chunk(1) {
@@ -158,13 +161,13 @@ fn drain_recording_frames(
             };
 
             while next_tick < frame.tick {
-                encode_silence_frame(state, ogg, serial)?;
+                encode_silence_frame(context.state, context.ogg, context.serial)?;
                 next_tick += 1;
             }
 
             if frame.tick < next_tick {
                 tracing::warn!(
-                    ?user_id,
+                    ?context.user_id,
                     frame_tick = frame.tick,
                     expected_tick = next_tick,
                     "Ignoring out-of-order recording frame"
@@ -172,8 +175,8 @@ fn drain_recording_frames(
                 continue;
             }
 
-            downmix_stereo_frame(&frame.samples, &mut state.mono_buffer);
-            encode_mono_frame(state, ogg, serial)?;
+            downmix_stereo_frame(&frame.samples, &mut context.state.mono_buffer);
+            encode_mono_frame(context.state, context.ogg, context.serial)?;
             next_tick += 1;
         }
 
@@ -190,7 +193,7 @@ fn drain_recording_frames(
                 stopping = true;
             }
             Err(oneshot::error::TryRecvError::Empty) => {
-                wakeup.wait();
+                context.wakeup.wait();
             }
         }
     }
