@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 use tracing::{info, instrument};
 
-use crate::chronicle::indexer::document::Document;
+use crate::chronicle::indexer::Document;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CorpusStats {

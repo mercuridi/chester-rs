@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::Result;
 use sqlx::sqlite::SqlitePool;
 
-use crate::chronicle::indexer::db::schema::{INDEX_FORMAT_VERSION, initialise};
+use super::super::schema::{INDEX_FORMAT_VERSION, initialise};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -50,7 +50,7 @@ pub struct IndexedChunk {
     pub chunk_index: i64,
     pub heading: Option<String>,
     pub text: String,
-    pub visibility: crate::chronicle::indexer::document::ChunkVisibility,
+    pub visibility: crate::chronicle::indexer::ChunkVisibility,
     /// Whether this chunk contains content repeated from its immediate predecessor.
     pub overlaps_previous: bool,
 }

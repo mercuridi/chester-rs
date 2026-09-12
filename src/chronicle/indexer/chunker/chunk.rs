@@ -6,7 +6,7 @@ use super::overlap::apply_overlap;
 use super::split::split_block;
 use super::tokenizer::encoded_len;
 use super::types::{BlockKind, PlannedChunk};
-use crate::chronicle::indexer::document::{Chunk, ChunkVisibility, Document};
+use crate::chronicle::indexer::{Chunk, ChunkVisibility, Document};
 
 /// Split Markdown into token-bounded chunks while retaining the original source text.
 pub fn chunk(
@@ -197,7 +197,7 @@ mod tests {
 
     fn document_with_words(word_count: usize) -> Document {
         Document {
-            metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
+            metadata: crate::chronicle::indexer::Metadata::default(),
             path: "tokens.md".into(),
             content: vec!["word"; word_count].join(" "),
             public_body: String::new(),
@@ -306,7 +306,7 @@ mod tests {
 
         let tokenizer = test_tokenizer()?;
         let document = Document {
-            metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
+            metadata: crate::chronicle::indexer::Metadata::default(),
             path: "nested.md".into(),
             content: source.to_owned(),
             public_body: String::new(),
@@ -372,7 +372,7 @@ mod tests {
         let tokenizer = test_tokenizer()?;
         let words = vec!["word"; 20].join(" ");
         let document = Document {
-            metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
+            metadata: crate::chronicle::indexer::Metadata::default(),
             path: "sections.md".into(),
             content: format!("# One\n\n{words}\n\n# Two\n\n{words}"),
             public_body: String::new(),
@@ -402,7 +402,7 @@ mod tests {
     fn preserves_overlap_for_hard_token_boundary_splits() -> Result<()> {
         let tokenizer = test_tokenizer()?;
         let document = Document {
-            metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
+            metadata: crate::chronicle::indexer::Metadata::default(),
             path: "code.md".into(),
             content: format!("```text\n{}\n```", vec!["word"; 40].join(" ")),
             public_body: String::new(),
@@ -502,7 +502,7 @@ mod tests {
         let tokenizer = test_tokenizer()?;
         for content in ["", "  \n\t"] {
             let document = Document {
-                metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
+                metadata: crate::chronicle::indexer::Metadata::default(),
                 path: "empty.md".into(),
                 content: content.into(),
                 public_body: String::new(),

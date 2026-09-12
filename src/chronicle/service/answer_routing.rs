@@ -4,7 +4,7 @@ use anyhow::Result;
 use tracing::{debug, info};
 
 use crate::chronicle::{
-    indexer::db::AccessScope,
+    indexer::AccessScope,
     llm::LanguageModel,
     query::{
         PredeterminedRoute, RouteOperation, StructuredOperation, StructuredPlan,

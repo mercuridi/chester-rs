@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tracing::info;
 
-use crate::chronicle::{indexer::retriever::RetrieverApi, llm::LanguageModel};
+use crate::chronicle::{indexer::RetrieverApi, llm::LanguageModel};
 
 pub(in crate::chronicle::service) async fn start(
     retriever: &dyn RetrieverApi,

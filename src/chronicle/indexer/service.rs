@@ -7,7 +7,7 @@ use tokenizers::Encoding;
 use tracing::{debug, info, instrument, warn};
 
 use crate::chronicle::{
-    indexer::document::{Chunk, ChunkVisibility, Document},
+    indexer::{Chunk, ChunkVisibility, Document},
     runtime::report_cuda_oom,
 };
 
@@ -632,7 +632,10 @@ mod tests {
             self.batches
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Ok(vec![
-                vec![0.0; crate::chronicle::indexer::embedder::EMBEDDING_DIMENSIONS];
+                vec![
+                    0.0;
+                    crate::chronicle::indexer::EMBEDDING_DIMENSIONS
+                ];
                 encodings.len()
             ])
         }
@@ -679,8 +682,7 @@ mod tests {
         let initial_batches = batches.load(Ordering::SeqCst);
         assert!(initial_batches > 0);
         let docs = db.all_documents().await?;
-        let (mut metadata, _) =
-            crate::chronicle::indexer::frontmatter::parse(source)?.context("note")?;
+        let (mut metadata, _) = crate::chronicle::indexer::parse(source)?.context("note")?;
         // Simulate an existing index whose generic field row has not been populated.
         metadata.fields.remove("role");
         db.refresh_metadata(docs[0].id, &docs[0].content_hash, &metadata)
@@ -878,7 +880,7 @@ mod tests {
     #[test]
     fn index_fingerprint_includes_content_and_chunking_configuration() {
         let document = Document {
-            metadata: crate::chronicle::indexer::frontmatter::Metadata::default(),
+            metadata: crate::chronicle::indexer::Metadata::default(),
             path: "doc.md".into(),
             content: "content".into(),
             public_body: String::new(),

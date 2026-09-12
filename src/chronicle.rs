@@ -13,9 +13,7 @@ pub(crate) mod transcription;
 
 pub(crate) use config::{AppPaths, Config};
 pub(crate) use eval::run as run_eval;
-pub(crate) use indexer::{
-    db::IndexerDb, embedder::Embedder, retriever::Retriever, service::Indexer,
-};
+pub(crate) use indexer::{Embedder, Indexer, IndexerDb, Retriever};
 pub(crate) use llm::Llm;
 pub(crate) use query::{run as run_query, run_planner};
 pub(crate) use recording::{RecorderManager, notify_recording_user, scan_incomplete_manifests};

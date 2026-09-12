@@ -46,10 +46,10 @@ impl IndexerDb {
         limit: usize,
         access: AccessScope,
     ) -> Result<Vec<SearchResult>> {
-        if embedding.len() != crate::chronicle::indexer::embedder::EMBEDDING_DIMENSIONS {
+        if embedding.len() != crate::chronicle::indexer::EMBEDDING_DIMENSIONS {
             anyhow::bail!(
                 "Expected embedding dimension {}, got {}",
-                crate::chronicle::indexer::embedder::EMBEDDING_DIMENSIONS,
+                crate::chronicle::indexer::EMBEDDING_DIMENSIONS,
                 embedding.len()
             );
         }

@@ -1,10 +1,7 @@
 //! Retrieval evaluation only: no Discord connection, live database, or answer LLM.
 use super::indexer::{
-    db::{AccessScope, IndexerDb, SearchResult},
-    embedder::Embedder,
-    retriever::{RetrievalDiagnostics, SearchSettings, select_with_diagnostics},
-    scanner,
-    service::Indexer,
+    AccessScope, Embedder, Indexer, IndexerDb, RetrievalDiagnostics, SearchResult, SearchSettings,
+    select_with_diagnostics,
 };
 use anyhow::{Context, Result, ensure};
 use chrono::Utc;
@@ -267,7 +264,7 @@ fn aggregate_results(cases: &[CaseResult]) -> BTreeMap<String, Aggregate> {
 async fn evaluate_case(
     case: Case,
     database: &IndexerDb,
-    embedder: &dyn super::indexer::embedder::EmbeddingModel,
+    embedder: &dyn super::indexer::EmbeddingModel,
     settings: SearchSettings,
     identities: &BTreeMap<String, String>,
 ) -> Result<CaseResult> {
@@ -345,7 +342,7 @@ fn create_report_file(
 }
 
 fn fixture_registry(
-    documents: &[super::indexer::document::Document],
+    documents: &[super::indexer::Document],
 ) -> (BTreeMap<String, String>, BTreeMap<String, String>) {
     let identities = documents
         .iter()
@@ -375,7 +372,7 @@ fn fixture_registry(
 fn fixture_fingerprint(
     source: &str,
     corpus: &Path,
-    documents: &[super::indexer::document::Document],
+    documents: &[super::indexer::Document],
 ) -> Result<String> {
     let mut hash = Sha256::new();
     hash.update(source.as_bytes());
@@ -406,7 +403,7 @@ pub async fn run(
         .parent()
         .context("Suite needs a parent directory")?
         .join("corpus");
-    let (documents, _) = scanner::scan_directory_with_stats(&corpus)?;
+    let (documents, _) = super::indexer::scan_directory_with_stats(&corpus)?;
     let (identities, contents) = fixture_registry(&documents);
     validate(&suite, &identities, &contents)?;
     let fingerprint = fixture_fingerprint(&source, &corpus, &documents)?;
@@ -451,7 +448,7 @@ pub async fn run(
     let report = Report {
         suite: suite.name,
         fixture_sha256: fingerprint,
-        embedding_model: super::indexer::embedder::MODEL_ID,
+        embedding_model: super::indexer::MODEL_ID,
         embedding_revision,
         settings: suite.retrieval,
         max_chunk_tokens: suite.max_chunk_tokens,
@@ -479,10 +476,11 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn fixture_lexical_retrieval_and_annotations_work_without_a_model() -> Result<()> {
-        use crate::chronicle::indexer::db::IndexedChunk;
+        use crate::chronicle::indexer::IndexedChunk;
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chronicle");
         let mut suite: Suite = toml::from_str(&std::fs::read_to_string(root.join("suite.toml"))?)?;
-        let (documents, _) = scanner::scan_directory_with_stats(root.join("corpus"))?;
+        let (documents, _) =
+            crate::chronicle::indexer::scan_directory_with_stats(root.join("corpus"))?;
         let identities = documents
             .iter()
             .map(|d| (d.path.to_string_lossy().into_owned(), d.metadata.id.clone()))
@@ -508,9 +506,9 @@ mod tests {
         // ingestion and lexical mechanics, not semantic retrieval quality.
         for note in documents {
             let primary_visibility = if note.metadata.visibility == "secret" {
-                crate::chronicle::indexer::document::ChunkVisibility::Secret
+                crate::chronicle::indexer::ChunkVisibility::Secret
             } else {
-                crate::chronicle::indexer::document::ChunkVisibility::Player
+                crate::chronicle::indexer::ChunkVisibility::Player
             };
             let mut chunks = vec![IndexedChunk {
                 chunk_index: 0,
@@ -528,7 +526,7 @@ mod tests {
                         chunk_index: (index + 1) as i64,
                         heading: Some("Secret".into()),
                         text,
-                        visibility: crate::chronicle::indexer::document::ChunkVisibility::Secret,
+                        visibility: crate::chronicle::indexer::ChunkVisibility::Secret,
                         overlaps_previous: false,
                     }),
             );

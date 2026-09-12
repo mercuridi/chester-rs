@@ -4,11 +4,7 @@ use tracing::debug;
 use super::answer_routing::RetrievalMode;
 use crate::chronicle::{
     config::{GenerationSettings, RetrievalSettings},
-    indexer::{
-        db::AccessScope,
-        prompt,
-        retriever::{RetrievalOutcome, RetrieverApi},
-    },
+    indexer::{AccessScope, RetrievalOutcome, RetrieverApi, build_prompt_with_budget},
     llm::LanguageModel,
 };
 
@@ -65,7 +61,7 @@ pub(in crate::chronicle::service) async fn answer_from_retrieval(
     };
 
     let retrieval_question = mode.retrieval_question(question);
-    let assembly = prompt::build_prompt_with_budget(
+    let assembly = build_prompt_with_budget(
         &retrieval_question,
         &results,
         llm.prompt_token_budget(),

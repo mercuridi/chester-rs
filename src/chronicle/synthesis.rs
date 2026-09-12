@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use std::fmt::Write as _;
 
-use crate::chronicle::indexer::db::SearchResult;
+use crate::chronicle::indexer::SearchResult;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceNote {
@@ -493,8 +493,8 @@ mod tests {
 
     #[test]
     fn topology_selection_measures_duplicates_caps_and_result_limits() {
-        use crate::chronicle::indexer::retriever::select_with_diagnostics;
-        use crate::chronicle::indexer::retriever::{
+        use crate::chronicle::indexer::select_with_diagnostics;
+        use crate::chronicle::indexer::{
             CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
         };
 
@@ -655,8 +655,7 @@ mod tests {
             std::fs::read_dir(&corpus)?.count(),
             suite.topology.document_count
         );
-        let (documents, _) =
-            crate::chronicle::indexer::scanner::scan_directory_with_stats(&corpus)?;
+        let (documents, _) = crate::chronicle::indexer::scan_directory_with_stats(&corpus)?;
         assert!(
             !documents
                 .iter()

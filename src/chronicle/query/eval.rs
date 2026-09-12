@@ -10,10 +10,7 @@ use std::{
 
 use crate::chronicle::{
     config::Config,
-    indexer::{
-        db::{AccessScope, IndexerDb, StructuredResult},
-        scanner,
-    },
+    indexer::{AccessScope, IndexerDb, StructuredResult},
     llm::{Llm, ROUTE_CLASSIFIER_OUTPUT_TOKENS, STRUCTURED_PLAN_OUTPUT_TOKENS},
     runtime::GpuRuntime,
 };
@@ -172,7 +169,7 @@ async fn fixture_database(suite_path: &Path) -> Result<(tempfile::TempDir, Index
         temp.path().join("chronicle.sqlite3").display()
     ))
     .await?;
-    let (notes, _) = scanner::scan_directory_with_stats(
+    let (notes, _) = crate::chronicle::indexer::scan_directory_with_stats(
         suite_path
             .parent()
             .context("Missing suite directory")?

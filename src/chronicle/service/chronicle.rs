@@ -11,10 +11,7 @@ use super::{
 };
 use crate::chronicle::{
     config::{GenerationSettings, RetrievalSettings, SynthesisSettings},
-    indexer::{
-        db::{AccessScope, IndexerDb, SearchResult, StructuredResult},
-        retriever::RetrieverApi,
-    },
+    indexer::{AccessScope, IndexerDb, RetrieverApi, SearchResult, StructuredResult},
     llm::LanguageModel,
     query::{RouteOperation, StructuredPlan, render_query},
     runtime::GpuRuntime,
@@ -539,8 +536,8 @@ mod tests {
     use crate::chronicle::service::truncate_to_char_limit;
     use crate::chronicle::{
         indexer::{
-            db::{AccessScope, IndexerDb, SearchResult, StructuredResult},
-            retriever::{RetrievalOutcome, RetrieverApi, SearchSettings},
+            {AccessScope, IndexerDb, SearchResult, StructuredResult},
+            {RetrievalOutcome, RetrieverApi, SearchSettings},
         },
         llm::LanguageModel,
         query::{RouteOperation, StructuredOperation, StructuredPlan},
@@ -577,7 +574,7 @@ mod tests {
     struct FakeRetriever {
         outcome: FakeOutcome,
         calls: Mutex<Vec<(String, usize, usize, f32, f32, usize)>>,
-        accesses: Mutex<Vec<crate::chronicle::indexer::db::AccessScope>>,
+        accesses: Mutex<Vec<crate::chronicle::indexer::AccessScope>>,
         embedder_loaded: Mutex<bool>,
         loads: Mutex<usize>,
         unloads: Mutex<usize>,
@@ -648,7 +645,7 @@ mod tests {
             &self,
             query: &str,
             settings: SearchSettings,
-            _access: crate::chronicle::indexer::db::AccessScope,
+            _access: crate::chronicle::indexer::AccessScope,
         ) -> Result<RetrievalOutcome> {
             self.calls
                 .lock()
@@ -1029,7 +1026,7 @@ mod tests {
             directory.path().join("test.sqlite3").display()
         ))
         .await?;
-        let (metadata, _) = crate::chronicle::indexer::frontmatter::parse("---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\nlife_status: alive\n---\n")?.context("note")?;
+        let (metadata, _) = crate::chronicle::indexer::parse("---\nid: ada\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: npc\nlife_status: alive\n---\n")?.context("note")?;
         db.replace_note("Ada.md", "hash", &[], &[], &metadata)
             .await?;
         structured_store.set_db(db)?;
@@ -1071,7 +1068,7 @@ mod tests {
         ))
         .await?;
         for (id, title) in [("garr", "Garr"), ("jora", "Jora")] {
-            let (metadata, _) = crate::chronicle::indexer::frontmatter::parse(&format!(
+            let (metadata, _) = crate::chronicle::indexer::parse(&format!(
                 "---\nid: {id}\ntype: character\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\nrole: pc\nplayed_by: Rowan\n---\n"
             ))?
             .context("note")?;
@@ -1350,7 +1347,7 @@ mod tests {
             chronicle
                 .ask_for(
                     "Summarise the history of Northmere.",
-                    crate::chronicle::indexer::db::AccessScope::Gm,
+                    crate::chronicle::indexer::AccessScope::Gm,
                 )
                 .await?,
             "answer"
@@ -1361,7 +1358,7 @@ mod tests {
                 .lock()
                 .map_err(|_| anyhow!("accesses poisoned"))?
                 .as_slice(),
-            &[crate::chronicle::indexer::db::AccessScope::Gm]
+            &[crate::chronicle::indexer::AccessScope::Gm]
         );
         Ok(())
     }
@@ -1619,7 +1616,7 @@ mod tests {
         let (chronicle, retriever, _) = service(FakeOutcome::Results, ["answer"], 100)?;
         assert_eq!(
             chronicle
-                .ask_for("question", crate::chronicle::indexer::db::AccessScope::Gm,)
+                .ask_for("question", crate::chronicle::indexer::AccessScope::Gm,)
                 .await?,
             "answer"
         );
@@ -1629,7 +1626,7 @@ mod tests {
                 .lock()
                 .map_err(|_| anyhow!("accesses poisoned"))?
                 .as_slice(),
-            &[crate::chronicle::indexer::db::AccessScope::Gm]
+            &[crate::chronicle::indexer::AccessScope::Gm]
         );
         Ok(())
     }

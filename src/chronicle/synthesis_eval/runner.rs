@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::chronicle::{
     config::Config,
-    indexer::{db::IndexerDb, embedder::Embedder, retriever::Retriever, service::Indexer},
+    indexer::{Embedder, Indexer, IndexerDb, Retriever},
     llm::{LanguageModel, Llm},
     query::RouteOperation,
     runtime::GpuRuntime,

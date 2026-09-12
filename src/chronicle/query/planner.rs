@@ -1,7 +1,9 @@
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
-use crate::chronicle::indexer::schema::{self, ValueType};
+use crate::chronicle::indexer::{
+    DOCUMENT_TYPE_DEFINITIONS, UNIVERSAL_FIELD_DEFINITIONS, ValueType,
+};
 use crate::chronicle::llm::LanguageModel;
 
 use super::plan::{Plan, RouteOperation, StructuredOperation, StructuredPlan};
@@ -50,8 +52,8 @@ pub fn structured_system_prompt_with_taxonomy(
     let taxonomy = if inject_full_taxonomy {
         format!(
             "Typed universal fields: {}.\nTyped fields by note type: {}.",
-            typed_fields(schema::UNIVERSAL_FIELD_DEFINITIONS),
-            schema::DOCUMENT_TYPE_DEFINITIONS
+            typed_fields(UNIVERSAL_FIELD_DEFINITIONS),
+            DOCUMENT_TYPE_DEFINITIONS
                 .iter()
                 .filter(|definition| definition.name != "template")
                 .map(|definition| {
@@ -72,12 +74,12 @@ pub fn structured_system_prompt_with_taxonomy(
 /// It preserves every field name and its note-type applicability without
 /// spending context on value types and enum vocabularies.
 fn compact_schema_index() -> String {
-    let universal = schema::UNIVERSAL_FIELD_DEFINITIONS
+    let universal = UNIVERSAL_FIELD_DEFINITIONS
         .iter()
         .map(|field| field.name)
         .collect::<Vec<_>>()
         .join(", ");
-    let per_type = schema::DOCUMENT_TYPE_DEFINITIONS
+    let per_type = DOCUMENT_TYPE_DEFINITIONS
         .iter()
         .filter(|definition| definition.name != "template")
         .map(|definition| {
@@ -94,7 +96,7 @@ fn compact_schema_index() -> String {
     format!("Declared universal fields: {universal}.\nDeclared type fields: {per_type}.")
 }
 
-fn typed_fields(fields: &[schema::FieldDefinition]) -> String {
+fn typed_fields(fields: &[crate::chronicle::indexer::FieldDefinition]) -> String {
     fields
         .iter()
         .map(|field| format!("{}: {}", field.name, describe_value_type(field.value_type)))
@@ -157,8 +159,7 @@ fn canonicalize_filters(value: &mut Value) {
             if field == "conditions" {
                 return None;
             }
-            let definition =
-                crate::chronicle::indexer::schema::field_definition(&note_type, field)?;
+            let definition = crate::chronicle::indexer::field_definition(&note_type, field)?;
             let mut value = value.as_str()?.to_owned();
             wrap_wikilink_if_required(&mut value, definition.value_type);
             canonicalize_fixed_enum_case(&mut value, definition.value_type);
@@ -186,8 +187,8 @@ fn canonicalize_filters(value: &mut Value) {
     };
     for (field, value_type, value) in fields {
         let operator = match value_type {
-            crate::chronicle::indexer::schema::ValueType::StringList
-            | crate::chronicle::indexer::schema::ValueType::WikilinkList => "contains",
+            crate::chronicle::indexer::ValueType::StringList
+            | crate::chronicle::indexer::ValueType::WikilinkList => "contains",
             _ => "equals",
         };
         conditions.push(serde_json::json!({
@@ -213,8 +214,7 @@ fn canonicalize_condition_wikilinks(note_type: &str, filters: &mut serde_json::M
         else {
             continue;
         };
-        let Some(definition) =
-            crate::chronicle::indexer::schema::field_definition(note_type, &field)
+        let Some(definition) = crate::chronicle::indexer::field_definition(note_type, &field)
         else {
             continue;
         };
@@ -231,14 +231,11 @@ fn canonicalize_condition_wikilinks(note_type: &str, filters: &mut serde_json::M
     }
 }
 
-fn wrap_wikilink_if_required(
-    value: &mut String,
-    value_type: crate::chronicle::indexer::schema::ValueType,
-) {
+fn wrap_wikilink_if_required(value: &mut String, value_type: crate::chronicle::indexer::ValueType) {
     if matches!(
         value_type,
-        crate::chronicle::indexer::schema::ValueType::Wikilink
-            | crate::chronicle::indexer::schema::ValueType::WikilinkList
+        crate::chronicle::indexer::ValueType::Wikilink
+            | crate::chronicle::indexer::ValueType::WikilinkList
     ) && !value.trim().is_empty()
         && !value.contains(['[', ']'])
     {

@@ -71,7 +71,7 @@ impl IndexerDb {
     /// alias, visibility, or source-link change.
     pub async fn rebuild_document_graph(
         &self,
-        resolution: &crate::chronicle::indexer::link_resolver::LinkResolution,
+        resolution: &crate::chronicle::indexer::LinkResolution,
     ) -> Result<GraphStats> {
         let mut tx = self.pool.begin().await?;
         let rows = sqlx::query("SELECT document_id, note_id FROM note_metadata")
@@ -148,8 +148,8 @@ impl IndexerDb {
 
         let gm_edges = graph_edges(&mut tx, false).await?;
         let player_edges = graph_edges(&mut tx, true).await?;
-        let gm = crate::chronicle::indexer::pagerank::compute(&all_nodes, &gm_edges);
-        let player = crate::chronicle::indexer::pagerank::compute(&player_nodes, &player_edges);
+        let gm = crate::chronicle::indexer::compute(&all_nodes, &gm_edges);
+        let player = crate::chronicle::indexer::compute(&player_nodes, &player_edges);
         let player_entries = player
             .entries
             .iter()

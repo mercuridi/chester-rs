@@ -93,7 +93,7 @@ impl IndexerDb {
             content_hash,
             chunks,
             embeddings,
-            &crate::chronicle::indexer::frontmatter::Metadata::default(),
+            &crate::chronicle::indexer::Metadata::default(),
         )
         .await
     }
@@ -104,7 +104,7 @@ impl IndexerDb {
         content_hash: &str,
         chunks: &[IndexedChunk],
         embeddings: &[Vec<f32>],
-        metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+        metadata: &crate::chronicle::indexer::Metadata,
     ) -> Result<i64> {
         if chunks.len() != embeddings.len() {
             anyhow::bail!(
@@ -134,7 +134,7 @@ impl IndexerDb {
         &self,
         document_id: i64,
         fingerprint: &str,
-        metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+        metadata: &crate::chronicle::indexer::Metadata,
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         write_metadata(&mut tx, document_id, metadata).await?;
@@ -155,7 +155,7 @@ impl IndexerDb {
     pub async fn metadata_matches(
         &self,
         document_id: i64,
-        metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+        metadata: &crate::chronicle::indexer::Metadata,
     ) -> Result<bool> {
         let stored: String = sqlx::query_scalar("SELECT metadata_hash FROM documents WHERE id = ?")
             .bind(document_id)
@@ -167,7 +167,7 @@ impl IndexerDb {
     pub async fn chunks_match(
         &self,
         document_id: i64,
-        chunks: &[crate::chronicle::indexer::document::Chunk],
+        chunks: &[crate::chronicle::indexer::Chunk],
     ) -> Result<bool> {
         let rows = sqlx::query("SELECT chunk_index, heading, text, visibility, overlaps_previous FROM chunks WHERE document_id = ? ORDER BY chunk_index")
             .bind(document_id).fetch_all(&self.pool).await?;
@@ -186,7 +186,7 @@ async fn upsert_document(
     connection: &mut sqlx::SqliteConnection,
     path: &str,
     content_hash: &str,
-    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+    metadata: &crate::chronicle::indexer::Metadata,
 ) -> Result<i64> {
     sqlx::query_scalar(
         r"
@@ -208,7 +208,7 @@ async fn upsert_document(
     .context("Failed to upsert indexed document")
 }
 
-fn metadata_hash(metadata: &crate::chronicle::indexer::frontmatter::Metadata) -> String {
+fn metadata_hash(metadata: &crate::chronicle::indexer::Metadata) -> String {
     // Metadata uses ordered maps, making its Debug representation deterministic.
     // This is an internal cache key, not a persisted interchange format.
     format!("{metadata:?}")
@@ -278,12 +278,8 @@ async fn insert_chunks(
         let embedding_json =
             serde_json::to_string(embedding).context("Failed to serialise embedding")?;
         let embedding_table = match chunk.visibility {
-            crate::chronicle::indexer::document::ChunkVisibility::Player => {
-                "chunk_embeddings_player"
-            }
-            crate::chronicle::indexer::document::ChunkVisibility::Secret => {
-                "chunk_embeddings_secret"
-            }
+            crate::chronicle::indexer::ChunkVisibility::Player => "chunk_embeddings_player",
+            crate::chronicle::indexer::ChunkVisibility::Secret => "chunk_embeddings_secret",
         };
         sqlx::query(&format!(
             "INSERT INTO {embedding_table} (rowid, embedding) VALUES (?, ?)"
@@ -301,7 +297,7 @@ async fn insert_chunks(
 async fn write_metadata(
     connection: &mut sqlx::SqliteConnection,
     document_id: i64,
-    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+    metadata: &crate::chronicle::indexer::Metadata,
 ) -> Result<()> {
     write_note_metadata(connection, document_id, metadata).await?;
     clear_metadata(connection, document_id).await?;
@@ -313,7 +309,7 @@ async fn write_metadata(
 async fn write_note_metadata(
     connection: &mut sqlx::SqliteConnection,
     document_id: i64,
-    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+    metadata: &crate::chronicle::indexer::Metadata,
 ) -> Result<()> {
     sqlx::query("INSERT OR REPLACE INTO note_metadata(document_id, note_id, note_type, status, visibility, aliases, tags, summary, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(document_id).bind(&metadata.id).bind(&metadata.note_type)
@@ -369,7 +365,7 @@ async fn clear_metadata(connection: &mut sqlx::SqliteConnection, document_id: i6
 async fn write_identifiers(
     connection: &mut sqlx::SqliteConnection,
     document_id: i64,
-    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+    metadata: &crate::chronicle::indexer::Metadata,
 ) -> Result<()> {
     let path: String = sqlx::query_scalar("SELECT path FROM documents WHERE id = ?")
         .bind(document_id)
@@ -408,30 +404,30 @@ async fn write_identifiers(
 async fn write_field_indexes(
     connection: &mut sqlx::SqliteConnection,
     document_id: i64,
-    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+    metadata: &crate::chronicle::indexer::Metadata,
 ) -> Result<()> {
     for (field_name, value) in &metadata.fields {
         match value {
-            crate::chronicle::indexer::frontmatter::MetadataValue::WikilinkList(values) => {
+            crate::chronicle::indexer::MetadataValue::WikilinkList(values) => {
                 for (position, value) in values.iter().enumerate() {
                     sqlx::query("INSERT INTO note_wikilinks(document_id, field_name, position, value) VALUES (?, ?, ?, ?)")
                         .bind(document_id).bind(field_name).bind(i64::try_from(position)?).bind(value)
                         .execute(&mut *connection).await?;
                 }
             }
-            crate::chronicle::indexer::frontmatter::MetadataValue::StringList(values) => {
+            crate::chronicle::indexer::MetadataValue::StringList(values) => {
                 for (position, value) in values.iter().enumerate() {
                     sqlx::query("INSERT INTO note_string_lists(document_id, field_name, position, value) VALUES (?, ?, ?, ?)")
                         .bind(document_id).bind(field_name).bind(i64::try_from(position)?).bind(value)
                     .execute(&mut *connection).await?;
                 }
             }
-            crate::chronicle::indexer::frontmatter::MetadataValue::String(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::Date(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::FantasyDate(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::Wikilink(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::StringOrWikilink(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::Enum(value) => {
+            crate::chronicle::indexer::MetadataValue::String(value)
+            | crate::chronicle::indexer::MetadataValue::Date(value)
+            | crate::chronicle::indexer::MetadataValue::FantasyDate(value)
+            | crate::chronicle::indexer::MetadataValue::Wikilink(value)
+            | crate::chronicle::indexer::MetadataValue::StringOrWikilink(value)
+            | crate::chronicle::indexer::MetadataValue::Enum(value) => {
                 sqlx::query("INSERT INTO note_scalar_fields(document_id, field_name, value) VALUES (?, ?, ?)")
                     .bind(document_id)
                     .bind(field_name)
@@ -439,7 +435,7 @@ async fn write_field_indexes(
                     .execute(&mut *connection)
                     .await?;
             }
-            crate::chronicle::indexer::frontmatter::MetadataValue::Boolean(value) => {
+            crate::chronicle::indexer::MetadataValue::Boolean(value) => {
                 sqlx::query("INSERT INTO note_scalar_fields(document_id, field_name, value) VALUES (?, ?, ?)")
                     .bind(document_id)
                     .bind(field_name)
@@ -457,7 +453,7 @@ async fn write_field_indexes(
 async fn write_type_metadata(
     connection: &mut sqlx::SqliteConnection,
     document_id: i64,
-    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
+    metadata: &crate::chronicle::indexer::Metadata,
 ) -> Result<()> {
     match metadata.note_type.as_str() {
         "adventure" => {
@@ -556,28 +552,25 @@ async fn write_type_metadata(
 }
 
 fn string_field<'a>(
-    metadata: &'a crate::chronicle::indexer::frontmatter::Metadata,
+    metadata: &'a crate::chronicle::indexer::Metadata,
     name: &str,
 ) -> Option<&'a str> {
     match metadata.fields.get(name) {
         Some(
-            crate::chronicle::indexer::frontmatter::MetadataValue::String(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::Date(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::FantasyDate(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::Wikilink(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::Enum(value)
-            | crate::chronicle::indexer::frontmatter::MetadataValue::StringOrWikilink(value),
+            crate::chronicle::indexer::MetadataValue::String(value)
+            | crate::chronicle::indexer::MetadataValue::Date(value)
+            | crate::chronicle::indexer::MetadataValue::FantasyDate(value)
+            | crate::chronicle::indexer::MetadataValue::Wikilink(value)
+            | crate::chronicle::indexer::MetadataValue::Enum(value)
+            | crate::chronicle::indexer::MetadataValue::StringOrWikilink(value),
         ) => Some(value),
         _ => None,
     }
 }
 
-fn bool_field(
-    metadata: &crate::chronicle::indexer::frontmatter::Metadata,
-    name: &str,
-) -> Option<bool> {
+fn bool_field(metadata: &crate::chronicle::indexer::Metadata, name: &str) -> Option<bool> {
     match metadata.fields.get(name) {
-        Some(crate::chronicle::indexer::frontmatter::MetadataValue::Boolean(value)) => Some(*value),
+        Some(crate::chronicle::indexer::MetadataValue::Boolean(value)) => Some(*value),
         _ => None,
     }
 }

@@ -24,7 +24,7 @@ mod tests {
     #[tokio::test]
     async fn schema_file_creates_the_complete_index() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
-        crate::chronicle::indexer::db::register_sqlite_vec();
+        crate::chronicle::indexer::register_sqlite_vec();
         let pool = crate::database::open_sqlite_pool(
             &format!(
                 "sqlite://{}",

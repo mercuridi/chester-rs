@@ -1,4 +1,4 @@
-use crate::chronicle::indexer::schema::{self, ValueType};
+use crate::chronicle::indexer::{ValueType, field_definition, vocabulary_contains};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
@@ -147,7 +147,7 @@ impl Plan {
                 subject.trim().len() > 4,
                 "Member-count subject cannot be empty"
             );
-            let definition = schema::field_definition(note_type, field).ok_or_else(|| {
+            let definition = field_definition(note_type, field).ok_or_else(|| {
                 anyhow::anyhow!("Field `{field}` is not available on {note_type} notes")
             })?;
             ensure!(
@@ -242,7 +242,7 @@ fn validate_condition(note_type: &str, condition: &Condition) -> Result<()> {
         !condition.value.trim().is_empty(),
         "Query values cannot be empty"
     );
-    let definition = schema::field_definition(note_type, &condition.field).ok_or_else(|| {
+    let definition = field_definition(note_type, &condition.field).ok_or_else(|| {
         anyhow::anyhow!(
             "Field `{}` is not available on {note_type} notes",
             condition.field
@@ -266,7 +266,7 @@ fn validate_condition(note_type: &str, condition: &Condition) -> Result<()> {
     }
     if let ValueType::FixedEnum(vocabulary) = definition.value_type {
         ensure!(
-            schema::vocabulary_contains(vocabulary, &condition.value),
+            vocabulary_contains(vocabulary, &condition.value),
             "Invalid value `{}` for `{}`",
             condition.value,
             condition.field

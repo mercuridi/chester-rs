@@ -2,10 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::chronicle::{
     config::{RetrievalSettings, SynthesisSettings},
-    indexer::{
-        db::{AccessScope, SearchResult},
-        retriever::{RetrievalOutcome, RetrieverApi},
-    },
+    indexer::{AccessScope, RetrievalOutcome, RetrieverApi, SearchResult},
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
