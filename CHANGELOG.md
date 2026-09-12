@@ -1,6 +1,149 @@
 # Changelog
 
-## [3.1.1] — 2026-09-10
+## [4.0.0] — 2026-09-12
+
+### Features
+
+- Rework config handling completely for a significantly better config.toml structure
+
+
+### Bug Fixes
+
+- Life_status and role are now not treated specially for no reason
+- Correct clippy errors on some tests
+- Appearances moved to universal fields instead of character-specific
+- Ensure all sqlite connections enforce foreign key integrity
+- CUDA OOM errors are now always logged to application as well as terminal / stderr
+- Reintroduce tests lost during refactors
+- Remove logging on heavily-used loop during startup
+- Unsupported queries now correctly short-circuit and avoid calling inference when the route is predetermined
+- Massively expand ringbuffer capacity to give the bot more room to breathe when busy
+- Correct hanging clippy lints
+- Correct panic-safety errors reported by clippy
+- Address type safety warnings from clippy
+- Various dead code warnings after previous refactors
+- Api simplifications recommended by clippy
+- Clippy readability fixes
+- Clippy code robustness fix
+- 6 expressions simplified from clippy lints
+- Renamed similarly named symbols to prevent confusion
+- Declare large-ish vec on heap to avoid large stack allocation
+- Chronicle eval was re-obtaining an already borrowed GPU lease; fixed
+- Reintroduce lost instructions to query classifier and planner to improve planning accuracy
+- Improve query repair guidance for better second-try accuracy
+- Add instructions for query classifier to act as an ordered decision procedure
+- Dynamically generate and inject the full field taxonomy into the query planner to give the LLM a full view of the taxonomy and improve planning accuracy
+- Add a full-taxonomy injection toggle to the planner as it's expensive on VRAM
+- Planner evaluation now reports model settings
+- Planner evaluation shares pre-routing with production
+- Log LLM tokenisation and add taxonomy mode to query structuring with full/compact toggle
+- Enum case normalisation for planner outputs
+- Short-circuit query planning for a small set of obvious unsupported requests
+- Targeted model context additions for failing query constructions
+- Add more guidance to catch a regression caused by the model overfitting to new classification guidance
+- Properly drain compressed audio as it comes in instead of holding it in memory until recording stop
+- Properly handle trying to load the LLM when it is already loaded
+- Prevent concurrent download races from deleting audio files
+- Recording encoder threads now sleep fully when inactive to reduce CPU load
+- Crashed session recovery now properly assesses and handles hard-crash "corrupt" manifests
+- Interrupted audio downloads no longer cause unrecoverable metadata registrations
+- D31: properly bound shutdown process to track transcription workers
+- D24: Flush bounded document batches while iterating across corpus for processing
+- Src/chronicle/indexer.rs properly fulfils new publicity constraints
+- Delete superseded function
+- Add author and sexuality fields to taxonomy
+- Correct 5 panic-risk warnings and a pass-by-value warning
+- Collapse repeated conditional into single branch
+- Introduce EncoderState struct to reduce number of arguments passed to drain_recording_frames
+
+
+### Refactor
+
+- Retrieval pipeline split out into explicit stages in functions
+- New RankedCandidate struct for search results to make ranking and selection easier
+- Separate retrieval policy from mechanics with a new SearchSettings object containing CandidatePoolPolicy, FusionPolicy, and SelectionPolicy
+- Synthesis is now orchestrated as a staged pipeline
+- Explicitly define answer routing with a new AnswerRoute enum
+- Split chronicle repository monolithic source file into submodules
+- Remove 3 misleading passthrough function definitions
+- Break down too-many-lines config handling
+- Separate fixture registry and fingerprinting from retrieval runner to solve too-many-lines
+- Rework synthesis evaluation runner to eliminate too-many-lines warning
+- Frontmatter parsing broken down into functions to improve maintainability + remove redundant data storage of life_status and role fields
+- Replace_note now calls out to helpers while retaining atomic behaviour
+- Write_metadata now calls directly through 5 helper functions to make its processes clearer
+- Break down synthesis_eval into submodules
+- Rework chronicle/service.rs into its own chronicle/service/ submodule tree
+- Config split into many smaller modules for better separation of concerns
+- Retriever.rs split up into its own submodule of indexer
+- Require proper config setup and remove boilerplate serde functions and declarations
+- Classifier and structured query planner are now separate LLM calls to increase accuracy and modularity
+- Improved chronicle ask routing for more accurate synthesis evaluation and runtime observability
+- Corpus scanning is now handled by a two-pass streaming model; discover then perform targeted processing for lower memory usage
+- Pre-construct data object and pass to framework builder to reduce number of arguments
+- Break down select_answer_route into helper functions for better readability
+- Break down run_bot to reduce function line count
+- Break down indexing process into subfunctions
+- Break down run_encoder into subfunctions
+- Break down stop_recording into subfunctions
+- Split out query eval and planner eval
+- Mod.rs removal and import updates: src/chronicle/config/
+- Mod.rs removal and import updates: src/chronicle/indexer/chunker/
+- Mod.rs removal and import updates: src/chronicle/indexer/db/
+- Mod.rs removal and import updates: src/chronicle/indexer/retriever/
+- Mod.rs removal and import updates: src/chronicle/indexer/
+- Mod.rs removal and import updates: src/chronicle/query/
+- Mod.rs removal and import updates: src/chronicle/recording/
+- Mod.rs removal and import updates: src/chronicle/service/
+- Mod.rs removal and import updates: src/chronicle/synthesis_eval/
+- Mod.rs removal and import updates: src/chronicle/transcription/whisper/
+- Mod.rs removal and import updates: src/chronicle/transcription/
+- Mod.rs removal and import updates: src/chronicle/
+- Mod.rs removal and import updates: src/database/
+- Mod.rs removal and import updates: src/discord/commands/
+- Mod.rs removal and import updates: src/discord/
+- Mod.rs removal and import updates: src/jester/db/
+- Mod.rs removal and import updates: src/jester/library/
+- Mod.rs removal and import updates: src/jester/player/
+- Mod.rs removal and import updates: src/jester/track/
+- Mod.rs removal and import updates: src/jester/
+- Mod.rs removal and import updates: src/utils/
+- Mod.rs removal and import updates: src/
+- Break down main.rs into a new app/ submodule
+- Extract all config to its own dedicated module
+- Move sole-purpose utils/format.rs to its real consumer location
+
+
+### Tech-debt
+
+- D15: Runtime paths mix build-machine roots and working directories fixed by centralising path handling
+- D27: Chronicle construction now accepts bundled settings structs and a new ChronicleDependencies struct + new StructuredStore trait on IndexerDb
+- D12: Multi-step Jester database writes are now atomic
+- D28: Separate data fetching and Discord display behaviours + improve library query shape and typing with named record structs (LibraryTrack, LibraryGroupEntry, TrackSearchResult)
+- D01: any visibility change forces a full document reindex
+- D03: new SessionId type and proper path validation to sanitise transcript session path handling
+- D04: persist taxonomy.toml in git so fresh checkouts pass tests properly
+- D06: refactor of main.rs to separate async functionality and improve evaluation run routes
+- D20: update readme to match reality and added a test to keep it that way
+- D05: Enforce blocking workers owning GPU leases until task completion
+- D31: Coordinated shutdown flow implemented with new module and proper draining/waiting policies for work to finish
+- D07: Jester services are now transactional and handled more consistently to prevent edge case bad behaviours
+- D22: Replace global player service operation lock with a guild-scoped GuildPlayerState
+- D08: Improved transcript failure reporting and added a new `/transcript recover` command
+- D09: Correct audio timeline drift on dropped PCM frames due to ringbuffer fill by introducing new timestamp-managed RecordedFrame struct
+- D33: All recording sessions have a unique fingerprint which is consistently used; this protects from (very unlikely) identity collisions
+- D10: Refactor several methods in recording, downloading, and embedding to properly utilise async subprocesses to prevent unrelated work stalling
+- D11: consolidate duplicated and diverging downloader behaviour into a single module with proper network boundary handling logic
+- D32: Prevent GPU leases from leaking an Arc ref on (unnecessary) drop
+- D29: clean up old jester taxonomy migration python script
+- D30: Saved logfiles are now kept in daily files with a 14-day retention and 20-file max; logging now also does not block the executing thread
+- D26: Introduce StructuredOperation and StructuredPlan types to prevent query planner from allowing impermissible operations and panicking; struct reduces repeated type checking throughout query handling processes
+- D35: remove dead and reference legacy code
+- D25: prevent wikilink resolution from bleeding across fields; lookups respect type, field, canon status, and visibility
+- D23: Transcription memory usage moved to a streaming model to bound maximum concurrent memory usage
+- D24: Indexing optimisations; skip metadata refresh and graph / PageRank rebuilds when the inputs are the same
+
+## [v3.1.1] — 2026-09-10
 
 ### Bug Fixes
 
