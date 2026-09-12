@@ -11,7 +11,7 @@ use crate::{
         player::{HistoryOutcome, RepeatMode},
         track::{TrackInfo, resolve_track},
     },
-    utils::format::lightweight_trim,
+    utils::lightweight_trim,
 };
 
 pub fn pause_message(resumed: bool) -> &'static str {

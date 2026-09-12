@@ -9,7 +9,7 @@ use crate::jester::db::{
     ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, MetadataKind, TEXTURES, TrackSearchResult,
     search_incomplete_tracks, search_labels, search_metadata, search_tracks,
 };
-use crate::utils::format::{build_autocomplete_display, lightweight_trim};
+use crate::utils::{build_autocomplete_display, lightweight_trim};
 
 fn autocomplete_limit() -> i64 {
     i64::try_from(AUTOCOMPLETE_MAX_CHOICES).unwrap_or(i64::MAX)
