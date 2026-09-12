@@ -1,5 +1,4 @@
 mod atomic_write;
-pub(crate) mod config;
 mod eval;
 pub(crate) mod indexer;
 mod llm;
@@ -11,7 +10,6 @@ mod synthesis;
 mod synthesis_eval;
 pub(crate) mod transcription;
 
-pub(crate) use config::{AppPaths, Config};
 pub(crate) use eval::run as run_eval;
 pub(crate) use indexer::{Embedder, Indexer, IndexerDb, Retriever};
 pub(crate) use llm::Llm;

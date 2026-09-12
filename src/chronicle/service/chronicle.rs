@@ -10,7 +10,6 @@ use super::{
     synthesis_pipeline::{self, EvidenceRetrieval},
 };
 use crate::chronicle::{
-    config::{GenerationSettings, RetrievalSettings, SynthesisSettings},
     indexer::{AccessScope, IndexerDb, RetrieverApi, SearchResult, StructuredResult},
     llm::LanguageModel,
     query::{RouteOperation, StructuredPlan, render_query},
@@ -18,6 +17,7 @@ use crate::chronicle::{
     synthesis::{self, EvidenceNote},
     transcription::TranscriptionService,
 };
+use crate::config::{GenerationSettings, RetrievalSettings, SynthesisSettings};
 
 pub use super::synthesis_pipeline::SynthesisDiagnostics;
 

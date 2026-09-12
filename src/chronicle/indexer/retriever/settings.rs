@@ -1,6 +1,10 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+use crate::config::{
+    RetrievalSettings as ConfigRetrievalSettings, SynthesisSettings as ConfigSynthesisSettings,
+};
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SearchSettings {
@@ -76,5 +80,52 @@ impl SearchSettings {
             "Invalid PageRank weight"
         );
         Ok(())
+    }
+}
+
+pub(crate) fn from_retrieval_config(config: &ConfigRetrievalSettings) -> SearchSettings {
+    SearchSettings {
+        limits: RetrievalLimits {
+            limit: config.limit,
+            candidate_limit: config.candidate_limit,
+        },
+        candidate_pool: CandidatePoolPolicy {
+            distance_threshold: config.distance_threshold,
+        },
+        fusion: FusionPolicy {
+            vector_rrf_weight: 1.0,
+            lexical_rrf_weight: 1.0,
+            pagerank_weight: config.pagerank_weight,
+            rrf_rank_constant: 60.0,
+        },
+        selection: SelectionPolicy {
+            near_duplicate_threshold: config.near_duplicate_threshold,
+            max_chunks_per_document: config.max_chunks_per_document,
+        },
+    }
+}
+
+pub(crate) fn from_synthesis_config(
+    config: &ConfigSynthesisSettings,
+    retrieval: &ConfigRetrievalSettings,
+) -> SearchSettings {
+    SearchSettings {
+        limits: RetrievalLimits {
+            limit: config.retrieval_limit,
+            candidate_limit: config.candidate_limit,
+        },
+        candidate_pool: CandidatePoolPolicy {
+            distance_threshold: retrieval.distance_threshold,
+        },
+        fusion: FusionPolicy {
+            vector_rrf_weight: 1.0,
+            lexical_rrf_weight: 1.0,
+            pagerank_weight: retrieval.pagerank_weight,
+            rrf_rank_constant: 60.0,
+        },
+        selection: SelectionPolicy {
+            near_duplicate_threshold: retrieval.near_duplicate_threshold,
+            max_chunks_per_document: config.max_chunks_per_document,
+        },
     }
 }

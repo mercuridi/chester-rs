@@ -84,17 +84,14 @@ fn checked_in_example_uses_the_only_supported_schema() -> Result<()> {
     let config_dir = directory.path().join(".chronicle");
     fs::create_dir(&config_dir)?;
     let path = config_dir.join("config.toml");
-    fs::write(
-        &path,
-        include_str!("../../../chronicle.config.example.toml"),
-    )?;
+    fs::write(&path, include_str!("../../chronicle.config.example.toml"))?;
     Config::load(AppPaths::from_runtime_root(directory.path(), None)?)?;
     Ok(())
 }
 
 #[test]
 fn readme_configuration_example_matches_and_parses_as_the_checked_in_example() -> Result<()> {
-    let readme = include_str!("../../../README.md");
+    let readme = include_str!("../../README.md");
     let (_, after_start) = readme
         .split_once("<!-- config-example:start -->\n```toml\n")
         .ok_or_else(|| anyhow::anyhow!("README configuration example must have a start marker"))?;
@@ -104,7 +101,7 @@ fn readme_configuration_example_matches_and_parses_as_the_checked_in_example() -
 
     assert_eq!(
         documented_config,
-        include_str!("../../../chronicle.config.example.toml"),
+        include_str!("../../chronicle.config.example.toml"),
         "README configuration example must stay in sync with the checked-in example"
     );
     load(documented_config)?;

@@ -9,11 +9,11 @@ use std::{
 };
 
 use crate::chronicle::{
-    config::Config,
     indexer::{AccessScope, IndexerDb, StructuredResult},
     llm::{Llm, ROUTE_CLASSIFIER_OUTPUT_TOKENS, STRUCTURED_PLAN_OUTPUT_TOKENS},
     runtime::GpuRuntime,
 };
+use crate::config::{Config, LlmSettings};
 
 use super::{
     parse_route,
@@ -97,7 +97,7 @@ struct PlannerRuntimeSettings {
 }
 
 impl PlannerRuntimeSettings {
-    fn from_llm_settings(settings: &crate::chronicle::config::LlmSettings) -> Self {
+    fn from_llm_settings(settings: &LlmSettings) -> Self {
         Self {
             model_repo: settings.model.repo.clone(),
             model_revision: settings.model.revision.clone(),
@@ -409,7 +409,7 @@ fn create_report_file(requested_path: Option<&Path>, log_dir: &Path) -> Result<(
 pub async fn run(
     suite_path: &Path,
     requested_report_path: Option<&Path>,
-    paths: &crate::chronicle::config::AppPaths,
+    paths: &crate::config::AppPaths,
 ) -> Result<()> {
     run_internal(
         suite_path,
@@ -423,7 +423,7 @@ pub async fn run(
 pub async fn run_planner(
     suite_path: &Path,
     requested_report_path: Option<&Path>,
-    paths: &crate::chronicle::config::AppPaths,
+    paths: &crate::config::AppPaths,
 ) -> Result<()> {
     run_internal(
         suite_path,
@@ -438,7 +438,7 @@ async fn run_internal(
     suite_path: &Path,
     requested_report_path: Option<&Path>,
     mode: EvaluationMode,
-    paths: &crate::chronicle::config::AppPaths,
+    paths: &crate::config::AppPaths,
 ) -> Result<()> {
     if let Some(path) = requested_report_path {
         ensure!(!path.exists(), "Report path must be a new file");

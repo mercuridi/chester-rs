@@ -24,9 +24,11 @@ pub(crate) use frontmatter::{Metadata, MetadataValue};
 pub(crate) use link_resolver::LinkResolution;
 pub(crate) use pagerank::compute;
 pub(crate) use prompt::build_prompt_with_budget;
+#[cfg(test)]
+pub(crate) use retriever::{CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SelectionPolicy};
 pub(crate) use retriever::{
-    CandidatePoolPolicy, FusionPolicy, RetrievalDiagnostics, RetrievalLimits, RetrievalOutcome,
-    Retriever, RetrieverApi, SearchSettings, SelectionPolicy, select_with_diagnostics,
+    RetrievalDiagnostics, RetrievalOutcome, Retriever, RetrieverApi, SearchSettings,
+    from_retrieval_config, from_synthesis_config, select_with_diagnostics,
 };
 pub(crate) use scanner::scan_directory_with_stats;
 pub(crate) use schema::{

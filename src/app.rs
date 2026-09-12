@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use dotenv::from_path;
 use std::time::Duration;
 
-use crate::chronicle::AppPaths;
+use crate::config::AppPaths;
 
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 

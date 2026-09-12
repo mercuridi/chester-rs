@@ -11,10 +11,10 @@ use hf_hub::{Repo, RepoType, api::sync::Api};
 use tokenizers::Tokenizer;
 
 use super::{
-    config::LlmSettings,
     query::{StructuredOperation, route_system_prompt, structured_system_prompt_with_taxonomy},
     runtime::{GpuRuntime, report_cuda_oom},
 };
+use crate::config::LlmSettings;
 use tracing::{info, instrument};
 
 /// Structured plans are intentionally short JSON objects, so reserve less
@@ -507,9 +507,9 @@ fn plan_repair_guidance(rejection_error: &str) -> &'static str {
 #[allow(clippy::float_cmp, clippy::unwrap_used)]
 mod tests {
     use super::Llm;
-    use crate::chronicle::{
+    use crate::{
+        chronicle::runtime::GpuRuntime,
         config::{GenerationSettings, LlmSettings, ModelSource, TokenizerSource},
-        runtime::GpuRuntime,
     };
 
     fn config() -> LlmSettings {

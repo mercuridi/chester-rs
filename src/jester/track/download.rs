@@ -52,8 +52,8 @@ pub struct DownloadConfig {
     pub concurrency: usize,
 }
 
-impl From<&crate::chronicle::AppPaths> for DownloadConfig {
-    fn from(paths: &crate::chronicle::AppPaths) -> Self {
+impl From<&crate::config::AppPaths> for DownloadConfig {
+    fn from(paths: &crate::config::AppPaths) -> Self {
         Self {
             audio_dir: paths.audio_dir.clone(),
             ytdlp_path: paths.ytdlp_path.clone(),

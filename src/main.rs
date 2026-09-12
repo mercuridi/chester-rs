@@ -1,5 +1,6 @@
 mod app;
 mod chronicle;
+mod config;
 mod database;
 mod discord;
 mod jester;

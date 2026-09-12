@@ -10,7 +10,6 @@ use tracing::{debug, info};
 use crate::{
     chronicle::transcription::TRANSCRIPT_PAGE_LIMIT,
     chronicle::{
-        config::{AliasGroup, Config},
         recording::{
             RecordingManifest, SessionId, notify_recording_user, resolve_finalized_recordings,
             resolve_session_directory,
@@ -20,6 +19,7 @@ use crate::{
             TranscriptParticipant, TranscriptionService,
         },
     },
+    config::{AliasGroup, Config},
     discord::constants::CHESTER_USER_ID,
     discord::{
         autocomplete::{
@@ -907,10 +907,12 @@ mod tests {
         format_timestamp, format_transcript, load_recording_manifest, paginate_transcript,
         resolve_session_directory, scene_offset_seconds, transcript_path,
     };
-    use crate::chronicle::{
+    use crate::{
+        chronicle::{
+            recording::{ManifestStatus, RecordingManifest, SceneEvent, SessionId},
+            transcription::{TRANSCRIPT_PAGE_LIMIT, TranscribedSegment, TranscriptEntry},
+        },
         config::AliasGroup,
-        recording::{ManifestStatus, RecordingManifest, SceneEvent, SessionId},
-        transcription::{TRANSCRIPT_PAGE_LIMIT, TranscribedSegment, TranscriptEntry},
     };
     use chrono::{Duration, Local, TimeZone};
     use serenity::model::id::{GuildId, UserId};

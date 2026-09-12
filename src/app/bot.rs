@@ -12,10 +12,11 @@ use tracing::info;
 
 use crate::{
     chronicle::{
-        AppPaths, Chronicle, ChronicleDependencies, Config, Embedder, GpuRuntime, Indexer,
-        IndexerDb, Llm, RecorderManager, Retriever, TranscriptionService, notify_recording_user,
-        report_cuda_oom, scan_incomplete_manifests,
+        Chronicle, ChronicleDependencies, Embedder, GpuRuntime, Indexer, IndexerDb, Llm,
+        RecorderManager, Retriever, TranscriptionService, notify_recording_user, report_cuda_oom,
+        scan_incomplete_manifests,
     },
+    config::{AppPaths, Config},
     database,
     discord::context::{Data, Error},
     jester::{

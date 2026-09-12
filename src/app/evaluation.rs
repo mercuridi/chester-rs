@@ -1,6 +1,7 @@
 use anyhow::Result;
 
-use crate::chronicle::{AppPaths, run_eval, run_planner, run_query, run_synthesis_eval};
+use crate::chronicle::{run_eval, run_planner, run_query, run_synthesis_eval};
+use crate::config::AppPaths;
 
 use super::cli::EvaluationCommand;
 

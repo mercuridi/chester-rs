@@ -10,7 +10,6 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use crate::chronicle::{
-    config::Config,
     indexer::{Embedder, Indexer, IndexerDb, Retriever},
     llm::{LanguageModel, Llm},
     query::RouteOperation,
@@ -18,6 +17,7 @@ use crate::chronicle::{
     service::{Chronicle, ChronicleDependencies, EffectiveRoute, SynthesisDiagnostics},
     transcription::TranscriptionService,
 };
+use crate::config::Config;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1207,7 +1207,7 @@ async fn evaluate_case(
 pub async fn run(
     suite_path: &Path,
     requested_report: Option<&Path>,
-    paths: &crate::chronicle::config::AppPaths,
+    paths: &crate::config::AppPaths,
 ) -> Result<()> {
     let suite: Suite = toml::from_str(&std::fs::read_to_string(suite_path)?)?;
     validate(&suite)?;

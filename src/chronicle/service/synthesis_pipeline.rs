@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::chronicle::{
-    config::{RetrievalSettings, SynthesisSettings},
-    indexer::{AccessScope, RetrievalOutcome, RetrieverApi, SearchResult},
+use crate::chronicle::indexer::{
+    AccessScope, RetrievalOutcome, RetrieverApi, SearchResult, from_synthesis_config,
 };
+use crate::config::{RetrievalSettings, SynthesisSettings};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct RetrievedDocumentDiagnostic {
@@ -71,7 +71,7 @@ pub(in crate::chronicle::service) async fn retrieve_evidence(
     question: &str,
     access: AccessScope,
 ) -> EvidenceRetrieval {
-    let settings = synthesis.search_settings(retrieval);
+    let settings = from_synthesis_config(synthesis, retrieval);
     match retriever.search(question, settings, access).await {
         Ok(RetrievalOutcome::Results(results)) => EvidenceRetrieval::Evidence(results),
         Ok(RetrievalOutcome::BadQuestion) => {

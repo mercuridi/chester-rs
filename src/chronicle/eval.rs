@@ -392,7 +392,7 @@ fn fixture_fingerprint(
 pub async fn run(
     suite_path: &Path,
     requested_report_path: Option<&Path>,
-    paths: &crate::chronicle::config::AppPaths,
+    paths: &crate::config::AppPaths,
 ) -> Result<()> {
     if let Some(path) = requested_report_path {
         ensure!(!path.exists(), "Report path must be a new file");

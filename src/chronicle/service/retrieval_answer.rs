@@ -3,10 +3,13 @@ use tracing::debug;
 
 use super::answer_routing::RetrievalMode;
 use crate::chronicle::{
-    config::{GenerationSettings, RetrievalSettings},
-    indexer::{AccessScope, RetrievalOutcome, RetrieverApi, build_prompt_with_budget},
+    indexer::{
+        AccessScope, RetrievalOutcome, RetrieverApi, build_prompt_with_budget,
+        from_retrieval_config,
+    },
     llm::LanguageModel,
 };
+use crate::config::{GenerationSettings, RetrievalSettings};
 
 pub(in crate::chronicle::service) async fn answer_from_retrieval(
     retriever: &dyn RetrieverApi,
@@ -25,7 +28,7 @@ pub(in crate::chronicle::service) async fn answer_from_retrieval(
         return Ok(truncate_to_char_limit(prefix, generation.max_reply_length));
     }
     let outcome = match retriever
-        .search(question, retrieval.search_settings(), access)
+        .search(question, from_retrieval_config(retrieval), access)
         .await
     {
         Ok(outcome) => outcome,
