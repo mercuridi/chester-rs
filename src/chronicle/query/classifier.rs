@@ -6,15 +6,15 @@ Valid outputs are exactly {"operation":"count"}, {"operation":"list"}, {"operati
 
 Apply these precedence rules in order. When more than one rule appears to match, the earlier rule wins:
 1. clarify: if the subject is missing or the question contains an unresolved conversational reference. "How many are there?" and "List them." are clarify, even though they contain count/list words.
-2. unsupported: if the question requests a count or list but requires an unavailable restriction such as negation, OR, historical state, non-canon notes, missing-field tests, population totals, templates, or an unsupported field/relationship. "List characters who are not dead.", "List PCs or former PCs.", and "How many draft NPCs are recorded?" are unsupported.
+2. unsupported: if the question requests a count or list but requires an unavailable restriction such as negation, OR, historical state, non-canon notes, missing-field tests, population totals, templates, or an unsupported field/relationship. "List characters who are not dead.", "List PCs or former PCs.", and "How many draft NPCs are recorded?" are unsupported. The supported character life_status values alive, dead, missing, and unknown are not negation or unavailable restrictions.
 3. count_members: if the question asks for the number of values in one named note's declared relationship/list field. This takes precedence over generic count because it also contains "how many": "How many enemies does Ada have?" is count_members, not count.
-4. count/list: if the question explicitly requests the number/total/how many of matching notes, use count; if it requests notes or names using list/name/identify/who/what comprises, use list.
+4. count/list: if the question explicitly requests the number/total/how many of matching notes, use count; if it requests notes or names using list/name/identify/who/which/what comprises, use list.
 5. synthesis: if the question asks for a broad history, overview, narrative, relationship trace, or how something developed.
 6. search: otherwise, use search only for a focused factual, where/who, or explanatory answer.
 
 Choose the route from the user's requested answer shape using the precedence rules above:
-- count: the number, total, or how many recorded notes match a class. Example: "How many NPCs are recorded?" -> {"operation":"count"}.
-- list: the notes or names in a matching class. Treat list, name, identify, who, and what comprises as list requests. Examples: "Name the characters that appeared in Blueskies." and "Identify characters with the Great Dungeon Fight recorded as their life status cause." -> {"operation":"list"}.
+- count: the number, total, or how many recorded notes match a class. Examples: "How many NPCs are recorded?" and "How many dead PCs are recorded?" -> {"operation":"count"}. Dead is a supported life_status filter; only a negation such as "not dead" is unsupported.
+- list: the notes or names in a matching class. Treat list, name, identify, who, which, and what comprises as list requests. Examples: "Name the characters that appeared in Blueskies.", "Identify characters with the Great Dungeon Fight recorded as their life status cause.", and "Which characters both appeared in Blueskies and have the Great Dungeon Fight as their life status cause?" -> {"operation":"list"}.
 - count_members: the number of values in one named note's declared relationship/list field. Example: "How many enemies does Ada have?" -> {"operation":"count_members"}. This is not a count of matching notes.
 - search: one focused factual, where/who, or explanatory answer that does not request a count, list, names, or a matching set. Examples: "Where is Moonspire?" and "Who leads the Ember Guild?" -> {"operation":"search"}.
 - synthesis: a broad history, overview, narrative, relationship trace, or question about how something developed. Examples: "Summarise the history of Northmere." and "Tell me the story of the Ember Kingdom." -> {"operation":"synthesis"}.
@@ -48,6 +48,12 @@ mod tests {
         assert!(SYSTEM.contains("How many enemies does Ada have?"));
         assert!(SYSTEM.contains("List PCs or former PCs."));
         assert!(SYSTEM.contains("How many living NPCs are recorded?"));
+        assert!(SYSTEM.contains("How many dead PCs are recorded?"));
+        assert!(SYSTEM.contains("Dead is a supported life_status filter"));
+        assert!(SYSTEM.contains("which, and what comprises as list requests"));
+        assert!(SYSTEM.contains(
+            "Which characters both appeared in Blueskies and have the Great Dungeon Fight as their life status cause?"
+        ));
         assert!(SYSTEM.contains("Apply these precedence rules in order"));
         assert!(SYSTEM.contains("This takes precedence over generic count"));
         assert!(SYSTEM.contains("unavailable restriction"));
