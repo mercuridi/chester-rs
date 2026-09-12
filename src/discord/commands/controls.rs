@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use crate::{
     discord::{
         autocomplete::{autocomplete_mix_filter, autocomplete_queue_position, autocomplete_track},
@@ -11,7 +13,7 @@ use crate::{
     },
     utils::format::lightweight_trim,
 };
-use std::fmt::Write;
+
 pub fn pause_message(resumed: bool) -> &'static str {
     if resumed {
         "Resumed the currently paused track."
