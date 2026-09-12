@@ -21,7 +21,7 @@ use tracing::info;
 use crate::{
     chronicle::{
         config::{AppPaths, Config},
-        indexer::retriever::runtime::Retriever,
+        indexer::retriever::Retriever,
         indexer::{db::IndexerDb, embedder::Embedder, service::Indexer},
         llm::Llm,
         recording::recorder::{notify_recording_user, scan_incomplete_manifests},

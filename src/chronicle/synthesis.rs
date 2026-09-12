@@ -493,8 +493,8 @@ mod tests {
 
     #[test]
     fn topology_selection_measures_duplicates_caps_and_result_limits() {
-        use crate::chronicle::indexer::retriever::pipeline::select_with_diagnostics;
-        use crate::chronicle::indexer::retriever::settings::{
+        use crate::chronicle::indexer::retriever::select_with_diagnostics;
+        use crate::chronicle::indexer::retriever::{
             CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
         };
 

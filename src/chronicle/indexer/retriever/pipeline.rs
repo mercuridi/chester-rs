@@ -1,11 +1,10 @@
 use std::collections::HashMap;
 
 use super::{
+    RetrievalDiagnostics, SearchSettings,
     candidate::RankedCandidate,
-    diagnostics::RetrievalDiagnostics,
     ranking::{build_ranked_candidates, filter_vector_candidates, score_fused_candidates},
     selection::apply_selection_constraints,
-    settings::SearchSettings,
 };
 use crate::chronicle::indexer::db::{PageRankSignal, SearchResult};
 
@@ -50,9 +49,9 @@ fn finalize_diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chronicle::indexer::retriever::selection::{canonical_text, shingles};
     use crate::chronicle::indexer::retriever::{
-        selection::{canonical_text, shingles},
-        settings::{CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SelectionPolicy},
+        CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SelectionPolicy,
     };
 
     fn result(

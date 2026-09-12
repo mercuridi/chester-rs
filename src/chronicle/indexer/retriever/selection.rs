@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::{candidate::RankedCandidate, settings::SelectionPolicy};
+use super::{SelectionPolicy, candidate::RankedCandidate};
 use crate::chronicle::indexer::db::SearchResult;
 
 pub(super) fn apply_selection_constraints(

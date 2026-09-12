@@ -12,7 +12,7 @@ use crate::chronicle::{
     config::{GenerationSettings, RetrievalSettings, SynthesisSettings},
     indexer::{
         db::{AccessScope, IndexerDb, SearchResult, StructuredResult},
-        retriever::api::RetrieverApi,
+        retriever::RetrieverApi,
     },
     llm::LanguageModel,
     query::{
@@ -542,10 +542,7 @@ mod tests {
     use crate::chronicle::{
         indexer::{
             db::{AccessScope, IndexerDb, SearchResult, StructuredResult},
-            retriever::{
-                api::{RetrievalOutcome, RetrieverApi},
-                settings::SearchSettings,
-            },
+            retriever::{RetrievalOutcome, RetrieverApi, SearchSettings},
         },
         llm::LanguageModel,
         query::plan::{RouteOperation, StructuredOperation, StructuredPlan},

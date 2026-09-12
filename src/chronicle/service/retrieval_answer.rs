@@ -7,7 +7,7 @@ use crate::chronicle::{
     indexer::{
         db::AccessScope,
         prompt,
-        retriever::api::{RetrievalOutcome, RetrieverApi},
+        retriever::{RetrievalOutcome, RetrieverApi},
     },
     llm::LanguageModel,
 };

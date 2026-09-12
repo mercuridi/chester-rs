@@ -4,7 +4,7 @@ use crate::chronicle::{
     config::{RetrievalSettings, SynthesisSettings},
     indexer::{
         db::{AccessScope, SearchResult},
-        retriever::api::{RetrievalOutcome, RetrieverApi},
+        retriever::{RetrievalOutcome, RetrieverApi},
     },
 };
 

@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serenity::all::UserId;
 
-use crate::chronicle::indexer::retriever::settings::{
+use crate::chronicle::indexer::retriever::{
     CandidatePoolPolicy, FusionPolicy, RetrievalLimits, SearchSettings, SelectionPolicy,
 };
 use crate::discord::constants::MESSAGE_MAX_CHARS;

@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use super::settings::SearchSettings;
+use super::SearchSettings;
 use crate::chronicle::indexer::db::{AccessScope, SearchResult};
 
 #[async_trait::async_trait]

@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::settings::SearchSettings;
+use super::SearchSettings;
 
 #[derive(Debug, Serialize)]
 pub struct CandidateDiagnostic {

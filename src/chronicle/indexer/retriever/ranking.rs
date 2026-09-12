@@ -1,9 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
-use super::{
-    candidate::RankedCandidate,
-    settings::{CandidatePoolPolicy, FusionPolicy},
-};
+use super::{CandidatePoolPolicy, FusionPolicy, candidate::RankedCandidate};
 use crate::chronicle::indexer::db::{PageRankSignal, SearchResult};
 
 pub(super) fn build_ranked_candidates(

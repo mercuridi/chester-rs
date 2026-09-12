@@ -5,11 +5,7 @@ use candle_core::Device;
 use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, info, instrument};
 
-use super::{
-    api::{RetrievalOutcome, RetrieverApi},
-    pipeline::select_with_diagnostics_and_pagerank,
-    settings::SearchSettings,
-};
+use super::{RetrievalOutcome, RetrieverApi, SearchSettings, select_with_diagnostics_and_pagerank};
 use crate::chronicle::indexer::{
     db::{AccessScope, IndexerDb},
     embedder::Embedder,
