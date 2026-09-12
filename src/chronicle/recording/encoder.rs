@@ -20,7 +20,7 @@ struct EncoderState {
     mono_buffer: [i16; MONO_FRAME_SAMPLES],
     opus_packet: [u8; MAX_OPUS_PACKET_SIZE],
     granule_position: u64,
-    encoded_packets: Vec<(Vec<u8>, u64)>,
+    pending_packet: Option<(Vec<u8>, u64)>,
 }
 
 pub fn run_encoder(
@@ -56,27 +56,41 @@ pub fn run_encoder(
         mono_buffer: [0; MONO_FRAME_SAMPLES],
         opus_packet: [0; MAX_OPUS_PACKET_SIZE],
         granule_position: 0,
-        encoded_packets: Vec::new(),
+        pending_packet: None,
     };
-    encode_initial_silence(initial_silence_ticks, &mut state)?;
+    encode_initial_silence(initial_silence_ticks, &mut state, &mut ogg, serial)?;
     let (next_tick, final_tick) = drain_recording_frames(
         user_id,
         consumer,
         stop_rx,
         initial_silence_ticks,
         &mut state,
+        &mut ogg,
+        serial,
     )?;
-    pad_final_silence(final_tick, next_tick, &mut state)?;
-    write_audio_packets(&mut ogg, serial, state.encoded_packets)?;
+    pad_final_silence(final_tick, next_tick, &mut state, &mut ogg, serial)?;
+    if let Some((packet, granule_position)) = state.pending_packet.take() {
+        ogg.write_packet(
+            packet,
+            serial,
+            PacketWriteEndInfo::EndStream,
+            granule_position,
+        )?;
+    }
 
     tracing::info!(?user_id, ?path, "Finished recording");
 
     Ok(())
 }
 
-fn encode_initial_silence(ticks: u64, state: &mut EncoderState) -> Result<(), Error> {
+fn encode_initial_silence<W: std::io::Write>(
+    ticks: u64,
+    state: &mut EncoderState,
+    ogg: &mut PacketWriter<W>,
+    serial: u32,
+) -> Result<(), Error> {
     for _ in 0..ticks {
-        encode_silence_frame(state)?;
+        encode_silence_frame(state, ogg, serial)?;
     }
     Ok(())
 }
@@ -87,6 +101,8 @@ fn drain_recording_frames(
     mut stop_rx: oneshot::Receiver<u64>,
     initial_silence_ticks: u64,
     state: &mut EncoderState,
+    ogg: &mut PacketWriter<impl std::io::Write>,
+    serial: u32,
 ) -> Result<(u64, Option<u64>), Error> {
     let mut stopping = false;
     let mut final_tick = None;
@@ -103,7 +119,7 @@ fn drain_recording_frames(
             };
 
             while next_tick < frame.tick {
-                encode_silence_frame(state)?;
+                encode_silence_frame(state, ogg, serial)?;
                 next_tick += 1;
             }
 
@@ -118,7 +134,7 @@ fn drain_recording_frames(
             }
 
             downmix_stereo_frame(&frame.samples, &mut state.mono_buffer);
-            encode_mono_frame(state)?;
+            encode_mono_frame(state, ogg, serial)?;
             next_tick += 1;
         }
 
@@ -147,41 +163,42 @@ fn pad_final_silence(
     final_tick: Option<u64>,
     mut next_tick: u64,
     state: &mut EncoderState,
+    ogg: &mut PacketWriter<impl std::io::Write>,
+    serial: u32,
 ) -> Result<(), Error> {
     if let Some(final_tick) = final_tick {
         while next_tick < final_tick {
-            encode_silence_frame(state)?;
+            encode_silence_frame(state, ogg, serial)?;
             next_tick += 1;
         }
     }
     Ok(())
 }
 
-fn write_audio_packets<W: std::io::Write>(
+fn encode_mono_frame<W: std::io::Write>(
+    state: &mut EncoderState,
     ogg: &mut PacketWriter<W>,
     serial: u32,
-    encoded_packets: Vec<(Vec<u8>, u64)>,
-) -> std::io::Result<()> {
-    let packet_count = encoded_packets.len();
-    for (index, (packet, granule_position)) in encoded_packets.into_iter().enumerate() {
-        let end_info = if index + 1 == packet_count {
-            PacketWriteEndInfo::EndStream
-        } else {
-            PacketWriteEndInfo::NormalPacket
-        };
-        ogg.write_packet(packet, serial, end_info, granule_position)?;
-    }
-    Ok(())
-}
-
-fn encode_mono_frame(state: &mut EncoderState) -> Result<(), Error> {
+) -> Result<(), Error> {
     let encoded_len = state
         .opus
         .encode(&state.mono_buffer, &mut state.opus_packet)?;
 
     if encoded_len > 0 {
         state.granule_position += MONO_FRAME_SAMPLES as u64;
-        state.encoded_packets.push((
+
+        // Keep only the newest packet back so it can receive EndStream. The
+        // preceding packet is complete and can be flushed to disk now.
+        if let Some((packet, granule_position)) = state.pending_packet.take() {
+            ogg.write_packet(
+                packet,
+                serial,
+                PacketWriteEndInfo::EndPage,
+                granule_position,
+            )?;
+        }
+
+        state.pending_packet = Some((
             state.opus_packet[..encoded_len].to_vec(),
             state.granule_position,
         ));
@@ -190,9 +207,13 @@ fn encode_mono_frame(state: &mut EncoderState) -> Result<(), Error> {
     Ok(())
 }
 
-fn encode_silence_frame(state: &mut EncoderState) -> Result<(), Error> {
+fn encode_silence_frame<W: std::io::Write>(
+    state: &mut EncoderState,
+    ogg: &mut PacketWriter<W>,
+    serial: u32,
+) -> Result<(), Error> {
     state.mono_buffer.fill(0);
-    encode_mono_frame(state)
+    encode_mono_frame(state, ogg, serial)
 }
 
 fn downmix_stereo_frame(interleaved: &[i16], mono: &mut [i16; MONO_FRAME_SAMPLES]) {
@@ -258,7 +279,7 @@ mod tests {
     use ogg::PacketReader;
     use rtrb::RingBuffer;
     use serenity::all::UserId;
-    use std::{fs::File, io::BufReader};
+    use std::{fs::File, io::BufReader, thread, time::Duration};
     use tempfile::tempdir;
     use tokio::sync::oneshot;
 
@@ -354,6 +375,61 @@ mod tests {
 
         assert_eq!(participant_with_drop, participant_without_drop);
         assert_eq!(participant_with_drop, 5);
+        Ok(())
+    }
+
+    #[test]
+    fn writes_audio_before_stop() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let path = directory.path().join("recording.opus");
+        let (mut producer, consumer) = RingBuffer::new(8);
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let encoder_path = path.clone();
+        let handle =
+            thread::spawn(move || run_encoder(UserId::new(1), &encoder_path, consumer, stop_rx, 0));
+
+        for tick in 0..2 {
+            let mut chunk = producer.write_chunk(1)?;
+            let (first, second) = chunk.as_mut_slices();
+            if let Some(slot) = first.first_mut() {
+                *slot = frame(tick, 100);
+            } else if let Some(slot) = second.first_mut() {
+                *slot = frame(tick, 100);
+            }
+            chunk.commit_all();
+        }
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let mut audio_seen = false;
+        while std::time::Instant::now() < deadline {
+            if let Ok(file) = File::open(&path) {
+                let mut packets = PacketReader::new(BufReader::new(file));
+                let mut audio_packets = 0;
+                while let Ok(Some(packet)) = packets.read_packet() {
+                    if !packet.data.starts_with(b"OpusHead")
+                        && !packet.data.starts_with(b"OpusTags")
+                    {
+                        audio_packets += 1;
+                    }
+                }
+                if audio_packets > 0 {
+                    audio_seen = true;
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        stop_tx
+            .send(2)
+            .map_err(|tick| anyhow::anyhow!("failed to stop encoder at tick {tick}"))?;
+        drop(producer);
+        handle
+            .join()
+            .map_err(|_| anyhow::anyhow!("encoder thread panicked"))?
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+        assert!(audio_seen, "audio was not written before recording stopped");
         Ok(())
     }
 }
