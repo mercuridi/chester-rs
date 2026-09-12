@@ -44,6 +44,9 @@ pub trait LanguageModel: Send + Sync {
     }
     async fn load(&self) -> Result<()>;
     async fn unload(&self) -> Result<()>;
+    fn is_loaded(&self) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 #[derive(Clone)]
@@ -389,6 +392,10 @@ fn format_chat_prompt(system: &str, prompt: &str) -> String {
 
 #[async_trait::async_trait]
 impl LanguageModel for Llm {
+    fn is_loaded(&self) -> Result<bool> {
+        self.runtime.is_llm_loaded()
+    }
+
     fn prompt_token_budget(&self) -> usize {
         self.prompt_token_budget()
     }

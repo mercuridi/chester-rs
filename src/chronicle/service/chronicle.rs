@@ -583,6 +583,7 @@ mod tests {
         outcome: FakeOutcome,
         calls: Mutex<Vec<(String, usize, usize, f32, f32, usize)>>,
         accesses: Mutex<Vec<crate::chronicle::indexer::db::repository::facade::AccessScope>>,
+        embedder_loaded: Mutex<bool>,
         loads: Mutex<usize>,
         unloads: Mutex<usize>,
     }
@@ -639,6 +640,7 @@ mod tests {
                 outcome,
                 calls: Mutex::new(Vec::new()),
                 accesses: Mutex::new(Vec::new()),
+                embedder_loaded: Mutex::new(false),
                 loads: Mutex::new(0),
                 unloads: Mutex::new(0),
             }
@@ -727,9 +729,17 @@ mod tests {
             }
         }
 
-        async fn load_embedder(&self) -> Result<()> {
+        async fn load_embedder(&self) -> Result<bool> {
             *self.loads.lock().map_err(|_| anyhow!("loads poisoned"))? += 1;
-            Ok(())
+            let mut loaded = self
+                .embedder_loaded
+                .lock()
+                .map_err(|_| anyhow!("embedder state poisoned"))?;
+            if *loaded {
+                return Ok(false);
+            }
+            *loaded = true;
+            Ok(true)
         }
 
         async fn unload_embedder(&self) -> Result<()> {
@@ -737,6 +747,10 @@ mod tests {
                 .unloads
                 .lock()
                 .map_err(|_| anyhow!("unloads poisoned"))? += 1;
+            *self
+                .embedder_loaded
+                .lock()
+                .map_err(|_| anyhow!("embedder state poisoned"))? = false;
             Ok(())
         }
     }
@@ -785,6 +799,10 @@ mod tests {
 
     #[async_trait::async_trait]
     impl LanguageModel for FakeLlm {
+        fn is_loaded(&self) -> Result<bool> {
+            self.runtime.is_llm_loaded()
+        }
+
         fn prompt_token_budget(&self) -> usize {
             *self.budget.lock().expect("budget poisoned")
         }
@@ -1705,6 +1723,47 @@ mod tests {
         assert_eq!(mutex_value(&retriever.unloads)?, 1);
         assert_eq!(mutex_value(&llm.loads)?, 1);
         assert_eq!(mutex_value(&llm.unloads)?, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lifecycle_start_is_idempotent_when_models_are_ready() -> Result<()> {
+        let runtime = GpuRuntime::new();
+        let retriever = Arc::new(FakeRetriever::new(FakeOutcome::Results));
+        let llm = Arc::new(FakeLlm::new(runtime.clone(), []));
+        let chronicle = chronicle_with_dependencies(retriever.clone(), llm.clone(), runtime, 100);
+
+        chronicle.start_llm().await?;
+        chronicle.start_llm().await?;
+
+        assert_eq!(mutex_value(&retriever.loads)?, 1);
+        assert_eq!(mutex_value(&retriever.unloads)?, 0);
+        assert_eq!(mutex_value(&llm.loads)?, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_llm_load_retains_preexisting_embedder() -> Result<()> {
+        let runtime = GpuRuntime::new();
+        let retriever = Arc::new(FakeRetriever::new(FakeOutcome::Results));
+        *retriever
+            .embedder_loaded
+            .lock()
+            .map_err(|_| anyhow!("embedder state poisoned"))? = true;
+        let mut model = FakeLlm::new(runtime.clone(), []);
+        model.fail_load = true;
+        let llm = Arc::new(model);
+        let chronicle = chronicle_with_dependencies(retriever.clone(), llm, runtime.clone(), 100);
+
+        assert!(chronicle.start_llm().await.is_err());
+        assert_eq!(mutex_value(&retriever.unloads)?, 0);
+        assert!(
+            *retriever
+                .embedder_loaded
+                .lock()
+                .map_err(|_| anyhow!("embedder state poisoned"))?
+        );
+        assert!(!runtime.is_llm_loaded()?);
         Ok(())
     }
 

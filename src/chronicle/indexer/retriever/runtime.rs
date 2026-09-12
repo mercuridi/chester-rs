@@ -33,18 +33,18 @@ impl Retriever {
     }
 
     #[instrument(skip(self))]
-    pub async fn load_embedder(&self) -> Result<()> {
+    pub async fn load_embedder(&self) -> Result<bool> {
         let embedder = tokio::task::spawn_blocking(|| Embedder::load(Device::Cpu))
             .await
             .context("CPU embedder loading task failed")??;
         let mut slot = self.embedder.write().await;
         if slot.is_some() {
             debug!("Retriever embedder already loaded");
-            return Ok(());
+            return Ok(false);
         }
         *slot = Some(Arc::new(embedder));
         info!("Retriever embedder loaded");
-        Ok(())
+        Ok(true)
     }
 
     pub async fn unload_embedder(&self) -> Result<()> {
@@ -121,7 +121,7 @@ impl RetrieverApi for Retriever {
     ) -> Result<RetrievalOutcome> {
         self.search(query, settings, access).await
     }
-    async fn load_embedder(&self) -> Result<()> {
+    async fn load_embedder(&self) -> Result<bool> {
         self.load_embedder().await
     }
     async fn unload_embedder(&self) -> Result<()> {

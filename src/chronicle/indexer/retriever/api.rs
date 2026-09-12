@@ -11,7 +11,8 @@ pub trait RetrieverApi: Send + Sync {
         settings: SearchSettings,
         access: AccessScope,
     ) -> Result<RetrievalOutcome>;
-    async fn load_embedder(&self) -> Result<()>;
+    /// Load the embedder, returning whether this call created it.
+    async fn load_embedder(&self) -> Result<bool>;
     async fn unload_embedder(&self) -> Result<()>;
 }
 

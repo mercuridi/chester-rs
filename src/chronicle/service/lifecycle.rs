@@ -8,10 +8,22 @@ pub(in crate::chronicle::service) async fn start(
     llm: &dyn LanguageModel,
 ) -> Result<()> {
     info!("Starting Chronicle models");
-    retriever.load_embedder().await?;
+    // The LLM being loaded is the readiness signal for the whole subsystem.
+    // In particular, do not retry its load: doing so fails against the runtime
+    // state machine while leaving the already-loaded models in place.
+    if llm.is_loaded()? {
+        info!("Chronicle models already ready");
+        return Ok(());
+    }
+
+    let embedder_acquired = retriever.load_embedder().await?;
     if let Err(error) = llm.load().await {
-        tracing::warn!(%error, "Chronicle LLM failed to load; releasing embedder");
-        retriever.unload_embedder().await?;
+        if embedder_acquired {
+            tracing::warn!(%error, "Chronicle LLM failed to load; releasing attempt's embedder");
+            retriever.unload_embedder().await?;
+        } else {
+            tracing::warn!(%error, "Chronicle LLM failed to load; retaining existing embedder");
+        }
         return Err(error);
     }
     info!("Chronicle models ready");
