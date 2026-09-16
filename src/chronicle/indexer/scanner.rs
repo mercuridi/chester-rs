@@ -28,7 +28,6 @@ pub(crate) enum CorpusErrorKind {
     Frontmatter,
     SecretCallout,
     DuplicateId,
-    ChangedDuringIndex,
     Resolution,
 }
 
@@ -40,8 +39,7 @@ impl CorpusErrorKind {
             Self::Frontmatter => 2,
             Self::SecretCallout => 3,
             Self::DuplicateId => 4,
-            Self::ChangedDuringIndex => 5,
-            Self::Resolution => 6,
+            Self::Resolution => 5,
         }
     }
 
@@ -52,7 +50,6 @@ impl CorpusErrorKind {
             Self::Frontmatter => "frontmatter",
             Self::SecretCallout => "secret-callout",
             Self::DuplicateId => "duplicate-id",
-            Self::ChangedDuringIndex => "changed-during-index",
             Self::Resolution => "resolution",
         }
     }
@@ -136,16 +133,9 @@ impl std::fmt::Display for CorpusErrors {
 
 impl std::error::Error for CorpusErrors {}
 
-#[derive(Debug, Clone)]
-pub struct DocumentCandidate {
-    pub path: std::path::PathBuf,
-    pub metadata: super::frontmatter::Metadata,
-    pub content_hash: String,
-}
-
 #[derive(Debug)]
 pub(crate) struct CorpusScan {
-    pub(crate) candidates: Vec<DocumentCandidate>,
+    pub(crate) documents: Vec<Document>,
     pub(crate) stats: CorpusStats,
     pub(crate) errors: CorpusErrors,
 }
@@ -153,12 +143,12 @@ pub(crate) struct CorpusScan {
 pub fn discover_directory_with_stats_excluding(
     root: impl AsRef<Path>,
     excluded_note_ids: &HashSet<String>,
-) -> Result<(Vec<DocumentCandidate>, CorpusStats)> {
+) -> Result<(Vec<Document>, CorpusStats)> {
     let scan = scan_directory_internal(root, excluded_note_ids)?;
     if !scan.errors.is_empty() {
         return Err(scan.errors.into_error());
     }
-    Ok((scan.candidates, scan.stats))
+    Ok((scan.documents, scan.stats))
 }
 
 pub(crate) fn scan_directory_partial_with_stats_excluding(
@@ -177,29 +167,7 @@ pub fn scan_directory_with_stats_excluding(
     root: impl AsRef<Path>,
     excluded_note_ids: &HashSet<String>,
 ) -> Result<(Vec<Document>, CorpusStats)> {
-    let root = root.as_ref();
-    let (candidates, stats) = discover_directory_with_stats_excluding(root, excluded_note_ids)?;
-    let documents = reload_documents(&candidates)?;
-    Ok((documents, stats))
-}
-
-fn reload_documents(candidates: &[DocumentCandidate]) -> Result<Vec<Document>> {
-    let mut documents = Vec::with_capacity(candidates.len());
-    let mut errors = CorpusErrors::new();
-    for candidate in candidates {
-        match load_document(candidate) {
-            Ok(document) => documents.push(document),
-            Err(error) => errors.push(
-                Some(candidate.path.clone()),
-                reload_error_kind(&error),
-                error,
-            ),
-        }
-    }
-    if !errors.is_empty() {
-        return Err(errors.into_error());
-    }
-    Ok(documents)
+    discover_directory_with_stats_excluding(root, excluded_note_ids)
 }
 
 fn scan_directory_internal(
@@ -215,14 +183,14 @@ fn scan_directory_internal(
         );
     }
 
-    let mut documents = Vec::new();
+    let mut documents: Vec<Document> = Vec::new();
     let mut stats = CorpusStats {
         directories: 1,
         ..CorpusStats::default()
     };
     let mut errors = CorpusErrors::new();
     if !is_templates_directory(root) {
-        scan_directory_recursive_candidates(
+        scan_directory_recursive_documents(
             root,
             &mut documents,
             &mut stats,
@@ -271,31 +239,15 @@ fn scan_directory_internal(
     );
 
     Ok(CorpusScan {
-        candidates: documents,
+        documents,
         stats,
         errors,
     })
 }
 
-pub fn load_document(candidate: &DocumentCandidate) -> Result<Document> {
-    let document = scan_file(&candidate.path)?.ok_or_else(|| {
-        anyhow::anyhow!(
-            "Document became ineligible during indexing: {}",
-            candidate.path.display()
-        )
-    })?;
-    if document.content_hash != candidate.content_hash {
-        anyhow::bail!(
-            "Document changed while indexing: {}",
-            candidate.path.display()
-        );
-    }
-    Ok(document)
-}
-
-fn scan_directory_recursive_candidates(
+fn scan_directory_recursive_documents(
     directory: &Path,
-    documents: &mut Vec<DocumentCandidate>,
+    documents: &mut Vec<Document>,
     stats: &mut CorpusStats,
     errors: &mut CorpusErrors,
     excluded_note_ids: &HashSet<String>,
@@ -344,7 +296,7 @@ fn scan_directory_recursive_candidates(
                 continue;
             }
             stats.directories += 1;
-            scan_directory_recursive_candidates(&path, documents, stats, errors, excluded_note_ids);
+            scan_directory_recursive_documents(&path, documents, stats, errors, excluded_note_ids);
             continue;
         }
 
@@ -368,7 +320,7 @@ fn scan_directory_recursive_candidates(
         stats.files += 1;
         stats.words += document.content.split_whitespace().count();
         stats.characters += document.content.chars().count();
-        documents.push(document.candidate());
+        documents.push(document);
     }
 }
 
@@ -380,15 +332,6 @@ fn scan_error_kind(error: &anyhow::Error) -> CorpusErrorKind {
         CorpusErrorKind::Frontmatter
     } else {
         CorpusErrorKind::Read
-    }
-}
-
-pub(crate) fn reload_error_kind(error: &anyhow::Error) -> CorpusErrorKind {
-    let message = error.to_string();
-    if message.contains("Document changed") || message.contains("became ineligible") {
-        CorpusErrorKind::ChangedDuringIndex
-    } else {
-        scan_error_kind(error)
     }
 }
 
@@ -674,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_scan_keeps_valid_candidates_and_collects_sibling_errors() -> anyhow::Result<()> {
+    fn partial_scan_retains_valid_documents_and_collects_sibling_errors() -> anyhow::Result<()> {
         let directory = tempdir()?;
         fs::write(directory.path().join("valid.md"), note("valid", "canon"))?;
         fs::write(
@@ -692,8 +635,12 @@ mod tests {
         let scan =
             super::scan_directory_partial_with_stats_excluding(directory.path(), &HashSet::new())?;
 
-        assert_eq!(scan.candidates.len(), 1);
-        assert_eq!(scan.candidates[0].metadata.id, "valid");
+        assert_eq!(scan.documents.len(), 1);
+        let document = &scan.documents[0];
+        assert_eq!(document.metadata.id, "valid");
+        assert!(document.content.contains("The tower stands here."));
+        assert_eq!(document.public_body, "The tower stands here.");
+        assert_eq!(document.content_hash.len(), 64);
         assert_eq!(scan.stats.files, 1);
         assert_eq!(scan.errors.diagnostics.len(), 2);
         let report = scan.errors.to_string();
@@ -756,37 +703,14 @@ mod tests {
             return Ok(());
         }
         assert!(
-            scan.candidates
+            scan.documents
                 .iter()
-                .any(|candidate| candidate.metadata.id == "sibling")
+                .any(|document| document.metadata.id == "sibling")
         );
         assert!(scan.errors.diagnostics.iter().any(|diagnostic| {
             diagnostic.kind == CorpusErrorKind::DirectoryTraversal
                 && diagnostic.path.as_deref() == Some(unreadable.as_path())
         }));
-        Ok(())
-    }
-
-    #[test]
-    fn reload_pass_attempts_every_candidate_and_aggregates_changes() -> anyhow::Result<()> {
-        let directory = tempdir()?;
-        let first_path = directory.path().join("first.md");
-        let second_path = directory.path().join("second.md");
-        fs::write(&first_path, note("first", "canon"))?;
-        fs::write(&second_path, note("second", "canon"))?;
-        let scan =
-            super::scan_directory_partial_with_stats_excluding(directory.path(), &HashSet::new())?;
-
-        fs::write(&first_path, note("first", "canon") + "\nChanged")?;
-        fs::write(&second_path, note("second", "canon") + "\nChanged")?;
-
-        let error = super::reload_documents(&scan.candidates).unwrap_err();
-        let report = format!("{error:#}");
-
-        assert!(report.contains("2 corpus error(s):"));
-        assert!(report.contains("[changed-during-index]"));
-        assert!(report.contains("first.md"));
-        assert!(report.contains("second.md"));
         Ok(())
     }
 

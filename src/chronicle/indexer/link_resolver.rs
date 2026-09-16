@@ -10,7 +10,6 @@ use std::{
 
 use anyhow::Result;
 
-use super::scanner::DocumentCandidate;
 use super::{document::Document, frontmatter::MetadataValue};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,34 +87,31 @@ struct Catalogue {
 pub struct ResolverCatalogue(Catalogue);
 
 #[allow(dead_code)] // Retained as the fail-fast API for non-indexer callers.
-pub fn catalogue_from_candidates(
-    root: &Path,
-    candidates: &[DocumentCandidate],
-) -> Result<ResolverCatalogue> {
-    let (catalogue, errors) = catalogue_from_candidates_collecting(root, candidates);
+pub fn catalogue_from_documents(root: &Path, documents: &[Document]) -> Result<ResolverCatalogue> {
+    let (catalogue, errors) = catalogue_from_documents_collecting(root, documents);
     if let Some((_, error)) = errors.into_iter().next() {
         return Err(error);
     }
     Ok(catalogue)
 }
 
-pub(crate) fn catalogue_from_candidates_collecting(
+pub(crate) fn catalogue_from_documents_collecting(
     root: &Path,
-    candidates: &[DocumentCandidate],
+    documents: &[Document],
 ) -> (ResolverCatalogue, Vec<(PathBuf, anyhow::Error)>) {
     let mut catalogue = Catalogue::default();
     let mut errors = Vec::new();
-    for candidate in candidates {
-        let note_id = &candidate.metadata.id;
+    for document in documents {
+        let note_id = &document.metadata.id;
         Catalogue::insert(&mut catalogue.ids, identity_key(note_id), note_id);
-        let relative = match candidate.path.strip_prefix(root) {
+        let relative = match document.path.strip_prefix(root) {
             Ok(relative) => relative,
             Err(error) => {
                 errors.push((
-                    candidate.path.clone(),
+                    document.path.clone(),
                     anyhow::Error::new(error).context(format!(
                         "Document path is outside index root: {}",
-                        candidate.path.display()
+                        document.path.display()
                     )),
                 ));
                 continue;
@@ -126,7 +122,7 @@ pub(crate) fn catalogue_from_candidates_collecting(
         Catalogue::insert(
             &mut catalogue.titles,
             identity_key(
-                &candidate
+                &document
                     .path
                     .file_stem()
                     .unwrap_or_default()
@@ -134,7 +130,7 @@ pub(crate) fn catalogue_from_candidates_collecting(
             ),
             note_id,
         );
-        for alias in &candidate.metadata.aliases {
+        for alias in &document.metadata.aliases {
             Catalogue::insert(&mut catalogue.aliases, identity_key(alias), note_id);
         }
     }
@@ -383,15 +379,7 @@ mod tests {
     }
 
     fn resolve_documents(root: &Path, documents: &[Document]) -> Result<LinkResolution> {
-        let candidates = documents
-            .iter()
-            .map(|document| DocumentCandidate {
-                path: document.path.clone(),
-                metadata: document.metadata.clone(),
-                content_hash: document.content_hash.clone(),
-            })
-            .collect::<Vec<_>>();
-        let catalogue = catalogue_from_candidates(root, &candidates)?;
+        let catalogue = catalogue_from_documents(root, documents)?;
         let mut outcome = LinkResolution::default();
         for document in documents {
             let resolved = resolve_document(&catalogue, document);
@@ -403,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn collecting_catalogue_keeps_valid_candidates_after_path_errors() {
+    fn collecting_catalogue_keeps_valid_documents_after_path_errors() {
         let root = Path::new("/vault");
         let documents = [
             document(root, "Valid.md", "valid", &[], "player", "", vec![], ""),
@@ -428,16 +416,7 @@ mod tests {
                 "",
             ),
         ];
-        let candidates = documents
-            .iter()
-            .map(|document| DocumentCandidate {
-                path: document.path.clone(),
-                metadata: document.metadata.clone(),
-                content_hash: document.content_hash.clone(),
-            })
-            .collect::<Vec<_>>();
-
-        let (catalogue, errors) = catalogue_from_candidates_collecting(root, &candidates);
+        let (catalogue, errors) = catalogue_from_documents_collecting(root, &documents);
 
         assert_eq!(errors.len(), 2);
         assert_eq!(errors[0].0, Path::new("/elsewhere/Second.md"));

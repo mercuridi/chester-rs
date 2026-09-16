@@ -15,16 +15,6 @@ impl ChunkVisibility {
     }
 }
 
-impl Document {
-    pub fn candidate(&self) -> super::scanner::DocumentCandidate {
-        super::scanner::DocumentCandidate {
-            path: self.path.clone(),
-            metadata: self.metadata.clone(),
-            content_hash: self.content_hash.clone(),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Document {
     pub metadata: super::frontmatter::Metadata,

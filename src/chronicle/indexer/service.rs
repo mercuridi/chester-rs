@@ -134,7 +134,7 @@ pub struct IndexStats {
 }
 
 struct ResolvedCorpus {
-    candidates: Vec<scanner::DocumentCandidate>,
+    documents: Vec<Document>,
     corpus_stats: scanner::CorpusStats,
     link_resolution: link_resolver::LinkResolution,
     graph_fingerprint: String,
@@ -199,7 +199,7 @@ impl Indexer {
             .await
             .context("Failed to load existing index")?;
         info!(
-            discovered = corpus.candidates.len(),
+            discovered = corpus.documents.len(),
             indexed = indexed_documents.len(),
             "Preparing Chronicle index"
         );
@@ -208,7 +208,7 @@ impl Indexer {
             "Collected corpus statistics before embedding"
         );
         let (mut stats, seen_paths) = self
-            .index_discovered_documents(corpus.candidates, &indexed_documents)
+            .index_discovered_documents(corpus.documents, &indexed_documents)
             .await?;
         debug!(
             pending_documents = stats.added + stats.updated,
@@ -234,11 +234,9 @@ impl Indexer {
             &self.excluded_note_ids,
         )
         .with_context(|| format!("Failed to scan index directory: {}", self.root.display()))?;
-        let candidates = scan.candidates;
         let corpus_stats = scan.stats;
         let mut errors = scan.errors;
-        let link_resolution =
-            Self::reload_and_resolve_candidates(&self.root, &candidates, &mut errors);
+        let link_resolution = Self::resolve_documents(&self.root, &scan.documents, &mut errors);
         if !errors.is_empty() {
             return Err(errors.into_error());
         }
@@ -248,48 +246,39 @@ impl Indexer {
             ambiguous = link_resolution.ambiguous.len(),
             "Resolved Chronicle wikilinks"
         );
-        let graph_fingerprint = graph_input_fingerprint(&candidates, &link_resolution);
+        let graph_fingerprint = graph_input_fingerprint(&scan.documents, &link_resolution);
         Ok(ResolvedCorpus {
-            candidates,
+            documents: scan.documents,
             corpus_stats,
             link_resolution,
             graph_fingerprint,
         })
     }
 
-    fn reload_and_resolve_candidates(
+    fn resolve_documents(
         root: &std::path::Path,
-        candidates: &[scanner::DocumentCandidate],
+        documents: &[Document],
         errors: &mut scanner::CorpusErrors,
     ) -> link_resolver::LinkResolution {
         let (resolver_catalogue, catalogue_errors) =
-            link_resolver::catalogue_from_candidates_collecting(root, candidates);
+            link_resolver::catalogue_from_documents_collecting(root, documents);
         for (path, error) in catalogue_errors {
             errors.push(Some(path), scanner::CorpusErrorKind::Resolution, error);
         }
 
         let mut link_resolution = link_resolver::LinkResolution::default();
-        for candidate in candidates {
-            match scanner::load_document(candidate) {
-                Ok(document) => {
-                    let resolved = link_resolver::resolve_document(&resolver_catalogue, &document);
-                    link_resolution.resolved.extend(resolved.resolved);
-                    link_resolution.dangling.extend(resolved.dangling);
-                    link_resolution.ambiguous.extend(resolved.ambiguous);
-                }
-                Err(error) => errors.push(
-                    Some(candidate.path.clone()),
-                    scanner::reload_error_kind(&error),
-                    error,
-                ),
-            }
+        for document in documents {
+            let resolved = link_resolver::resolve_document(&resolver_catalogue, document);
+            link_resolution.resolved.extend(resolved.resolved);
+            link_resolution.dangling.extend(resolved.dangling);
+            link_resolution.ambiguous.extend(resolved.ambiguous);
         }
         link_resolution
     }
 
     async fn index_discovered_documents(
         &self,
-        candidates: Vec<scanner::DocumentCandidate>,
+        documents: Vec<Document>,
         indexed_documents: &[IndexedDocument],
     ) -> Result<(IndexStats, HashSet<String>)> {
         let indexed_by_path = indexed_documents
@@ -300,20 +289,16 @@ impl Indexer {
         let mut seen_paths = HashSet::new();
         let mut pending = Vec::new();
 
-        for candidate in candidates {
-            let path = candidate.path.to_string_lossy().into_owned();
+        for document in documents {
+            let path = document.path.to_string_lossy().into_owned();
             seen_paths.insert(path.clone());
 
             if let Some(indexed) = indexed_by_path.get(path.as_str()) {
-                let fingerprint = index_fingerprint_candidate(
-                    &candidate,
-                    self.max_chunk_tokens,
-                    self.chunk_overlap_tokens,
-                );
+                let fingerprint =
+                    index_fingerprint(&document, self.max_chunk_tokens, self.chunk_overlap_tokens);
                 let unchanged = if indexed.content_hash == fingerprint {
                     true
                 } else {
-                    let document = scanner::load_document(&candidate)?;
                     let chunks = PreparedDocument::chunks(
                         &document,
                         self.embedder.chunking_tokenizer(),
@@ -325,21 +310,19 @@ impl Indexer {
                 if unchanged {
                     if !self
                         .db
-                        .metadata_matches(indexed.id, &candidate.metadata)
+                        .metadata_matches(indexed.id, &document.metadata)
                         .await?
                     {
                         self.db
-                            .refresh_metadata(indexed.id, &fingerprint, &candidate.metadata)
+                            .refresh_metadata(indexed.id, &fingerprint, &document.metadata)
                             .await?;
                     }
                     stats.unchanged += 1;
                     continue;
                 }
 
-                let document = scanner::load_document(&candidate)?;
                 pending.push((document, path, true));
             } else {
-                let document = scanner::load_document(&candidate)?;
                 pending.push((document, path, false));
             }
 
@@ -608,13 +591,13 @@ fn index_fingerprint(
 }
 
 fn graph_input_fingerprint(
-    candidates: &[scanner::DocumentCandidate],
+    documents: &[Document],
     resolution: &link_resolver::LinkResolution,
 ) -> String {
     let mut hasher = Sha256::new();
     // Scanner order is path-stable; include only graph-relevant authored data
     // plus the complete resolver result, including dangling/ambiguous links.
-    for document in candidates {
+    for document in documents {
         hasher.update(document.path.to_string_lossy().as_bytes());
         hasher.update([0]);
         hasher.update(format!(
@@ -628,17 +611,6 @@ fn graph_input_fingerprint(
     hex::encode(hasher.finalize())
 }
 
-fn index_fingerprint_candidate(
-    candidate: &scanner::DocumentCandidate,
-    max_chunk_tokens: usize,
-    chunk_overlap_tokens: usize,
-) -> String {
-    format!(
-        "{}:chunker-v10-clean-frontmatter:{max_chunk_tokens}:overlap:{chunk_overlap_tokens}",
-        candidate.content_hash
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -648,63 +620,6 @@ mod tests {
         format!(
             "---\nid: {id}\ntype: lore\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\n---\n{body}"
         )
-    }
-
-    #[test]
-    fn reload_and_resolution_attempt_all_candidates_after_reload_failures() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let corpus = temp.path().join("corpus");
-        std::fs::create_dir(&corpus)?;
-        let source_path = corpus.join("Source.md");
-        let target_path = corpus.join("Target.md");
-        std::fs::write(&source_path, corpus_note("source", "[[target]]"))?;
-        std::fs::write(&target_path, corpus_note("target", "Target body"))?;
-        let scan = scanner::scan_directory_partial_with_stats_excluding(
-            &corpus,
-            &std::collections::HashSet::new(),
-        )?;
-        std::fs::write(&source_path, corpus_note("source", "Changed source"))?;
-        std::fs::write(&target_path, corpus_note("target", "Changed target"))?;
-        let mut errors = scanner::CorpusErrors::new();
-
-        let resolution =
-            Indexer::reload_and_resolve_candidates(&corpus, &scan.candidates, &mut errors);
-
-        assert_eq!(errors.diagnostics.len(), 2);
-        assert!(
-            errors
-                .diagnostics
-                .iter()
-                .all(|diagnostic| diagnostic.kind == scanner::CorpusErrorKind::ChangedDuringIndex)
-        );
-        assert!(resolution.resolved.is_empty());
-        Ok(())
-    }
-
-    #[test]
-    fn resolution_continues_for_candidates_that_reload_successfully() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let corpus = temp.path().join("corpus");
-        std::fs::create_dir(&corpus)?;
-        let source_path = corpus.join("Source.md");
-        let target_path = corpus.join("Target.md");
-        std::fs::write(&source_path, corpus_note("source", "[[target]]"))?;
-        std::fs::write(&target_path, corpus_note("target", "Target body"))?;
-        let scan = scanner::scan_directory_partial_with_stats_excluding(
-            &corpus,
-            &std::collections::HashSet::new(),
-        )?;
-        std::fs::write(&target_path, corpus_note("target", "Changed target"))?;
-        let mut errors = scanner::CorpusErrors::new();
-
-        let resolution =
-            Indexer::reload_and_resolve_candidates(&corpus, &scan.candidates, &mut errors);
-
-        assert_eq!(errors.diagnostics.len(), 1);
-        assert_eq!(resolution.resolved.len(), 1);
-        assert_eq!(resolution.resolved[0].source_note_id, "source");
-        assert_eq!(resolution.resolved[0].target_note_id, "target");
-        Ok(())
     }
 
     #[test]
@@ -730,12 +645,41 @@ mod tests {
         )?;
         let mut errors = scanner::CorpusErrors::new();
 
-        let resolution =
-            Indexer::reload_and_resolve_candidates(&corpus, &scan.candidates, &mut errors);
+        let resolution = Indexer::resolve_documents(&corpus, &scan.documents, &mut errors);
 
         assert!(errors.is_empty());
         assert_eq!(resolution.dangling.len(), 1);
         assert_eq!(resolution.ambiguous.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn link_resolution_uses_documents_retained_by_the_scan() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let corpus = temp.path().join("corpus");
+        std::fs::create_dir(&corpus)?;
+        let source_path = corpus.join("Source.md");
+        let target_path = corpus.join("Target.md");
+        std::fs::write(&source_path, corpus_note("source", "[[target]]"))?;
+        std::fs::write(&target_path, corpus_note("target", "Target body"))?;
+        let scan = scanner::scan_directory_partial_with_stats_excluding(
+            &corpus,
+            &std::collections::HashSet::new(),
+        )?;
+
+        std::fs::write(&source_path, corpus_note("source", "No link remains"))?;
+        std::fs::write(
+            &target_path,
+            corpus_note("renamed-target", "Changed target"),
+        )?;
+
+        let mut errors = scanner::CorpusErrors::new();
+        let resolution = Indexer::resolve_documents(&corpus, &scan.documents, &mut errors);
+
+        assert!(errors.is_empty());
+        assert_eq!(resolution.resolved.len(), 1);
+        assert_eq!(resolution.resolved[0].source_note_id, "source");
+        assert_eq!(resolution.resolved[0].target_note_id, "target");
         Ok(())
     }
 
@@ -763,6 +707,67 @@ mod tests {
                 encodings.len()
             ])
         }
+    }
+
+    #[tokio::test]
+    async fn corpus_diagnostics_prevent_index_writes_after_scanning_valid_documents() -> Result<()>
+    {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokenizers::{models::wordlevel::WordLevel, pre_tokenizers::whitespace::Whitespace};
+
+        let temp = tempfile::tempdir()?;
+        let corpus = temp.path().join("corpus");
+        std::fs::create_dir(&corpus)?;
+        std::fs::write(corpus.join("valid.md"), corpus_note("valid", "Valid body"))?;
+        std::fs::write(
+            corpus.join("bad-frontmatter.md"),
+            "---\ntype: lore\n---\nIncomplete note",
+        )?;
+        std::fs::write(
+            corpus.join("bad-secret.md"),
+            format!(
+                "{}\n\n> [!secret] GM notes\n> Hidden information.\n",
+                corpus_note("bad-secret", "Visible body")
+            ),
+        )?;
+
+        let model = WordLevel::builder()
+            .vocab([("[UNK]".into(), 0)].into_iter().collect())
+            .unk_token("[UNK]".into())
+            .build()
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        let mut tokenizer = tokenizers::Tokenizer::new(model);
+        tokenizer.with_pre_tokenizer(Some(Whitespace {}));
+        let batches = Arc::new(AtomicUsize::new(0));
+        let db = IndexerDb::open(&format!(
+            "sqlite://{}",
+            temp.path().join("test.sqlite3").display()
+        ))
+        .await?;
+        let indexer = Indexer::with_embedding_model(
+            corpus,
+            db.clone(),
+            Box::new(CountingEmbedder {
+                tokenizer,
+                batches: batches.clone(),
+            }),
+            128,
+            0,
+        );
+
+        let error = indexer.index().await.unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("2 corpus error(s):"));
+        assert!(report.contains("[frontmatter]"));
+        assert!(report.contains("[secret-callout]"));
+        assert!(db.all_documents().await?.is_empty());
+        assert!(db.graph_input_fingerprint().await?.is_none());
+        assert_eq!(batches.load(Ordering::SeqCst), 0);
+        Ok(())
     }
 
     #[tokio::test]
