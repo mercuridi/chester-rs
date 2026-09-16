@@ -268,7 +268,25 @@ Chronicle questions and answers are excluded from both sinks by default. Set
 `[logging].content = true` in `.chronicle/config.toml` only when protected
 content logging is explicitly required.
 
-At startup the bot opens the two SQLite databases, indexes `corpus/`, verifies `yt-dlp` and `ffmpeg`, synchronizes missing music, and then connects to Discord. A failure in any of those stages prevents login.
+At startup the bot opens the two SQLite databases, indexes `corpus/`, verifies
+`yt-dlp` and `ffmpeg`, synchronizes missing music, and then prepares the Discord
+client. Independent startup stages are attempted separately. If one or more
+stages fail, Chester prints one consolidated report containing the stage names,
+full error chains, and any dependent stages that were skipped; it does not
+connect to Discord. The Discord gateway starts only after all startup stages
+complete successfully.
+
+A startup report has this general shape:
+
+```text
+Chester failed to start: 2 startup stage(s) failed:
+1. Jester database initialization: ...
+2. Chronicle initialization: ...
+```
+
+If a prerequisite is unavailable, the report identifies the dependent stage as
+skipped, for example `Audio-library synchronization: stage skipped: the Jester
+database initialization failed`.
 
 ## Commands
 
@@ -300,6 +318,12 @@ Chronicle recording and transcription produce files below `.chronicle/recordings
 - **`Failed to read config file`:** ensure `.chronicle/config.toml` exists and is valid TOML.
 - **No slash commands:** run `>register` and register commands in guild.
 - **Startup fails around SQLite:** verify that the configured database parent directory is writable and that the database URLs point to valid SQLite locations. Chester creates missing database files and schemas automatically.
+
+Startup diagnostics are reported together. For a single failure, fix the stage
+named on the first report entry. For multiple failures, fix each listed root
+failure; entries marked `stage skipped` are consequences of unavailable
+prerequisites rather than additional independent causes. Chester will not log
+in until the complete startup report is clear.
 
 ## Music taxonomy
 

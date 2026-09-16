@@ -2,6 +2,7 @@ mod bot;
 pub mod cli;
 mod evaluation;
 mod logging;
+mod startup;
 
 use anyhow::{Context, Result};
 use dotenv::from_path;

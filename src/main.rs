@@ -32,14 +32,21 @@ fn main() {
 
     let run_result = runtime.block_on(app::run(options));
     if let Err(error) = &run_result {
-        eprintln!("Chester failed to start: {error:#}");
-        tracing::error!("Chester failed to start: {error:#}");
-        tracing::debug!(error = ?error, "Startup error chain");
+        report_startup_failure(error);
     }
 
     runtime.shutdown_timeout(app::SHUTDOWN_TIMEOUT);
 
     if run_result.is_err() {
         std::process::exit(1);
+    }
+}
+
+#[allow(clippy::print_stderr)]
+fn report_startup_failure(error: &anyhow::Error) {
+    if tracing::dispatcher::has_been_set() {
+        tracing::error!("Chester failed to start: {error:#}");
+    } else {
+        eprintln!("Chester failed to start: {error:#}");
     }
 }

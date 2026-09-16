@@ -29,10 +29,64 @@ use crate::{
 pub async fn run(paths: AppPaths, shutdown_timeout: std::time::Duration) -> Result<()> {
     tracing::info!(runtime_root = %paths.runtime_root.display(), config_path = %paths.config_path.display(), "Starting Chester");
 
-    let (config, token) = load_startup(paths)?;
-    let (pool, chronicle) = initialize_services(&config).await?;
-    let downloader = synchronize_audio_library(&config, &pool).await?;
-    run_discord_client(config, token, pool, chronicle, downloader, shutdown_timeout).await
+    let (config, token) = load_configuration_and_credentials(paths)?;
+    let (pool, chronicle, mut startup_errors) = crate::app::startup::run_independent_stages(
+        "Jester database initialization",
+        initialize_jester_database(&config),
+        "Chronicle initialization",
+        initialize_chronicle(&config),
+    )
+    .await;
+    let downloader = if let Some(pool) = pool.as_ref() {
+        match synchronize_audio_library(&config, pool).await {
+            Ok(downloader) => Some(downloader),
+            Err(error) => {
+                startup_errors.push("Audio-library synchronization", error);
+                None
+            }
+        }
+    } else {
+        startup_errors.push_skipped(
+            "Audio-library synchronization",
+            "the Jester database initialization failed",
+        );
+        None
+    };
+
+    let missing_prerequisites = [
+        (pool.is_none(), "Jester database"),
+        (chronicle.is_none(), "Chronicle"),
+        (downloader.is_none(), "audio-library synchronization"),
+    ]
+    .into_iter()
+    .filter_map(|(missing, name)| missing.then_some(name))
+    .collect::<Vec<_>>();
+
+    let prepared = if let (Some(pool), Some(chronicle), Some(downloader)) =
+        (pool, chronicle, downloader)
+    {
+        match prepare_discord_client(config, token, pool, chronicle, downloader, shutdown_timeout)
+            .await
+        {
+            Ok(prepared) => Some(prepared),
+            Err(error) => {
+                startup_errors.push("Discord client preparation", error);
+                None
+            }
+        }
+    } else {
+        startup_errors.push_skipped(
+            "Discord client preparation",
+            format!(
+                "required prerequisites are unavailable: {}",
+                missing_prerequisites.join(", ")
+            ),
+        );
+        None
+    };
+
+    // This is the single boundary between startup and the Discord gateway.
+    crate::app::startup::run_if_ready(startup_errors, prepared, run_discord_loop).await
 }
 
 async fn build_chronicle(config: &Config) -> Result<Chronicle> {
@@ -232,7 +286,7 @@ fn build_framework(
         .build()
 }
 
-fn load_startup(paths: AppPaths) -> Result<(Config, String)> {
+fn load_configuration_and_credentials(paths: AppPaths) -> Result<(Config, String)> {
     let config_path = paths.config_path.clone();
     let config = Config::load(paths).with_context(|| {
         format!(
@@ -253,19 +307,22 @@ fn load_startup(paths: AppPaths) -> Result<(Config, String)> {
     Ok((config, token))
 }
 
-async fn initialize_services(config: &Config) -> Result<(SqlitePool, Arc<Chronicle>)> {
+async fn initialize_jester_database(config: &Config) -> Result<SqlitePool> {
     let pool = database::open_sqlite_pool(&config.database.jester, "Jester")
         .await
         .context("Failed to open the Jester database")?;
     crate::jester::db::initialise(&pool)
         .await
         .context("Failed to initialize the Jester database schema")?;
-    let chronicle = Arc::new(
+    Ok(pool)
+}
+
+async fn initialize_chronicle(config: &Config) -> Result<Arc<Chronicle>> {
+    Ok(Arc::new(
         build_chronicle(config)
             .await
             .context("Failed to initialize Chronicle")?,
-    );
-    Ok((pool, chronicle))
+    ))
 }
 
 async fn synchronize_audio_library(config: &Config, pool: &SqlitePool) -> Result<Arc<Downloader>> {
@@ -294,14 +351,19 @@ async fn synchronize_audio_library(config: &Config, pool: &SqlitePool) -> Result
     Ok(downloader)
 }
 
-async fn run_discord_client(
+struct PreparedDiscordClient {
+    client: serenity::Client,
+    coordinator: Arc<shutdown::ShutdownCoordinator>,
+}
+
+async fn prepare_discord_client(
     config: Config,
     token: String,
     pool: SqlitePool,
     chronicle: Arc<Chronicle>,
     downloader: Arc<Downloader>,
     shutdown_timeout: std::time::Duration,
-) -> Result<()> {
+) -> Result<PreparedDiscordClient> {
     let poise_commands = build_commands();
     tracing::info!(
         command_count = poise_commands.len(),
@@ -334,25 +396,32 @@ async fn run_discord_client(
     );
     let framework = build_framework(data, poise_commands);
     let intents = GatewayIntents::non_privileged() | GatewayIntents::MESSAGE_CONTENT;
-    let mut client = ClientBuilder::new(token, intents)
+    let client = ClientBuilder::new(token, intents)
         .framework(framework)
         .register_songbird_with(songbird)
         .await
         .context("Failed to create the Discord client")?;
 
+    Ok(PreparedDiscordClient {
+        client,
+        coordinator,
+    })
+}
+
+async fn run_discord_loop(mut prepared: PreparedDiscordClient) -> Result<()> {
     tracing::info!("Starting Discord gateway");
     let signal = shutdown_signal();
     tokio::pin!(signal);
     tokio::select! {
-        result = client.start() => {
+        result = prepared.client.start() => {
             let gateway_result = result.context("Discord gateway stopped with an error");
-            let drain_result = coordinator.drain().await;
+            let drain_result = prepared.coordinator.drain().await;
             gateway_result.and(drain_result)?;
         }
         signal_result = &mut signal => {
             signal_result?;
             tracing::info!("Shutdown signal received");
-            coordinator.drain().await?;
+            prepared.coordinator.drain().await?;
         }
     }
     Ok(())
