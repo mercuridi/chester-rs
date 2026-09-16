@@ -15,6 +15,7 @@ tmp/
 /data/*.sqlite3-*
 /audio/
 corpus/*
+interim-symlink
 
 /config.toml
 /manifest.toml
