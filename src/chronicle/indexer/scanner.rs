@@ -63,16 +63,20 @@ pub(crate) struct CorpusDiagnostic {
     pub(crate) error: anyhow::Error,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 #[allow(dead_code)] // Used by the resilient scan implementation in phase 2.
 pub(crate) struct CorpusErrors {
+    root: PathBuf,
     pub(crate) diagnostics: Vec<CorpusDiagnostic>,
 }
 
 #[allow(dead_code)] // Used by the resilient scan implementation in phase 2.
 impl CorpusErrors {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(root: impl Into<PathBuf>) -> Self {
+        Self {
+            root: root.into(),
+            diagnostics: Vec::new(),
+        }
     }
 
     pub(crate) fn push(
@@ -114,12 +118,17 @@ impl CorpusErrors {
 
 impl std::fmt::Display for CorpusErrors {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(formatter, "{} corpus error(s):", self.diagnostics.len())?;
+        writeln!(
+            formatter,
+            "{} corpus error(s) in {}:",
+            self.diagnostics.len(),
+            self.root.display()
+        )?;
         for diagnostic in &self.diagnostics {
             let path = diagnostic
                 .path
                 .as_deref()
-                .map_or_else(|| "<corpus>".to_owned(), |path| path.display().to_string());
+                .map_or_else(|| "<corpus>".to_owned(), |path| self.display_path(path));
             writeln!(
                 formatter,
                 "- [{}] {path}: {:#}",
@@ -129,6 +138,26 @@ impl std::fmt::Display for CorpusErrors {
         }
         Ok(())
     }
+}
+
+impl CorpusErrors {
+    fn display_path(&self, path: &Path) -> String {
+        display_corpus_path(&self.root, path)
+    }
+}
+
+/// Formats a diagnostic path relative to the corpus root when possible.
+///
+/// Some diagnostics use labels rather than filesystem paths (for example a
+/// duplicate note ID), so paths that are not below the root are preserved as
+/// supplied. Forward slashes keep the user-facing report consistent across
+/// platforms.
+fn display_corpus_path(root: &Path, path: &Path) -> String {
+    let path = path.strip_prefix(root).unwrap_or(path);
+    if path.as_os_str().is_empty() {
+        return ".".to_owned();
+    }
+    path.to_string_lossy().replace('\\', "/")
 }
 
 impl std::error::Error for CorpusErrors {}
@@ -188,9 +217,10 @@ fn scan_directory_internal(
         directories: 1,
         ..CorpusStats::default()
     };
-    let mut errors = CorpusErrors::new();
+    let mut errors = CorpusErrors::new(root);
     if !is_templates_directory(root) {
         scan_directory_recursive_documents(
+            root,
             root,
             &mut documents,
             &mut stats,
@@ -213,7 +243,7 @@ fn scan_directory_internal(
         paths.sort();
         let conflicting_paths = paths
             .iter()
-            .map(|path| format!("- {}", path.display()))
+            .map(|path| format!("- {}", display_corpus_path(root, path)))
             .collect::<Vec<_>>()
             .join("\n");
         errors.push(
@@ -246,6 +276,7 @@ fn scan_directory_internal(
 }
 
 fn scan_directory_recursive_documents(
+    root: &Path,
     directory: &Path,
     documents: &mut Vec<Document>,
     stats: &mut CorpusStats,
@@ -258,8 +289,10 @@ fn scan_directory_recursive_documents(
             errors.push(
                 Some(directory.to_path_buf()),
                 CorpusErrorKind::DirectoryTraversal,
-                anyhow::Error::from(error)
-                    .context(format!("failed to read directory: {}", directory.display())),
+                anyhow::Error::from(error).context(format!(
+                    "failed to read directory: {}",
+                    display_corpus_path(root, directory)
+                )),
             );
             return;
         }
@@ -275,7 +308,7 @@ fn scan_directory_recursive_documents(
                     CorpusErrorKind::DirectoryTraversal,
                     anyhow::Error::from(error).context(format!(
                         "failed to read directory entry in {}",
-                        directory.display()
+                        display_corpus_path(root, directory)
                     )),
                 );
                 continue;
@@ -296,7 +329,14 @@ fn scan_directory_recursive_documents(
                 continue;
             }
             stats.directories += 1;
-            scan_directory_recursive_documents(&path, documents, stats, errors, excluded_note_ids);
+            scan_directory_recursive_documents(
+                root,
+                &path,
+                documents,
+                stats,
+                errors,
+                excluded_note_ids,
+            );
             continue;
         }
 
@@ -304,7 +344,7 @@ fn scan_directory_recursive_documents(
             continue;
         }
 
-        let document = match scan_file(&path) {
+        let document = match scan_file(root, &path) {
             Ok(document) => document,
             Err(error) => {
                 errors.push(Some(path.clone()), scan_error_kind(&error), error);
@@ -349,14 +389,14 @@ fn is_templates_directory(path: &Path) -> bool {
         })
 }
 
-fn scan_file(path: &Path) -> Result<Option<Document>> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+fn scan_file(root: &Path, path: &Path) -> Result<Option<Document>> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", display_corpus_path(root, path)))?;
 
     let content_hash = hash_content(&content);
 
     let Some((metadata, body)) = super::frontmatter::parse(&content)
-        .with_context(|| format!("Invalid note {}", path.display()))?
+        .with_context(|| format!("Invalid note {}", display_corpus_path(root, path)))?
     else {
         return Ok(None);
     };
@@ -364,8 +404,13 @@ fn scan_file(path: &Path) -> Result<Option<Document>> {
         return Ok(None);
     }
     let title = path.file_stem().unwrap_or_default().to_string_lossy();
-    let (body, secret_callouts) = split_secret_callouts(&body, &metadata.visibility)
-        .with_context(|| format!("Invalid secret callout in {}", path.display()))?;
+    let (body, secret_callouts) =
+        split_secret_callouts(&body, &metadata.visibility).with_context(|| {
+            format!(
+                "Invalid secret callout in {}",
+                display_corpus_path(root, path)
+            )
+        })?;
     let content = format!(
         "# {title}\n\n{}\n\n{}\n\n{}\n\n{body}",
         metadata.aliases.join(", "),
@@ -487,15 +532,16 @@ fn hash_content(content: &str) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        CorpusErrorKind, CorpusErrors, hash_content, is_markdown_file, is_templates_directory,
-        scan_directory_with_stats, scan_directory_with_stats_excluding, split_secret_callouts,
+        CorpusErrorKind, CorpusErrors, display_corpus_path, hash_content, is_markdown_file,
+        is_templates_directory, scan_directory_with_stats, scan_directory_with_stats_excluding,
+        split_secret_callouts,
     };
     use std::{collections::HashSet, fs, path::Path};
     use tempfile::tempdir;
 
     #[test]
     fn corpus_errors_are_sorted_by_path_then_category() {
-        let mut errors = CorpusErrors::new();
+        let mut errors = CorpusErrors::new("/corpus");
         errors.push(
             Some("z.md".into()),
             CorpusErrorKind::Read,
@@ -522,11 +568,34 @@ mod tests {
     }
 
     #[test]
+    fn display_corpus_path_formats_relative_paths_and_preserves_other_labels() {
+        let root = Path::new("/srv/chester/corpus");
+
+        assert_eq!(
+            display_corpus_path(root, Path::new("/srv/chester/corpus/characters/bad.md")),
+            "characters/bad.md"
+        );
+        assert_eq!(display_corpus_path(root, root), ".");
+        assert_eq!(
+            display_corpus_path(root, Path::new("/elsewhere/bad.md")),
+            "/elsewhere/bad.md"
+        );
+        assert_eq!(
+            display_corpus_path(root, Path::new("`northmere`")),
+            "`northmere`"
+        );
+        assert_eq!(
+            display_corpus_path(root, Path::new("/srv/chester/corpus/regions\\bad.md")),
+            "regions/bad.md"
+        );
+    }
+
+    #[test]
     fn corpus_errors_display_all_entries_and_preserve_error_chains() {
         let error = anyhow::anyhow!("permission denied")
             .context("could not read note")
             .context("corpus access failed");
-        let mut errors = CorpusErrors::new();
+        let mut errors = CorpusErrors::new("/corpus");
         errors.push(Some("notes/one.md".into()), CorpusErrorKind::Read, error);
         errors.push(
             Some("northmere".into()),
@@ -537,7 +606,7 @@ mod tests {
         let error = errors.into_error();
         let report = format!("{error:#}");
 
-        assert!(report.contains("2 corpus error(s):"));
+        assert!(report.contains("2 corpus error(s) in /corpus:"));
         assert!(report.contains(
             "[read] notes/one.md: corpus access failed: could not read note: permission denied"
         ));
@@ -596,7 +665,16 @@ mod tests {
         let error = scan_directory_with_stats(directory.path()).unwrap_err();
         let report = format!("{error:#}");
 
-        assert!(report.contains("2 corpus error(s):"));
+        assert!(report.contains(&format!(
+            "2 corpus error(s) in {}:",
+            directory.path().display()
+        )));
+        assert_eq!(
+            report
+                .matches(&directory.path().display().to_string())
+                .count(),
+            1
+        );
         assert!(
             report.contains("[duplicate-id] `ember`: appears in:"),
             "{report}"
@@ -643,7 +721,19 @@ mod tests {
         assert_eq!(document.content_hash.len(), 64);
         assert_eq!(scan.stats.files, 1);
         assert_eq!(scan.errors.diagnostics.len(), 2);
+        assert!(scan.errors.diagnostics.iter().all(|diagnostic| {
+            diagnostic
+                .path
+                .as_deref()
+                .is_some_and(|path| path.starts_with(directory.path()))
+        }));
         let report = scan.errors.to_string();
+        assert_eq!(
+            report
+                .matches(&directory.path().display().to_string())
+                .count(),
+            1
+        );
         assert!(report.contains("[frontmatter]"));
         assert!(report.contains("[secret-callout]"));
         Ok(())
@@ -662,7 +752,16 @@ mod tests {
         let error = scan_directory_with_stats(directory.path()).unwrap_err();
         let report = format!("{error:#}");
 
-        assert!(report.contains("2 corpus error(s):"));
+        assert!(report.contains(&format!(
+            "2 corpus error(s) in {}:",
+            directory.path().display()
+        )));
+        assert_eq!(
+            report
+                .matches(&directory.path().display().to_string())
+                .count(),
+            1
+        );
         assert!(report.contains("first.md"));
         assert!(report.contains("second.md"));
         assert_eq!(report.matches("[frontmatter]").count(), 2);
@@ -735,7 +834,16 @@ mod tests {
         let error = scan_directory_with_stats(directory.path()).unwrap_err();
         let report = format!("{error:#}");
 
-        assert!(report.contains("2 corpus error(s):"));
+        assert!(report.contains(&format!(
+            "2 corpus error(s) in {}:",
+            directory.path().display()
+        )));
+        assert_eq!(
+            report
+                .matches(&directory.path().display().to_string())
+                .count(),
+            1
+        );
         assert!(report.contains("nested/bad-frontmatter.md"));
         assert!(report.contains("bad-secret.md"));
         Ok(())
@@ -896,13 +1004,19 @@ mod tests {
             scan_directory_with_stats(&file)
                 .unwrap_err()
                 .to_string()
-                .contains("not a directory")
+                .contains(&format!(
+                    "index directory does not exist or is not a directory: {}",
+                    file.display()
+                ))
         );
         assert!(
             scan_directory_with_stats(directory.path().join("missing"))
                 .unwrap_err()
                 .to_string()
-                .contains("not a directory")
+                .contains(&format!(
+                    "index directory does not exist or is not a directory: {}",
+                    directory.path().join("missing").display()
+                ))
         );
         Ok(())
     }

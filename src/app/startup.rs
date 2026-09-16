@@ -222,7 +222,7 @@ mod tests {
     async fn corpus_failures_remain_one_chronicle_startup_stage() {
         use crate::chronicle::indexer::{CorpusErrorKind, CorpusErrors};
 
-        let mut corpus_errors = CorpusErrors::new();
+        let mut corpus_errors = CorpusErrors::new("/srv/chester/corpus");
         for path in ["characters/one.md", "locations/two.md", "regions/three.md"] {
             corpus_errors.push(
                 Some(path.into()),
@@ -250,7 +250,7 @@ mod tests {
         let report = errors.into_error().to_string();
 
         assert_eq!(report.matches("Chronicle initialization:").count(), 1);
-        assert!(report.contains("4 corpus error(s):"));
+        assert!(report.contains("4 corpus error(s) in /srv/chester/corpus:"));
         assert!(report.contains("characters/one.md"));
         assert!(report.contains("locations/two.md"));
         assert!(report.contains("regions/three.md"));

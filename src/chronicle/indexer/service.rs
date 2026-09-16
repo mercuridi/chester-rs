@@ -643,7 +643,7 @@ mod tests {
             &corpus,
             &std::collections::HashSet::new(),
         )?;
-        let mut errors = scanner::CorpusErrors::new();
+        let mut errors = scanner::CorpusErrors::new(&corpus);
 
         let resolution = Indexer::resolve_documents(&corpus, &scan.documents, &mut errors);
 
@@ -673,7 +673,7 @@ mod tests {
             corpus_note("renamed-target", "Changed target"),
         )?;
 
-        let mut errors = scanner::CorpusErrors::new();
+        let mut errors = scanner::CorpusErrors::new(&corpus);
         let resolution = Indexer::resolve_documents(&corpus, &scan.documents, &mut errors);
 
         assert!(errors.is_empty());
@@ -761,7 +761,7 @@ mod tests {
         let error = indexer.index().await.unwrap_err();
         let report = format!("{error:#}");
 
-        assert!(report.contains("2 corpus error(s):"));
+        assert!(report.contains("2 corpus error(s) in "));
         assert!(report.contains("[frontmatter]"));
         assert!(report.contains("[secret-callout]"));
         assert!(db.all_documents().await?.is_empty());
