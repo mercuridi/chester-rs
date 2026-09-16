@@ -758,7 +758,9 @@ mod tests {
             0,
         );
 
-        let error = indexer.index().await.unwrap_err();
+        let Err(error) = indexer.index().await else {
+            anyhow::bail!("indexing unexpectedly succeeded");
+        };
         let report = format!("{error:#}");
 
         assert!(report.contains("2 corpus error(s) in "));
