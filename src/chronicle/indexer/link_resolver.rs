@@ -5,10 +5,10 @@
 
 use std::{
     collections::{BTreeSet, HashMap},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::scanner::DocumentCandidate;
 use super::{document::Document, frontmatter::MetadataValue};
@@ -87,20 +87,40 @@ struct Catalogue {
 
 pub struct ResolverCatalogue(Catalogue);
 
+#[allow(dead_code)] // Retained as the fail-fast API for non-indexer callers.
 pub fn catalogue_from_candidates(
     root: &Path,
     candidates: &[DocumentCandidate],
 ) -> Result<ResolverCatalogue> {
+    let (catalogue, errors) = catalogue_from_candidates_collecting(root, candidates);
+    if let Some((_, error)) = errors.into_iter().next() {
+        return Err(error);
+    }
+    Ok(catalogue)
+}
+
+pub(crate) fn catalogue_from_candidates_collecting(
+    root: &Path,
+    candidates: &[DocumentCandidate],
+) -> (ResolverCatalogue, Vec<(PathBuf, anyhow::Error)>) {
     let mut catalogue = Catalogue::default();
+    let mut errors = Vec::new();
     for candidate in candidates {
         let note_id = &candidate.metadata.id;
         Catalogue::insert(&mut catalogue.ids, identity_key(note_id), note_id);
-        let relative = candidate.path.strip_prefix(root).with_context(|| {
-            format!(
-                "Document path is outside index root: {}",
-                candidate.path.display()
-            )
-        })?;
+        let relative = match candidate.path.strip_prefix(root) {
+            Ok(relative) => relative,
+            Err(error) => {
+                errors.push((
+                    candidate.path.clone(),
+                    anyhow::Error::new(error).context(format!(
+                        "Document path is outside index root: {}",
+                        candidate.path.display()
+                    )),
+                ));
+                continue;
+            }
+        };
         let relative = relative.to_string_lossy().replace('\\', "/");
         Catalogue::insert(&mut catalogue.paths, path_key(&relative), note_id);
         Catalogue::insert(
@@ -118,7 +138,8 @@ pub fn catalogue_from_candidates(
             Catalogue::insert(&mut catalogue.aliases, identity_key(alias), note_id);
         }
     }
-    Ok(ResolverCatalogue(catalogue))
+    errors.sort_by(|left, right| left.0.cmp(&right.0));
+    (ResolverCatalogue(catalogue), errors)
 }
 
 pub fn resolve_document(catalogue: &ResolverCatalogue, document: &Document) -> LinkResolution {
@@ -379,6 +400,50 @@ mod tests {
             outcome.ambiguous.extend(resolved.ambiguous);
         }
         Ok(outcome)
+    }
+
+    #[test]
+    fn collecting_catalogue_keeps_valid_candidates_after_path_errors() {
+        let root = Path::new("/vault");
+        let documents = [
+            document(root, "Valid.md", "valid", &[], "player", "", vec![], ""),
+            document(
+                Path::new("/outside"),
+                "First.md",
+                "first",
+                &[],
+                "player",
+                "",
+                vec![],
+                "",
+            ),
+            document(
+                Path::new("/elsewhere"),
+                "Second.md",
+                "second",
+                &[],
+                "player",
+                "",
+                vec![],
+                "",
+            ),
+        ];
+        let candidates = documents
+            .iter()
+            .map(|document| DocumentCandidate {
+                path: document.path.clone(),
+                metadata: document.metadata.clone(),
+                content_hash: document.content_hash.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        let (catalogue, errors) = catalogue_from_candidates_collecting(root, &candidates);
+
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].0, Path::new("/elsewhere/Second.md"));
+        assert_eq!(errors[1].0, Path::new("/outside/First.md"));
+        let resolved = resolve_document(&catalogue, &documents[0]);
+        assert!(resolved.resolved.is_empty());
     }
 
     #[test]

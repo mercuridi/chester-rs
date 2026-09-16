@@ -229,19 +229,18 @@ impl Indexer {
     }
 
     fn scan_and_resolve_corpus(&self) -> Result<ResolvedCorpus> {
-        let (candidates, corpus_stats) = scanner::discover_directory_with_stats_excluding(
+        let scan = scanner::scan_directory_partial_with_stats_excluding(
             &self.root,
             &self.excluded_note_ids,
         )
         .with_context(|| format!("Failed to scan index directory: {}", self.root.display()))?;
-        let resolver_catalogue = link_resolver::catalogue_from_candidates(&self.root, &candidates)?;
-        let mut link_resolution = link_resolver::LinkResolution::default();
-        for candidate in &candidates {
-            let document = scanner::load_document(candidate)?;
-            let resolved = link_resolver::resolve_document(&resolver_catalogue, &document);
-            link_resolution.resolved.extend(resolved.resolved);
-            link_resolution.dangling.extend(resolved.dangling);
-            link_resolution.ambiguous.extend(resolved.ambiguous);
+        let candidates = scan.candidates;
+        let corpus_stats = scan.stats;
+        let mut errors = scan.errors;
+        let link_resolution =
+            Self::reload_and_resolve_candidates(&self.root, &candidates, &mut errors);
+        if !errors.is_empty() {
+            return Err(errors.into_error());
         }
         debug!(
             resolved = link_resolution.resolved.len(),
@@ -256,6 +255,36 @@ impl Indexer {
             link_resolution,
             graph_fingerprint,
         })
+    }
+
+    fn reload_and_resolve_candidates(
+        root: &std::path::Path,
+        candidates: &[scanner::DocumentCandidate],
+        errors: &mut scanner::CorpusErrors,
+    ) -> link_resolver::LinkResolution {
+        let (resolver_catalogue, catalogue_errors) =
+            link_resolver::catalogue_from_candidates_collecting(root, candidates);
+        for (path, error) in catalogue_errors {
+            errors.push(Some(path), scanner::CorpusErrorKind::Resolution, error);
+        }
+
+        let mut link_resolution = link_resolver::LinkResolution::default();
+        for candidate in candidates {
+            match scanner::load_document(candidate) {
+                Ok(document) => {
+                    let resolved = link_resolver::resolve_document(&resolver_catalogue, &document);
+                    link_resolution.resolved.extend(resolved.resolved);
+                    link_resolution.dangling.extend(resolved.dangling);
+                    link_resolution.ambiguous.extend(resolved.ambiguous);
+                }
+                Err(error) => errors.push(
+                    Some(candidate.path.clone()),
+                    scanner::reload_error_kind(&error),
+                    error,
+                ),
+            }
+        }
+        link_resolution
     }
 
     async fn index_discovered_documents(
@@ -614,6 +643,101 @@ fn index_fingerprint_candidate(
 mod tests {
     use super::*;
     use tokenizers::Token;
+
+    fn corpus_note(id: &str, body: &str) -> String {
+        format!(
+            "---\nid: {id}\ntype: lore\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\n---\n{body}"
+        )
+    }
+
+    #[test]
+    fn reload_and_resolution_attempt_all_candidates_after_reload_failures() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let corpus = temp.path().join("corpus");
+        std::fs::create_dir(&corpus)?;
+        let source_path = corpus.join("Source.md");
+        let target_path = corpus.join("Target.md");
+        std::fs::write(&source_path, corpus_note("source", "[[target]]"))?;
+        std::fs::write(&target_path, corpus_note("target", "Target body"))?;
+        let scan = scanner::scan_directory_partial_with_stats_excluding(
+            &corpus,
+            &std::collections::HashSet::new(),
+        )?;
+        std::fs::write(&source_path, corpus_note("source", "Changed source"))?;
+        std::fs::write(&target_path, corpus_note("target", "Changed target"))?;
+        let mut errors = scanner::CorpusErrors::new();
+
+        let resolution =
+            Indexer::reload_and_resolve_candidates(&corpus, &scan.candidates, &mut errors);
+
+        assert_eq!(errors.diagnostics.len(), 2);
+        assert!(
+            errors
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.kind == scanner::CorpusErrorKind::ChangedDuringIndex)
+        );
+        assert!(resolution.resolved.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn resolution_continues_for_candidates_that_reload_successfully() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let corpus = temp.path().join("corpus");
+        std::fs::create_dir(&corpus)?;
+        let source_path = corpus.join("Source.md");
+        let target_path = corpus.join("Target.md");
+        std::fs::write(&source_path, corpus_note("source", "[[target]]"))?;
+        std::fs::write(&target_path, corpus_note("target", "Target body"))?;
+        let scan = scanner::scan_directory_partial_with_stats_excluding(
+            &corpus,
+            &std::collections::HashSet::new(),
+        )?;
+        std::fs::write(&target_path, corpus_note("target", "Changed target"))?;
+        let mut errors = scanner::CorpusErrors::new();
+
+        let resolution =
+            Indexer::reload_and_resolve_candidates(&corpus, &scan.candidates, &mut errors);
+
+        assert_eq!(errors.diagnostics.len(), 1);
+        assert_eq!(resolution.resolved.len(), 1);
+        assert_eq!(resolution.resolved[0].source_note_id, "source");
+        assert_eq!(resolution.resolved[0].target_note_id, "target");
+        Ok(())
+    }
+
+    #[test]
+    fn dangling_and_ambiguous_links_remain_non_fatal() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let corpus = temp.path().join("corpus");
+        std::fs::create_dir(&corpus)?;
+        std::fs::write(
+            corpus.join("Source.md"),
+            corpus_note("source", "[[missing]] and [[shared]]"),
+        )?;
+        for (name, id) in [("First.md", "first"), ("Second.md", "second")] {
+            std::fs::write(
+                corpus.join(name),
+                format!(
+                    "---\nid: {id}\ntype: lore\nstatus: canon\nvisibility: player\ncreated: 2026-09-07\nupdated: 2026-09-07\naliases: [shared]\n---\n{name}"
+                ),
+            )?;
+        }
+        let scan = scanner::scan_directory_partial_with_stats_excluding(
+            &corpus,
+            &std::collections::HashSet::new(),
+        )?;
+        let mut errors = scanner::CorpusErrors::new();
+
+        let resolution =
+            Indexer::reload_and_resolve_candidates(&corpus, &scan.candidates, &mut errors);
+
+        assert!(errors.is_empty());
+        assert_eq!(resolution.dangling.len(), 1);
+        assert_eq!(resolution.ambiguous.len(), 1);
+        Ok(())
+    }
 
     struct CountingEmbedder {
         tokenizer: tokenizers::Tokenizer,

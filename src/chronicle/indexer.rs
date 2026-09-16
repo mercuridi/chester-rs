@@ -31,6 +31,8 @@ pub(crate) use retriever::{
     from_retrieval_config, from_synthesis_config, select_with_diagnostics,
 };
 pub(crate) use scanner::scan_directory_with_stats;
+#[cfg(test)]
+pub(crate) use scanner::{CorpusErrorKind, CorpusErrors};
 pub(crate) use schema::{
     DOCUMENT_TYPE_DEFINITIONS, FieldDefinition, UNIVERSAL_FIELD_DEFINITIONS, ValueType,
     field_definition, vocabulary_contains,

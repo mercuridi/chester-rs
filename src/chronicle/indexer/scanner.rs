@@ -1,6 +1,10 @@
 // src/chronicle/indexer/scanner.rs
 
-use std::{collections::HashSet, fs, path::Path};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
@@ -16,6 +20,122 @@ pub struct CorpusStats {
     pub characters: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)] // Used by the resilient scan implementation in phase 2.
+pub(crate) enum CorpusErrorKind {
+    Read,
+    DirectoryTraversal,
+    Frontmatter,
+    SecretCallout,
+    DuplicateId,
+    ChangedDuringIndex,
+    Resolution,
+}
+
+impl CorpusErrorKind {
+    fn order(self) -> usize {
+        match self {
+            Self::Read => 0,
+            Self::DirectoryTraversal => 1,
+            Self::Frontmatter => 2,
+            Self::SecretCallout => 3,
+            Self::DuplicateId => 4,
+            Self::ChangedDuringIndex => 5,
+            Self::Resolution => 6,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::DirectoryTraversal => "directory-traversal",
+            Self::Frontmatter => "frontmatter",
+            Self::SecretCallout => "secret-callout",
+            Self::DuplicateId => "duplicate-id",
+            Self::ChangedDuringIndex => "changed-during-index",
+            Self::Resolution => "resolution",
+        }
+    }
+}
+
+#[derive(Debug)]
+#[allow(dead_code)] // Used by the resilient scan implementation in phase 2.
+pub(crate) struct CorpusDiagnostic {
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) kind: CorpusErrorKind,
+    pub(crate) error: anyhow::Error,
+}
+
+#[derive(Debug, Default)]
+#[allow(dead_code)] // Used by the resilient scan implementation in phase 2.
+pub(crate) struct CorpusErrors {
+    pub(crate) diagnostics: Vec<CorpusDiagnostic>,
+}
+
+#[allow(dead_code)] // Used by the resilient scan implementation in phase 2.
+impl CorpusErrors {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    pub(crate) fn push(
+        &mut self,
+        path: Option<PathBuf>,
+        kind: CorpusErrorKind,
+        error: anyhow::Error,
+    ) {
+        self.diagnostics
+            .push(CorpusDiagnostic { path, kind, error });
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.diagnostics.is_empty()
+    }
+
+    pub(crate) fn into_error(mut self) -> anyhow::Error {
+        self.sort();
+        anyhow::Error::new(self)
+    }
+
+    fn sort(&mut self) {
+        self.diagnostics.sort_by(|left, right| {
+            let left_path = left
+                .path
+                .as_deref()
+                .map_or_else(String::new, |path| path.to_string_lossy().into_owned());
+            let right_path = right
+                .path
+                .as_deref()
+                .map_or_else(String::new, |path| path.to_string_lossy().into_owned());
+            left_path
+                .cmp(&right_path)
+                .then_with(|| left.kind.order().cmp(&right.kind.order()))
+                .then_with(|| format!("{:#}", left.error).cmp(&format!("{:#}", right.error)))
+        });
+    }
+}
+
+impl std::fmt::Display for CorpusErrors {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(formatter, "{} corpus error(s):", self.diagnostics.len())?;
+        for diagnostic in &self.diagnostics {
+            let path = diagnostic
+                .path
+                .as_deref()
+                .map_or_else(|| "<corpus>".to_owned(), |path| path.display().to_string());
+            writeln!(
+                formatter,
+                "- [{}] {path}: {:#}",
+                diagnostic.kind.label(),
+                diagnostic.error
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for CorpusErrors {}
+
 #[derive(Debug, Clone)]
 pub struct DocumentCandidate {
     pub path: std::path::PathBuf,
@@ -23,10 +143,28 @@ pub struct DocumentCandidate {
     pub content_hash: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct CorpusScan {
+    pub(crate) candidates: Vec<DocumentCandidate>,
+    pub(crate) stats: CorpusStats,
+    pub(crate) errors: CorpusErrors,
+}
+
 pub fn discover_directory_with_stats_excluding(
     root: impl AsRef<Path>,
     excluded_note_ids: &HashSet<String>,
 ) -> Result<(Vec<DocumentCandidate>, CorpusStats)> {
+    let scan = scan_directory_internal(root, excluded_note_ids)?;
+    if !scan.errors.is_empty() {
+        return Err(scan.errors.into_error());
+    }
+    Ok((scan.candidates, scan.stats))
+}
+
+pub(crate) fn scan_directory_partial_with_stats_excluding(
+    root: impl AsRef<Path>,
+    excluded_note_ids: &HashSet<String>,
+) -> Result<CorpusScan> {
     scan_directory_internal(root, excluded_note_ids)
 }
 
@@ -41,17 +179,33 @@ pub fn scan_directory_with_stats_excluding(
 ) -> Result<(Vec<Document>, CorpusStats)> {
     let root = root.as_ref();
     let (candidates, stats) = discover_directory_with_stats_excluding(root, excluded_note_ids)?;
-    let documents = candidates
-        .iter()
-        .map(load_document)
-        .collect::<Result<Vec<_>>>()?;
+    let documents = reload_documents(&candidates)?;
     Ok((documents, stats))
+}
+
+fn reload_documents(candidates: &[DocumentCandidate]) -> Result<Vec<Document>> {
+    let mut documents = Vec::with_capacity(candidates.len());
+    let mut errors = CorpusErrors::new();
+    for candidate in candidates {
+        match load_document(candidate) {
+            Ok(document) => documents.push(document),
+            Err(error) => errors.push(
+                Some(candidate.path.clone()),
+                reload_error_kind(&error),
+                error,
+            ),
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors.into_error());
+    }
+    Ok(documents)
 }
 
 fn scan_directory_internal(
     root: impl AsRef<Path>,
     excluded_note_ids: &HashSet<String>,
-) -> Result<(Vec<DocumentCandidate>, CorpusStats)> {
+) -> Result<CorpusScan> {
     let root = root.as_ref();
 
     if !root.is_dir() {
@@ -66,15 +220,39 @@ fn scan_directory_internal(
         directories: 1,
         ..CorpusStats::default()
     };
+    let mut errors = CorpusErrors::new();
     if !is_templates_directory(root) {
-        scan_directory_recursive_candidates(root, &mut documents, &mut stats, excluded_note_ids)?;
+        scan_directory_recursive_candidates(
+            root,
+            &mut documents,
+            &mut stats,
+            &mut errors,
+            excluded_note_ids,
+        );
     }
 
-    let mut ids = std::collections::HashSet::new();
+    let mut paths_by_id = BTreeMap::<String, Vec<PathBuf>>::new();
     for document in &documents {
-        if !ids.insert(&document.metadata.id) {
-            anyhow::bail!("Duplicate Chronicle note ID: {}", document.metadata.id);
+        paths_by_id
+            .entry(document.metadata.id.clone())
+            .or_default()
+            .push(document.path.clone());
+    }
+    for (id, mut paths) in paths_by_id {
+        if paths.len() < 2 {
+            continue;
         }
+        paths.sort();
+        let conflicting_paths = paths
+            .iter()
+            .map(|path| format!("- {}", path.display()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        errors.push(
+            Some(format!("`{id}`").into()),
+            CorpusErrorKind::DuplicateId,
+            anyhow::anyhow!("appears in:\n{conflicting_paths}"),
+        );
     }
     documents.sort_by(|a, b| a.path.cmp(&b.path));
     #[allow(clippy::cast_precision_loss)]
@@ -92,7 +270,11 @@ fn scan_directory_internal(
         "Scanned Chronicle corpus"
     );
 
-    Ok((documents, stats))
+    Ok(CorpusScan {
+        candidates: documents,
+        stats,
+        errors,
+    })
 }
 
 pub fn load_document(candidate: &DocumentCandidate) -> Result<Document> {
@@ -115,15 +297,43 @@ fn scan_directory_recursive_candidates(
     directory: &Path,
     documents: &mut Vec<DocumentCandidate>,
     stats: &mut CorpusStats,
+    errors: &mut CorpusErrors,
     excluded_note_ids: &HashSet<String>,
-) -> Result<()> {
-    for entry in fs::read_dir(directory)
-        .with_context(|| format!("failed to read directory: {}", directory.display()))?
-    {
-        let entry = entry.with_context(|| {
-            format!("failed to read directory entry in {}", directory.display())
-        })?;
+) {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) => {
+            errors.push(
+                Some(directory.to_path_buf()),
+                CorpusErrorKind::DirectoryTraversal,
+                anyhow::Error::from(error)
+                    .context(format!("failed to read directory: {}", directory.display())),
+            );
+            return;
+        }
+    };
 
+    let mut readable_entries = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                errors.push(
+                    Some(directory.to_path_buf()),
+                    CorpusErrorKind::DirectoryTraversal,
+                    anyhow::Error::from(error).context(format!(
+                        "failed to read directory entry in {}",
+                        directory.display()
+                    )),
+                );
+                continue;
+            }
+        };
+        readable_entries.push(entry);
+    }
+    readable_entries.sort_by_key(std::fs::DirEntry::path);
+
+    for entry in readable_entries {
         let path = entry.path();
 
         if path.is_dir() {
@@ -134,7 +344,7 @@ fn scan_directory_recursive_candidates(
                 continue;
             }
             stats.directories += 1;
-            scan_directory_recursive_candidates(&path, documents, stats, excluded_note_ids)?;
+            scan_directory_recursive_candidates(&path, documents, stats, errors, excluded_note_ids);
             continue;
         }
 
@@ -142,7 +352,14 @@ fn scan_directory_recursive_candidates(
             continue;
         }
 
-        let Some(document) = scan_file(&path)? else {
+        let document = match scan_file(&path) {
+            Ok(document) => document,
+            Err(error) => {
+                errors.push(Some(path.clone()), scan_error_kind(&error), error);
+                continue;
+            }
+        };
+        let Some(document) = document else {
             continue;
         };
         if excluded_note_ids.contains(&document.metadata.id) {
@@ -153,8 +370,26 @@ fn scan_directory_recursive_candidates(
         stats.characters += document.content.chars().count();
         documents.push(document.candidate());
     }
+}
 
-    Ok(())
+fn scan_error_kind(error: &anyhow::Error) -> CorpusErrorKind {
+    let message = error.to_string();
+    if message.contains("Invalid secret callout") {
+        CorpusErrorKind::SecretCallout
+    } else if message.contains("Invalid note") {
+        CorpusErrorKind::Frontmatter
+    } else {
+        CorpusErrorKind::Read
+    }
+}
+
+pub(crate) fn reload_error_kind(error: &anyhow::Error) -> CorpusErrorKind {
+    let message = error.to_string();
+    if message.contains("Document changed") || message.contains("became ineligible") {
+        CorpusErrorKind::ChangedDuringIndex
+    } else {
+        scan_error_kind(error)
+    }
 }
 
 fn is_markdown_file(path: &Path) -> bool {
@@ -309,11 +544,62 @@ fn hash_content(content: &str) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::{
-        hash_content, is_markdown_file, is_templates_directory, scan_directory_with_stats,
-        scan_directory_with_stats_excluding, split_secret_callouts,
+        CorpusErrorKind, CorpusErrors, hash_content, is_markdown_file, is_templates_directory,
+        scan_directory_with_stats, scan_directory_with_stats_excluding, split_secret_callouts,
     };
     use std::{collections::HashSet, fs, path::Path};
     use tempfile::tempdir;
+
+    #[test]
+    fn corpus_errors_are_sorted_by_path_then_category() {
+        let mut errors = CorpusErrors::new();
+        errors.push(
+            Some("z.md".into()),
+            CorpusErrorKind::Read,
+            anyhow::anyhow!("could not read"),
+        );
+        errors.push(
+            Some("a.md".into()),
+            CorpusErrorKind::SecretCallout,
+            anyhow::anyhow!("invalid callout"),
+        );
+        errors.push(
+            Some("a.md".into()),
+            CorpusErrorKind::Frontmatter,
+            anyhow::anyhow!("invalid metadata"),
+        );
+
+        let report = errors.into_error().to_string();
+        let frontmatter = report.find("[frontmatter]").unwrap();
+        let secret_callout = report.find("[secret-callout]").unwrap();
+        let read = report.find("[read]").unwrap();
+
+        assert!(frontmatter < secret_callout);
+        assert!(secret_callout < read);
+    }
+
+    #[test]
+    fn corpus_errors_display_all_entries_and_preserve_error_chains() {
+        let error = anyhow::anyhow!("permission denied")
+            .context("could not read note")
+            .context("corpus access failed");
+        let mut errors = CorpusErrors::new();
+        errors.push(Some("notes/one.md".into()), CorpusErrorKind::Read, error);
+        errors.push(
+            Some("northmere".into()),
+            CorpusErrorKind::DuplicateId,
+            anyhow::anyhow!("also declared by notes/two.md"),
+        );
+
+        let error = errors.into_error();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("2 corpus error(s):"));
+        assert!(report.contains(
+            "[read] notes/one.md: corpus access failed: could not read note: permission denied"
+        ));
+        assert!(report.contains("[duplicate-id] northmere: also declared by notes/two.md"));
+    }
 
     fn note(id: &str, status: &str) -> String {
         format!(
@@ -339,6 +625,195 @@ mod tests {
             note("tower", "canon"),
         )?;
         assert!(scan_directory_with_stats(directory.path()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn collects_all_duplicate_ids_and_conflicting_paths_in_order() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        fs::create_dir(directory.path().join("locations"))?;
+        fs::create_dir(directory.path().join("regions"))?;
+        fs::write(
+            directory.path().join("locations/northmere.md"),
+            note("northmere", "canon"),
+        )?;
+        fs::write(
+            directory.path().join("regions/northmere-copy.md"),
+            note("northmere", "canon"),
+        )?;
+        fs::write(
+            directory.path().join("locations/ember.md"),
+            note("ember", "canon"),
+        )?;
+        fs::write(
+            directory.path().join("regions/ember-copy.md"),
+            note("ember", "canon"),
+        )?;
+
+        let error = scan_directory_with_stats(directory.path()).unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("2 corpus error(s):"));
+        assert!(
+            report.contains("[duplicate-id] `ember`: appears in:"),
+            "{report}"
+        );
+        assert!(
+            report.contains("[duplicate-id] `northmere`: appears in:"),
+            "{report}"
+        );
+        let ember_start = report.find("[duplicate-id] `ember`").unwrap();
+        let ember_end = report.find("[duplicate-id] `northmere`").unwrap();
+        let ember_report = &report[ember_start..ember_end];
+        assert!(ember_report.contains("locations/ember.md"));
+        assert!(ember_report.contains("regions/ember-copy.md"));
+        assert!(report.contains("locations/northmere.md"));
+        assert!(report.contains("regions/northmere-copy.md"));
+        assert!(ember_start < ember_end);
+        Ok(())
+    }
+
+    #[test]
+    fn partial_scan_keeps_valid_candidates_and_collects_sibling_errors() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        fs::write(directory.path().join("valid.md"), note("valid", "canon"))?;
+        fs::write(
+            directory.path().join("bad-frontmatter.md"),
+            "---\ntype: location\n---\nIncomplete note",
+        )?;
+        fs::write(
+            directory.path().join("bad-secret.md"),
+            format!(
+                "{}\n\n> [!secret] GM notes\n> Hidden information.\n",
+                note("bad-secret", "canon").replace("visibility: secret", "visibility: player")
+            ),
+        )?;
+
+        let scan =
+            super::scan_directory_partial_with_stats_excluding(directory.path(), &HashSet::new())?;
+
+        assert_eq!(scan.candidates.len(), 1);
+        assert_eq!(scan.candidates[0].metadata.id, "valid");
+        assert_eq!(scan.stats.files, 1);
+        assert_eq!(scan.errors.diagnostics.len(), 2);
+        let report = scan.errors.to_string();
+        assert!(report.contains("[frontmatter]"));
+        assert!(report.contains("[secret-callout]"));
+        Ok(())
+    }
+
+    #[test]
+    fn reports_two_malformed_markdown_files_together() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        for name in ["first.md", "second.md"] {
+            fs::write(
+                directory.path().join(name),
+                "---\ntype: location\n---\nIncomplete note",
+            )?;
+        }
+
+        let error = scan_directory_with_stats(directory.path()).unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("2 corpus error(s):"));
+        assert!(report.contains("first.md"));
+        assert!(report.contains("second.md"));
+        assert_eq!(report.matches("[frontmatter]").count(), 2);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_child_directory_is_reported_without_blocking_siblings() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir()?;
+        let unreadable = directory.path().join("unreadable");
+        fs::create_dir(&unreadable)?;
+        fs::write(
+            directory.path().join("sibling.md"),
+            note("sibling", "canon"),
+        )?;
+        fs::write(unreadable.join("hidden.md"), note("hidden", "canon"))?;
+
+        let original_mode = fs::metadata(&unreadable)?.permissions().mode();
+        let mut permissions = fs::metadata(&unreadable)?.permissions();
+        permissions.set_mode(0o0);
+        fs::set_permissions(&unreadable, permissions)?;
+        let scan =
+            super::scan_directory_partial_with_stats_excluding(directory.path(), &HashSet::new())?;
+        let mut restore = fs::metadata(&unreadable)?.permissions();
+        restore.set_mode(original_mode);
+        fs::set_permissions(&unreadable, restore)?;
+
+        // Privileged test runners can still read mode-000 directories.
+        if scan
+            .errors
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.kind != CorpusErrorKind::DirectoryTraversal)
+        {
+            return Ok(());
+        }
+        assert!(
+            scan.candidates
+                .iter()
+                .any(|candidate| candidate.metadata.id == "sibling")
+        );
+        assert!(scan.errors.diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == CorpusErrorKind::DirectoryTraversal
+                && diagnostic.path.as_deref() == Some(unreadable.as_path())
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn reload_pass_attempts_every_candidate_and_aggregates_changes() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let first_path = directory.path().join("first.md");
+        let second_path = directory.path().join("second.md");
+        fs::write(&first_path, note("first", "canon"))?;
+        fs::write(&second_path, note("second", "canon"))?;
+        let scan =
+            super::scan_directory_partial_with_stats_excluding(directory.path(), &HashSet::new())?;
+
+        fs::write(&first_path, note("first", "canon") + "\nChanged")?;
+        fs::write(&second_path, note("second", "canon") + "\nChanged")?;
+
+        let error = super::reload_documents(&scan.candidates).unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("2 corpus error(s):"));
+        assert!(report.contains("[changed-during-index]"));
+        assert!(report.contains("first.md"));
+        assert!(report.contains("second.md"));
+        Ok(())
+    }
+
+    #[test]
+    fn public_scan_returns_one_report_after_inspecting_all_siblings() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let nested = directory.path().join("nested");
+        fs::create_dir(&nested)?;
+        fs::write(directory.path().join("valid.md"), note("valid", "canon"))?;
+        fs::write(
+            nested.join("bad-frontmatter.md"),
+            "---\ntype: location\n---\nIncomplete note",
+        )?;
+        fs::write(
+            directory.path().join("bad-secret.md"),
+            format!(
+                "{}\n\n> [!secret] GM notes\n> Hidden information.\n",
+                note("bad-secret", "canon").replace("visibility: secret", "visibility: player")
+            ),
+        )?;
+
+        let error = scan_directory_with_stats(directory.path()).unwrap_err();
+        let report = format!("{error:#}");
+
+        assert!(report.contains("2 corpus error(s):"));
+        assert!(report.contains("nested/bad-frontmatter.md"));
+        assert!(report.contains("bad-secret.md"));
         Ok(())
     }
 

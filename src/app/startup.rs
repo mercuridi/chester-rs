@@ -217,4 +217,43 @@ mod tests {
         assert!(loop_ran.load(Ordering::Relaxed));
         Ok(())
     }
+
+    #[tokio::test]
+    async fn corpus_failures_remain_one_chronicle_startup_stage() {
+        use crate::chronicle::indexer::{CorpusErrorKind, CorpusErrors};
+
+        let mut corpus_errors = CorpusErrors::new();
+        for path in ["characters/one.md", "locations/two.md", "regions/three.md"] {
+            corpus_errors.push(
+                Some(path.into()),
+                CorpusErrorKind::Frontmatter,
+                anyhow::anyhow!("invalid metadata"),
+            );
+        }
+        corpus_errors.push(
+            Some("northmere".into()),
+            CorpusErrorKind::DuplicateId,
+            anyhow::anyhow!("appears in multiple files"),
+        );
+        let corpus_error = corpus_errors
+            .into_error()
+            .context("Failed to index the Chronicle corpus")
+            .context("Failed to initialize Chronicle");
+
+        let (_, _, errors) = run_independent_stages(
+            "Jester database initialization",
+            async { Ok::<_, Error>(()) },
+            "Chronicle initialization",
+            async move { Err::<(), _>(corpus_error) },
+        )
+        .await;
+        let report = errors.into_error().to_string();
+
+        assert_eq!(report.matches("Chronicle initialization:").count(), 1);
+        assert!(report.contains("4 corpus error(s):"));
+        assert!(report.contains("characters/one.md"));
+        assert!(report.contains("locations/two.md"));
+        assert!(report.contains("regions/three.md"));
+        assert!(report.contains("northmere"));
+    }
 }
