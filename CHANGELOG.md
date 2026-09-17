@@ -1,6 +1,20 @@
 # Changelog
 
-## [4.0.0] — 2026-09-12
+## [4.1.0] — 2026-09-17
+
+### Features
+
+- Startup now attempts all steps and reports back on all encountered failures
+- Corpus startup scans now report all errors instead of failing fast at first error
+- Reuse scanned documents during corpus indexing instead of reading multiple times
+
+
+### Bug Fixes
+
+- Improve corpus error report readability
+- Promote interim-symlink to main corpus directory for personal dev
+
+## [v4.0.0] — 2026-09-12
 
 ### Features
 
