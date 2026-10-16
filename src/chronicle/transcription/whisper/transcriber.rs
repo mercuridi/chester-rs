@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use candle_core::{Device, Tensor};
 use candle_transformers::models::whisper::{self as m, audio};
 use tokenizers::Tokenizer;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::chronicle::transcription::{AudioSource, MODEL_SAMPLE_RATE, Transcriber};
 
@@ -17,10 +17,11 @@ pub struct TranscriptSegment {
 }
 
 const ACTIVITY_FRAME_SAMPLES: usize = (MODEL_SAMPLE_RATE as usize) / 50;
-const ACTIVITY_RMS_THRESHOLD: f32 = 0.001;
+const ACTIVITY_RMS_THRESHOLD: f32 = 0.0015;
 const MAX_REGION_SAMPLES: usize = 30 * MODEL_SAMPLE_RATE as usize;
 const REGION_ADVANCE_SAMPLES: usize = 25 * MODEL_SAMPLE_RATE as usize;
-const MIN_CONSECUTIVE_ACTIVITY_FRAMES: usize = 5;
+// each frame is 20ms
+const MIN_CONSECUTIVE_ACTIVITY_FRAMES: usize = 10;
 
 #[derive(Default)]
 struct SilenceSkipStats {
@@ -36,6 +37,11 @@ impl SilenceSkipStats {
         //     end_seconds = end_sample as f64 / f64::from(MODEL_SAMPLE_RATE),
         //     duration_seconds =
         //         end_sample.saturating_sub(start_sample) as f64 / f64::from(MODEL_SAMPLE_RATE),
+        //     activity_rms_threshold = ACTIVITY_RMS_THRESHOLD,
+        //     minimum_activity_ms = MIN_CONSECUTIVE_ACTIVITY_FRAMES as f64
+        //         * ACTIVITY_FRAME_SAMPLES as f64
+        //         * 1000.0
+        //         / f64::from(MODEL_SAMPLE_RATE),
         //     "Skipping low-energy Whisper window"
         // );
     }
