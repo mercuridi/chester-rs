@@ -387,8 +387,8 @@ pub struct RecordingSession {
     pub voice_channel_id: ChannelId,
     pub notification_channel_id: ChannelId,
     pub initiator: UserId,
-    pub started_at: DateTime<Local>,
     pub session_slug: String,
+    pub recording_directory: PathBuf,
     pub manifest_path: PathBuf,
     pub manifest: RecordingManifest,
     pub started_instant: Instant,
@@ -602,8 +602,8 @@ impl Recorder {
             voice_channel_id,
             notification_channel_id,
             initiator,
-            started_at,
             session_slug,
+            recording_directory: recording_directory.clone(),
             manifest_path,
             manifest,
             started_instant,
@@ -816,11 +816,8 @@ impl Recorder {
     }
 
     fn initiate_user_recording(
-        &self,
-        guild_id: GuildId,
+        recording_directory: &Path,
         user_id: UserId,
-        started_at: DateTime<Local>,
-        session_name: &str,
         initial_silence_ticks: u64,
     ) -> UserRecording {
         let (producer, consumer) = RingBuffer::<RecordedFrame>::new(RING_BUFFER_CAPACITY);
@@ -828,13 +825,7 @@ impl Recorder {
         let (stop_tx, stop_rx) = oneshot::channel();
         let wakeup = EncoderWakeup::new();
 
-        let path = recording_path(
-            &self.recordings_dir,
-            guild_id,
-            user_id,
-            session_name,
-            started_at,
-        );
+        let path = participant_recording_path(recording_directory, user_id);
 
         let encoder_path = path.clone();
         let encoder_wakeup = wakeup.clone();
@@ -948,11 +939,9 @@ impl EventHandler for Recorder {
                         continue;
                     }
 
-                    let user_recording = self.initiate_user_recording(
-                        session.guild_id,
+                    let user_recording = Self::initiate_user_recording(
+                        &session.recording_directory,
                         user_id,
-                        session.started_at,
-                        &session.session_slug,
                         session.tick,
                     );
 
@@ -1049,6 +1038,7 @@ fn write_pcm(
     }
 }
 
+#[cfg(test)]
 fn recording_directory(
     recordings_dir: &Path,
     guild_id: GuildId,
@@ -1063,6 +1053,7 @@ fn recording_directory(
     ))
 }
 
+#[cfg(test)]
 fn recording_path(
     recordings_dir: &Path,
     guild_id: GuildId,
@@ -1072,6 +1063,10 @@ fn recording_path(
 ) -> PathBuf {
     recording_directory(recordings_dir, guild_id, session_name, started_at)
         .join(format!("recording-{user_id}.opus"))
+}
+
+fn participant_recording_path(recording_directory: &Path, user_id: UserId) -> PathBuf {
+    recording_directory.join(format!("recording-{user_id}.opus"))
 }
 
 fn allocate_recording_directory(
@@ -1206,8 +1201,9 @@ mod tests {
     use super::{
         Clock, EncoderWakeup, FinalizedRecording, ManifestStatus, RecordedFrame, Recorder,
         RecorderManager, RecordingManifest, allocate_recording_directory, default_manifest_status,
-        recording_directory, recording_path, recover_recording_manifest,
-        resolve_finalized_recordings, scan_incomplete_manifests, validate_scene_name, write_pcm,
+        participant_recording_path, recording_directory, recording_path,
+        recover_recording_manifest, resolve_finalized_recordings, scan_incomplete_manifests,
+        validate_scene_name, write_pcm,
     };
     use chrono::{DateTime, Local, TimeZone};
     use rtrb::RingBuffer;
@@ -1410,6 +1406,24 @@ mod tests {
         assert!(first.1.is_dir());
         assert!(second.1.is_dir());
         assert_ne!(first.1, second.1);
+        Ok(())
+    }
+
+    #[test]
+    fn participant_recording_path_uses_allocated_session_directory() -> anyhow::Result<()> {
+        let recordings = tempdir()?;
+        let (_session_name, session_directory) = allocate_recording_directory(
+            recordings.path(),
+            GuildId::new(10),
+            "session",
+            fixed_time()?,
+        )?;
+
+        let path = participant_recording_path(&session_directory, UserId::new(20));
+        assert_eq!(path, session_directory.join("recording-20.opus"));
+
+        fs::File::create(&path)?;
+        assert!(path.is_file());
         Ok(())
     }
 
