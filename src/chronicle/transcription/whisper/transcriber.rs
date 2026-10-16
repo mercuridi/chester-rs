@@ -111,7 +111,12 @@ impl WhisperTranscriber {
             &self.device,
         )?;
 
-        let (_, _, content_frames) = mel.dims3()?;
+        let (_, _, mel_frames) = mel.dims3()?;
+        // Candle's pcm_to_mel pads its output by at least 15 seconds. Longer
+        // inputs can therefore produce more frames than Whisper's positional
+        // embedding supports (1500 encoder steps / 3000 mel frames).
+        let content_frames = (samples.len() / m::HOP_LENGTH).min(m::N_FRAMES);
+        let mel = mel.narrow(2, 0, content_frames.min(mel_frames))?;
         let mel_segment = self.pad_mel_segment(&mel, content_frames)?;
         let decoded = self.decode_segment(&mel_segment)?;
         if decoded.no_speech_prob > m::NO_SPEECH_THRESHOLD
