@@ -4,6 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use candle_core::{Device, Tensor};
 use candle_transformers::models::whisper::{self as m, audio};
 use tokenizers::Tokenizer;
+use tracing::{info, warn};
 
 use crate::chronicle::transcription::{AudioSource, MODEL_SAMPLE_RATE, Transcriber};
 
@@ -133,7 +134,7 @@ impl WhisperTranscriber {
         let timestamp_segments =
             self.extract_timestamp_segments(&decoded.tokens, segment_start, segment_duration)?;
 
-        if timestamp_segments.is_empty() {
+        let mut segments = if timestamp_segments.is_empty() {
             let text = decoded.text.trim();
             if text.is_empty() {
                 Ok(Vec::new())
@@ -146,7 +147,36 @@ impl WhisperTranscriber {
             }
         } else {
             Ok(timestamp_segments)
-        }
+        }?;
+
+        segments.retain_mut(|segment| match filter_text_artifacts(&segment.text) {
+            TextArtifactFilter::Keep {
+                text,
+                removed_characters,
+            } => {
+                if removed_characters > 0 {
+                    info!(
+                        start = segment.start,
+                        end = segment.end,
+                        removed_characters,
+                        "Removed formatting characters from transcript segment"
+                    );
+                }
+                segment.text = text;
+                true
+            }
+            TextArtifactFilter::Drop { reason } => {
+                warn!(
+                    start = segment.start,
+                    end = segment.end,
+                    reason,
+                    "Removed transcript segment as a text artifact"
+                );
+                false
+            }
+        });
+
+        Ok(segments)
     }
 
     pub fn is_timestamp_token(&self, token: u32) -> bool {
@@ -209,6 +239,89 @@ fn normalized_tokens(text: &str) -> Vec<String> {
 
 fn raw_words(text: &str) -> Vec<&str> {
     text.split_whitespace().collect()
+}
+
+enum TextArtifactFilter {
+    Keep {
+        text: String,
+        removed_characters: usize,
+    },
+    Drop {
+        reason: &'static str,
+    },
+}
+
+/// Remove obvious decoder formatting noise while preserving ordinary speech punctuation.
+fn filter_text_artifacts(text: &str) -> TextArtifactFilter {
+    const MAX_CONSECUTIVE_REPEATED_WORDS: usize = 16;
+    const MIN_SYMBOL_HEAVY_COUNT: usize = 16;
+    const MAX_SYMBOL_COUNT: usize = 40;
+    const SYMBOL_HEAVY_RATIO: f64 = 0.35;
+
+    let non_whitespace_count = text.chars().filter(|character| !character.is_whitespace()).count();
+    let symbol_count = text
+        .chars()
+        .filter(|character| !character.is_whitespace() && !character.is_alphanumeric())
+        .count();
+    if symbol_count >= MAX_SYMBOL_COUNT
+        || (symbol_count >= MIN_SYMBOL_HEAVY_COUNT
+            && non_whitespace_count > 0
+            && symbol_count as f64 / non_whitespace_count as f64 >= SYMBOL_HEAVY_RATIO)
+    {
+        return TextArtifactFilter::Drop {
+            reason: "symbol-heavy text",
+        };
+    }
+
+    let mut previous_word = None;
+    let mut repeated_words = 0usize;
+    for word in normalized_tokens(text) {
+        if previous_word.as_deref() == Some(word.as_str()) {
+            repeated_words += 1;
+        } else {
+            previous_word = Some(word);
+            repeated_words = 1;
+        }
+        if repeated_words >= MAX_CONSECUTIVE_REPEATED_WORDS {
+            return TextArtifactFilter::Drop {
+                reason: "extreme consecutive word repetition",
+            };
+        }
+    }
+
+    let mut output = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut removed_characters = 0usize;
+
+    while let Some(character) = chars.next() {
+        if character == '*' {
+            removed_characters += 1;
+            continue;
+        }
+
+        if character == ':' && chars.peek() == Some(&':') {
+            removed_characters += 1;
+            while chars.peek() == Some(&':') {
+                chars.next();
+                removed_characters += 1;
+            }
+            continue;
+        }
+
+        output.push(character);
+    }
+
+    let output = output.trim().to_owned();
+    if !output.chars().any(char::is_alphanumeric) {
+        return TextArtifactFilter::Drop {
+            reason: "punctuation-only text",
+        };
+    }
+
+    TextArtifactFilter::Keep {
+        text: output,
+        removed_characters,
+    }
 }
 
 fn has_temporal_overlap(a: &TranscriptSegment, b: &TranscriptSegment) -> bool {
