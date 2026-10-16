@@ -1,6 +1,12 @@
 # Changelog
 
-## [4.1.0] — 2026-09-17
+## [4.1.1] — 2026-10-16
+
+### Bug Fixes
+
+- Recording now points at the correct directory
+
+## [v4.1.0] — 2026-09-17
 
 ### Features
 
