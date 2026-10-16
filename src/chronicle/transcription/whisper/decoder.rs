@@ -82,7 +82,11 @@ impl WhisperTranscriber {
             .decode(&tokens, true)
             .map_err(|error| anyhow!("Tokenizer decode failed: {error}"))?;
 
-        let token_count = u32::try_from(tokens.len().max(1))?;
+        // The first three tokens are the fixed SOT/language/task prefix, not
+        // sampled output. Whisper averages over generated tokens, including
+        // EOT when present, so exclude the prefix from this denominator.
+        let sampled_token_count = tokens.len().saturating_sub(3).max(1);
+        let token_count = u32::try_from(sampled_token_count)?;
         let avg_logprob = sum_logprob / f64::from(token_count);
 
         Ok(Decoded {
