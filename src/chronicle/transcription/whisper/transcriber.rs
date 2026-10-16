@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use candle_core::{Device, Tensor};
 use candle_transformers::models::whisper::{self as m, audio};
 use tokenizers::Tokenizer;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::chronicle::transcription::{AudioSource, MODEL_SAMPLE_RATE, Transcriber};
 
@@ -26,6 +26,31 @@ const REGION_ADVANCE_SAMPLES: usize = 25 * MODEL_SAMPLE_RATE as usize;
 struct SpeechRegion {
     start_sample: usize,
     samples: Vec<f32>,
+}
+
+#[derive(Default)]
+struct SilenceSkipStats {
+    section_count: usize,
+    skipped_samples: usize,
+}
+
+impl SilenceSkipStats {
+    fn record(&mut self, start_sample: usize, end_sample: usize) {
+        if end_sample <= start_sample {
+            return;
+        }
+
+        self.section_count += 1;
+        self.skipped_samples += end_sample - start_sample;
+
+        let samples_per_second = f64::from(MODEL_SAMPLE_RATE);
+        debug!(
+            start_seconds = start_sample as f64 / samples_per_second,
+            end_seconds = end_sample as f64 / samples_per_second,
+            duration_seconds = (end_sample - start_sample) as f64 / samples_per_second,
+            "Skipping low-energy audio span before Whisper"
+        );
+    }
 }
 
 /// Streaming, low-energy speech gate. It retains only a short preroll and the
@@ -174,16 +199,6 @@ fn frame_rms(samples: &[f32]) -> f32 {
     mean_square.sqrt() as f32
 }
 
-fn log_skipped_span(start_sample: usize, end_sample: usize) {
-    let samples_per_second = f64::from(MODEL_SAMPLE_RATE);
-    info!(
-        start_seconds = start_sample as f64 / samples_per_second,
-        end_seconds = end_sample as f64 / samples_per_second,
-        duration_seconds = end_sample.saturating_sub(start_sample) as f64 / samples_per_second,
-        "Skipping low-energy audio span before Whisper"
-    );
-}
-
 pub struct WhisperTranscriber {
     pub model: Model,
     pub tokenizer: Tokenizer,
@@ -217,22 +232,35 @@ impl WhisperTranscriber {
     ) -> Result<Vec<TranscriptSegment>> {
         let mel_filters = load_mel_filters()?;
         let mut scanner = SilenceScanner::new();
+        let mut skip_stats = SilenceSkipStats::default();
         let mut last_region_end = 0usize;
         let mut segments = Vec::new();
 
         while let Some(chunk) = source.next_chunk()? {
             for region in scanner.push(&chunk) {
-                self.transcribe_region(region, &mel_filters, &mut last_region_end, &mut segments)?;
+                self.transcribe_region(
+                    region,
+                    &mel_filters,
+                    &mut last_region_end,
+                    &mut skip_stats,
+                    &mut segments,
+                )?;
             }
         }
 
         for region in scanner.finish() {
-            self.transcribe_region(region, &mel_filters, &mut last_region_end, &mut segments)?;
+            self.transcribe_region(
+                region,
+                &mel_filters,
+                &mut last_region_end,
+                &mut skip_stats,
+                &mut segments,
+            )?;
         }
 
         let total_samples = scanner.processed_samples;
         if total_samples > last_region_end {
-            log_skipped_span(last_region_end, total_samples);
+            skip_stats.record(last_region_end, total_samples);
         }
 
         let mut segments = deduplicate_segments(segments);
@@ -242,6 +270,21 @@ impl WhisperTranscriber {
                 .then_with(|| a.end.total_cmp(&b.end))
         });
 
+        let samples_per_second = f64::from(MODEL_SAMPLE_RATE);
+        info!(
+            skipped_silence_sections = skip_stats.section_count,
+            skipped_silence_duration_seconds =
+                skip_stats.skipped_samples as f64 / samples_per_second,
+            recording_duration_seconds = total_samples as f64 / samples_per_second,
+            activity_frame_ms = ACTIVITY_FRAME_SAMPLES as f64 * 1000.0 / samples_per_second,
+            activity_rms_threshold = ACTIVITY_RMS_THRESHOLD,
+            boundary_padding_ms = SPEECH_PADDING_SAMPLES as f64 * 1000.0 / samples_per_second,
+            silence_hangover_ms = SILENCE_HANGOVER_SAMPLES as f64 * 1000.0 / samples_per_second,
+            max_region_seconds = MAX_REGION_SAMPLES as f64 / samples_per_second,
+            region_advance_seconds = REGION_ADVANCE_SAMPLES as f64 / samples_per_second,
+            "Transcription silence skipping summary"
+        );
+
         Ok(segments)
     }
 
@@ -250,10 +293,11 @@ impl WhisperTranscriber {
         region: SpeechRegion,
         mel_filters: &[f32],
         last_region_end: &mut usize,
+        skip_stats: &mut SilenceSkipStats,
         output: &mut Vec<TranscriptSegment>,
     ) -> Result<()> {
         if region.start_sample > *last_region_end {
-            log_skipped_span(*last_region_end, region.start_sample);
+            skip_stats.record(*last_region_end, region.start_sample);
         }
 
         let mut local_start = 0usize;
