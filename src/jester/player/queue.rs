@@ -40,8 +40,8 @@ impl PlaybackItem {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RepeatMode {
-    #[default]
     Off,
+    #[default]
     Track,
     Queue,
 }
@@ -107,7 +107,7 @@ impl GuildQueue {
             upcoming: VecDeque::new(),
             repeat_cycle: VecDeque::new(),
             history: VecDeque::new(),
-            repeat_mode: RepeatMode::Off,
+            repeat_mode: RepeatMode::Track,
             history_capacity,
         }
     }
@@ -365,6 +365,7 @@ mod tests {
     #[test]
     fn completing_tracks_advances_then_becomes_idle_when_repeat_is_off() {
         let mut queue = GuildQueue::default();
+        queue.set_repeat_mode(RepeatMode::Off);
         queue.enqueue(track("first"));
         queue.enqueue(track("second"));
 
