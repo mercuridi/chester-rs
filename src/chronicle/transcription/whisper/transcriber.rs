@@ -18,185 +18,114 @@ pub struct TranscriptSegment {
 
 const ACTIVITY_FRAME_SAMPLES: usize = (MODEL_SAMPLE_RATE as usize) / 50;
 const ACTIVITY_RMS_THRESHOLD: f32 = 0.001;
-const SPEECH_PADDING_SAMPLES: usize = MODEL_SAMPLE_RATE as usize * 3 / 10;
-const SILENCE_HANGOVER_SAMPLES: usize = MODEL_SAMPLE_RATE as usize / 2;
 const MAX_REGION_SAMPLES: usize = 30 * MODEL_SAMPLE_RATE as usize;
 const REGION_ADVANCE_SAMPLES: usize = 25 * MODEL_SAMPLE_RATE as usize;
-
-struct SpeechRegion {
-    start_sample: usize,
-    samples: Vec<f32>,
-}
+const MIN_CONSECUTIVE_ACTIVITY_FRAMES: usize = 5;
 
 #[derive(Default)]
 struct SilenceSkipStats {
-    section_count: usize,
-    skipped_samples: usize,
+    silent_windows: Vec<(usize, usize)>,
+    decoded_windows: Vec<(usize, usize)>,
 }
 
 impl SilenceSkipStats {
-    fn record(&mut self, start_sample: usize, end_sample: usize) {
-        if end_sample <= start_sample {
-            return;
-        }
-
-        self.section_count += 1;
-        self.skipped_samples += end_sample - start_sample;
-
-        let samples_per_second = f64::from(MODEL_SAMPLE_RATE);
+    fn record_silent_window(&mut self, start_sample: usize, end_sample: usize) {
+        self.silent_windows.push((start_sample, end_sample));
         debug!(
-            start_seconds = start_sample as f64 / samples_per_second,
-            end_seconds = end_sample as f64 / samples_per_second,
-            duration_seconds = (end_sample - start_sample) as f64 / samples_per_second,
-            "Skipping low-energy audio span before Whisper"
+            start_seconds = start_sample as f64 / f64::from(MODEL_SAMPLE_RATE),
+            end_seconds = end_sample as f64 / f64::from(MODEL_SAMPLE_RATE),
+            duration_seconds =
+                end_sample.saturating_sub(start_sample) as f64 / f64::from(MODEL_SAMPLE_RATE),
+            "Skipping low-energy Whisper window"
         );
     }
+
+    fn record_decoded_window(&mut self, start_sample: usize, end_sample: usize) {
+        self.decoded_windows.push((start_sample, end_sample));
+    }
+
+    fn summary(&self) -> (usize, usize) {
+        let skipped = subtract_ranges(
+            merge_ranges(self.silent_windows.clone()),
+            merge_ranges(self.decoded_windows.clone()),
+        );
+        (
+            skipped.len(),
+            skipped.iter().map(|(start, end)| end - start).sum(),
+        )
+    }
 }
 
-/// Streaming, low-energy speech gate. It retains only a short preroll and the
-/// currently active region, so multi-hour recordings are never buffered whole.
-struct SilenceScanner {
-    pending_samples: Vec<f32>,
-    preroll: VecDeque<f32>,
-    active_samples: Vec<f32>,
-    active_start_sample: usize,
-    trailing_silence_samples: usize,
-    processed_samples: usize,
-}
-
-impl SilenceScanner {
-    fn new() -> Self {
-        Self {
-            pending_samples: Vec::with_capacity(ACTIVITY_FRAME_SAMPLES),
-            preroll: VecDeque::with_capacity(SPEECH_PADDING_SAMPLES),
-            active_samples: Vec::new(),
-            active_start_sample: 0,
-            trailing_silence_samples: 0,
-            processed_samples: 0,
-        }
-    }
-
-    fn push(&mut self, samples: &[f32]) -> Vec<SpeechRegion> {
-        self.pending_samples.extend_from_slice(samples);
-        let mut completed = Vec::new();
-        let mut frame = Vec::with_capacity(ACTIVITY_FRAME_SAMPLES);
-        let mut consumed_samples = 0usize;
-        while self.pending_samples.len() - consumed_samples >= ACTIVITY_FRAME_SAMPLES {
-            frame.clear();
-            frame.extend_from_slice(
-                &self.pending_samples[consumed_samples..consumed_samples + ACTIVITY_FRAME_SAMPLES],
-            );
-            consumed_samples += ACTIVITY_FRAME_SAMPLES;
-            completed.extend(self.process_frame(&frame));
-        }
-        if consumed_samples > 0 {
-            self.pending_samples.drain(..consumed_samples);
-        }
-        completed
-    }
-
-    fn finish(&mut self) -> Vec<SpeechRegion> {
-        let mut completed = Vec::new();
-        if !self.pending_samples.is_empty() {
-            let frame = std::mem::take(&mut self.pending_samples);
-            completed.extend(self.process_frame(&frame));
-        }
-
-        if !self.active_samples.is_empty() {
-            self.trim_trailing_silence(SPEECH_PADDING_SAMPLES);
-            completed.push(SpeechRegion {
-                start_sample: self.active_start_sample,
-                samples: std::mem::take(&mut self.active_samples),
-            });
-            self.trailing_silence_samples = 0;
-        }
-
-        completed
-    }
-
-    fn process_frame(&mut self, frame: &[f32]) -> Vec<SpeechRegion> {
-        let frame_start_sample = self.processed_samples;
-        self.processed_samples += frame.len();
-        let mut completed = Vec::new();
-
-        if frame_rms(frame) >= ACTIVITY_RMS_THRESHOLD {
-            if self.active_samples.is_empty() {
-                self.active_start_sample = frame_start_sample.saturating_sub(self.preroll.len());
-                self.active_samples.extend(self.preroll.drain(..));
-            }
-            self.active_samples.extend_from_slice(frame);
-            self.trailing_silence_samples = 0;
-            self.preroll.clear();
-        } else if self.active_samples.is_empty() {
-            self.push_preroll(frame);
-        } else {
-            self.active_samples.extend_from_slice(frame);
-            self.trailing_silence_samples += frame.len();
-        }
-
-        if !self.active_samples.is_empty() && self.active_samples.len() >= MAX_REGION_SAMPLES {
-            let tail = self.active_samples.split_off(REGION_ADVANCE_SAMPLES);
-            let mut head = std::mem::take(&mut self.active_samples);
-            head.extend(
-                tail.iter()
-                    .take(MAX_REGION_SAMPLES - REGION_ADVANCE_SAMPLES),
-            );
-            self.active_samples = tail;
-            completed.push(SpeechRegion {
-                start_sample: self.active_start_sample,
-                samples: head,
-            });
-            self.active_start_sample += REGION_ADVANCE_SAMPLES;
-        }
-
-        if !self.active_samples.is_empty()
-            && self.trailing_silence_samples >= SILENCE_HANGOVER_SAMPLES
+fn merge_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    ranges.sort_unstable_by_key(|(start, _)| *start);
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (start, end) in ranges {
+        if let Some((_, previous_end)) = merged.last_mut()
+            && start <= *previous_end
         {
-            self.trim_trailing_silence(SPEECH_PADDING_SAMPLES);
-            let region_samples = std::mem::take(&mut self.active_samples);
-            self.preroll.extend(
-                region_samples
-                    .iter()
-                    .rev()
-                    .take(SPEECH_PADDING_SAMPLES)
-                    .rev()
-                    .copied(),
-            );
-            completed.push(SpeechRegion {
-                start_sample: self.active_start_sample,
-                samples: region_samples,
-            });
-            self.trailing_silence_samples = 0;
-        }
-
-        completed
-    }
-
-    fn push_preroll(&mut self, frame: &[f32]) {
-        self.preroll.extend(frame.iter().copied());
-        while self.preroll.len() > SPEECH_PADDING_SAMPLES {
-            self.preroll.pop_front();
+            *previous_end = (*previous_end).max(end);
+        } else if end > start {
+            merged.push((start, end));
         }
     }
+    merged
+}
 
-    fn trim_trailing_silence(&mut self, keep_samples: usize) {
-        let discard_samples = self.trailing_silence_samples.saturating_sub(keep_samples);
-        self.active_samples
-            .truncate(self.active_samples.len().saturating_sub(discard_samples));
+fn subtract_ranges(
+    ranges: Vec<(usize, usize)>,
+    covered: Vec<(usize, usize)>,
+) -> Vec<(usize, usize)> {
+    let mut result = Vec::new();
+    let mut cover_index = 0usize;
+    for (start, end) in ranges {
+        let mut cursor = start;
+        while cover_index < covered.len() && covered[cover_index].1 <= cursor {
+            cover_index += 1;
+        }
+        let mut index = cover_index;
+        while index < covered.len() && covered[index].0 < end {
+            let (cover_start, cover_end) = covered[index];
+            if cover_start > cursor {
+                result.push((cursor, cover_start.min(end)));
+            }
+            cursor = cursor.max(cover_end);
+            if cursor >= end {
+                break;
+            }
+            index += 1;
+        }
+        if cursor < end {
+            result.push((cursor, end));
+        }
     }
+    result
 }
 
 fn frame_rms(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
     }
-
     let mean_square = samples
         .iter()
         .map(|sample| f64::from(*sample) * f64::from(*sample))
         .sum::<f64>()
         / samples.len() as f64;
     mean_square.sqrt() as f32
+}
+
+fn window_has_sustained_activity(samples: &[f32]) -> bool {
+    let mut consecutive_active_frames = 0usize;
+    for frame in samples.chunks_exact(ACTIVITY_FRAME_SAMPLES) {
+        if frame_rms(frame) >= ACTIVITY_RMS_THRESHOLD {
+            consecutive_active_frames += 1;
+            if consecutive_active_frames >= MIN_CONSECUTIVE_ACTIVITY_FRAMES {
+                return true;
+            }
+        } else {
+            consecutive_active_frames = 0;
+        }
+    }
+    false
 }
 
 pub struct WhisperTranscriber {
@@ -230,39 +159,49 @@ impl WhisperTranscriber {
         &mut self,
         source: &mut dyn AudioSource,
     ) -> Result<Vec<TranscriptSegment>> {
+        const OVERLAP_SAMPLES: usize = MAX_REGION_SAMPLES - REGION_ADVANCE_SAMPLES;
+
         let mel_filters = load_mel_filters()?;
-        let mut scanner = SilenceScanner::new();
+        let mut buffer = VecDeque::with_capacity(MAX_REGION_SAMPLES + 16_000);
+        let mut window_start = 0usize;
+        let mut eof = false;
         let mut skip_stats = SilenceSkipStats::default();
-        let mut last_region_end = 0usize;
         let mut segments = Vec::new();
 
-        while let Some(chunk) = source.next_chunk()? {
-            for region in scanner.push(&chunk) {
-                self.transcribe_region(
-                    region,
-                    &mel_filters,
-                    &mut last_region_end,
-                    &mut skip_stats,
-                    &mut segments,
-                )?;
+        loop {
+            while buffer.len() < MAX_REGION_SAMPLES && !eof {
+                match source.next_chunk()? {
+                    Some(chunk) => buffer.extend(chunk),
+                    None => eof = true,
+                }
             }
+
+            if buffer.is_empty() || (eof && window_start > 0 && buffer.len() <= OVERLAP_SAMPLES) {
+                break;
+            }
+
+            let sample_count = buffer.len().min(MAX_REGION_SAMPLES);
+            let samples: Vec<f32> = buffer.iter().take(sample_count).copied().collect();
+            let window_end = window_start + sample_count;
+            if window_has_sustained_activity(&samples) {
+                skip_stats.record_decoded_window(window_start, window_end);
+                segments.extend(self.decode_window(&samples, window_start, &mel_filters)?);
+            } else {
+                skip_stats.record_silent_window(window_start, window_end);
+            }
+
+            if eof {
+                break;
+            }
+
+            for _ in 0..REGION_ADVANCE_SAMPLES {
+                buffer.pop_front();
+            }
+            window_start += REGION_ADVANCE_SAMPLES;
         }
 
-        for region in scanner.finish() {
-            self.transcribe_region(
-                region,
-                &mel_filters,
-                &mut last_region_end,
-                &mut skip_stats,
-                &mut segments,
-            )?;
-        }
-
-        let total_samples = scanner.processed_samples;
-        if total_samples > last_region_end {
-            skip_stats.record(last_region_end, total_samples);
-        }
-
+        let total_samples = window_start + buffer.len();
+        let (skipped_sections, skipped_samples) = skip_stats.summary();
         let mut segments = deduplicate_segments(segments);
         segments.sort_by(|a, b| {
             a.start
@@ -272,52 +211,20 @@ impl WhisperTranscriber {
 
         let samples_per_second = f64::from(MODEL_SAMPLE_RATE);
         info!(
-            skipped_silence_sections = skip_stats.section_count,
-            skipped_silence_duration_seconds =
-                skip_stats.skipped_samples as f64 / samples_per_second,
+            skipped_silence_sections = skipped_sections,
+            skipped_silence_duration_seconds = skipped_samples as f64 / samples_per_second,
             recording_duration_seconds = total_samples as f64 / samples_per_second,
             activity_frame_ms = ACTIVITY_FRAME_SAMPLES as f64 * 1000.0 / samples_per_second,
             activity_rms_threshold = ACTIVITY_RMS_THRESHOLD,
-            boundary_padding_ms = SPEECH_PADDING_SAMPLES as f64 * 1000.0 / samples_per_second,
-            silence_hangover_ms = SILENCE_HANGOVER_SAMPLES as f64 * 1000.0 / samples_per_second,
-            max_region_seconds = MAX_REGION_SAMPLES as f64 / samples_per_second,
-            region_advance_seconds = REGION_ADVANCE_SAMPLES as f64 / samples_per_second,
+            minimum_activity_ms =
+                MIN_CONSECUTIVE_ACTIVITY_FRAMES as f64 * ACTIVITY_FRAME_SAMPLES as f64 * 1000.0
+                    / samples_per_second,
+            whisper_window_seconds = MAX_REGION_SAMPLES as f64 / samples_per_second,
+            window_advance_seconds = REGION_ADVANCE_SAMPLES as f64 / samples_per_second,
             "Transcription silence skipping summary"
         );
 
         Ok(segments)
-    }
-
-    fn transcribe_region(
-        &mut self,
-        region: SpeechRegion,
-        mel_filters: &[f32],
-        last_region_end: &mut usize,
-        skip_stats: &mut SilenceSkipStats,
-        output: &mut Vec<TranscriptSegment>,
-    ) -> Result<()> {
-        if region.start_sample > *last_region_end {
-            skip_stats.record(*last_region_end, region.start_sample);
-        }
-
-        let mut local_start = 0usize;
-        while local_start < region.samples.len() {
-            let sample_count = (region.samples.len() - local_start).min(MAX_REGION_SAMPLES);
-            let absolute_start = region.start_sample + local_start;
-            output.extend(self.decode_window(
-                &region.samples[local_start..local_start + sample_count],
-                absolute_start,
-                mel_filters,
-            )?);
-
-            if local_start + sample_count >= region.samples.len() {
-                break;
-            }
-            local_start += REGION_ADVANCE_SAMPLES;
-        }
-
-        *last_region_end = (*last_region_end).max(region.start_sample + region.samples.len());
-        Ok(())
     }
 
     fn decode_window(
