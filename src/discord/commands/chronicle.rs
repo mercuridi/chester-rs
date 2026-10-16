@@ -48,6 +48,7 @@ pub async fn chronicle_start(ctx: PoiseContext<'_>) -> Result<(), Error> {
     ctx.data().ensure_running()?;
     info!(user = %ctx.author().id, "Chronicle start command requested");
     ctx.defer().await?;
+
     match ctx.data().chronicle.start_llm().await {
         Ok(()) => {
             ctx.say("Chronicle is ready.").await?;
@@ -392,13 +393,32 @@ pub async fn generate(
         }
     };
 
+    let started = Instant::now();
     ctx.defer().await?;
+
+    let duration_seconds = manifest
+        .ended_at
+        .unwrap_or(manifest.started_at)
+        .signed_duration_since(manifest.started_at)
+        .num_seconds()
+        .max(0);
+    if duration_seconds >= 10 * 60 {
+        ctx.say(format!(
+            "This session is approx. {} minutes long. Transcription will take a long time; the transcript will post when ready.",
+            duration_seconds / 60
+        ))
+        .await?;
+    } else {
+        ctx.say("Preparing the session audio for transcription…")
+            .await?;
+    }
 
     if transcript_path.is_file() && !confirm_transcript_regeneration(ctx).await? {
         return Ok(());
     }
 
-    let transcript = generate_transcript(
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel();
+    let generation = generate_transcript(
         &manifest,
         recordings,
         alias_group,
@@ -406,10 +426,27 @@ pub async fn generate(
         session.as_str(),
         &transcript_path,
         ctx.data().chronicle.transcription_service(),
-    )
-    .await?;
+        progress_tx,
+    );
+    tokio::pin!(generation);
+    let transcript = loop {
+        tokio::select! {
+            result = &mut generation => break result?,
+            Some(update) = progress_rx.recv() => {
+                info!(%update, "Transcription progress update");
+                ctx.channel_id().send_message(
+                    ctx.http(),
+                    serenity::all::CreateMessage::new().content(format!("<@{}>: {}", ctx.author().id, update)),
+                ).await?;
+            }
+        }
+    };
 
-    display_transcript(ctx, &transcript).await?;
+    if started.elapsed() >= std::time::Duration::from_secs(12 * 60) {
+        send_transcript_to_channel(ctx, &transcript).await?;
+    } else {
+        display_transcript(ctx, &transcript).await?;
+    }
 
     Ok(())
 }
@@ -515,6 +552,27 @@ async fn display_transcript(
 
     poise::samples::paginate(ctx, &page_refs).await?;
 
+    Ok(())
+}
+
+async fn send_transcript_to_channel(
+    ctx: PoiseContext<'_>,
+    transcript: &TranscriptDocument,
+) -> Result<(), Error> {
+    let pages = paginate_transcript(transcript.body.lines().map(str::to_owned).collect());
+    for (index, page) in pages.iter().enumerate() {
+        let prefix = if index == 0 {
+            format!("<@{}>: Transcript ready.\n", ctx.author().id)
+        } else {
+            String::new()
+        };
+        ctx.channel_id()
+            .send_message(
+                &ctx.serenity_context().http,
+                serenity::all::CreateMessage::new().content(format!("{prefix}{page}")),
+            )
+            .await?;
+    }
     Ok(())
 }
 
@@ -808,9 +866,11 @@ async fn generate_transcript(
     fallback_title: &str,
     transcript_path: &Path,
     transcription: TranscriptionService,
+    progress: tokio::sync::mpsc::UnboundedSender<String>,
 ) -> Result<TranscriptDocument, Error> {
+    info!(recording_count = recordings.len(), "Starting transcript generation");
     let result = transcription
-        .transcribe_recordings(recordings.clone())
+        .transcribe_recordings_with_progress(recordings.clone(), Some(progress))
         .await?;
 
     for segment in &result {
@@ -825,6 +885,7 @@ async fn generate_transcript(
         return Err("No speech detected.".into());
     }
 
+    info!(segment_count = result.len(), "Transcription finished; building transcript");
     let entries = build_transcript_entries(result, alias_group)?;
 
     if entries.is_empty() {
@@ -842,6 +903,8 @@ async fn generate_transcript(
     transcript.save(transcript_path).map_err(|error| -> Error {
         format!("Transcription succeeded, but failed to save transcript: {error}").into()
     })?;
+
+    info!(path = %transcript_path.display(), "Transcript saved");
 
     Ok(transcript)
 }

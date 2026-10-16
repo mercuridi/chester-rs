@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
 use serenity::model::id::UserId;
-use tracing::{debug, info, instrument};
+use tracing::{info, instrument};
+use tokio::sync::mpsc::UnboundedSender;
 
 use super::audio::open_opus;
 use super::{AudioSource, TranscriptSegment, WhisperTranscriber};
@@ -143,6 +144,14 @@ impl TranscriptionService {
         &self,
         recordings: Vec<PathBuf>,
     ) -> Result<Vec<TranscribedSegment>> {
+        self.transcribe_recordings_with_progress(recordings, None).await
+    }
+
+    pub async fn transcribe_recordings_with_progress(
+        &self,
+        recordings: Vec<PathBuf>,
+        progress: Option<UnboundedSender<String>>,
+    ) -> Result<Vec<TranscribedSegment>> {
         let gpu_lease = self.runtime.acquire_transcription()?;
 
         if !self.workers.start() {
@@ -161,10 +170,14 @@ impl TranscriptionService {
             let mut transcriber = factory.create()?;
             let mut output = Vec::new();
 
-            for path in recordings {
-                debug!(path = %path.display(), "Transcribing recording");
+            let recording_count = recordings.len();
+            for (index, path) in recordings.into_iter().enumerate() {
+                info!(recording = index + 1, recording_count, path = %path.display(), "Transcribing participant recording");
                 let mut audio = open_opus(&path)?;
                 let segments = transcriber.transcribe_stream(&mut audio)?;
+                if let Some(progress) = &progress {
+                    let _ = progress.send(format!("Finished recording {}/{}.", index + 1, recording_count));
+                }
 
                 let user_id = user_id_from_recording_path(&path)?;
 
@@ -174,6 +187,7 @@ impl TranscriptionService {
                     user_id,
                     text: segment.text,
                 }));
+                info!(recording = index + 1, recording_count, "Finished participant recording");
             }
 
             output.sort_by(|a, b| {

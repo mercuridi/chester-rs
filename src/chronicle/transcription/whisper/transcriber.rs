@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use candle_core::{Device, Tensor};
 use candle_transformers::models::whisper::{self as m, audio};
 use tokenizers::Tokenizer;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::chronicle::transcription::{AudioSource, MODEL_SAMPLE_RATE, Transcriber};
 
@@ -31,13 +31,13 @@ struct SilenceSkipStats {
 impl SilenceSkipStats {
     fn record_silent_window(&mut self, start_sample: usize, end_sample: usize) {
         self.silent_windows.push((start_sample, end_sample));
-        debug!(
-            start_seconds = start_sample as f64 / f64::from(MODEL_SAMPLE_RATE),
-            end_seconds = end_sample as f64 / f64::from(MODEL_SAMPLE_RATE),
-            duration_seconds =
-                end_sample.saturating_sub(start_sample) as f64 / f64::from(MODEL_SAMPLE_RATE),
-            "Skipping low-energy Whisper window"
-        );
+        // debug!(
+        //     start_seconds = start_sample as f64 / f64::from(MODEL_SAMPLE_RATE),
+        //     end_seconds = end_sample as f64 / f64::from(MODEL_SAMPLE_RATE),
+        //     duration_seconds =
+        //         end_sample.saturating_sub(start_sample) as f64 / f64::from(MODEL_SAMPLE_RATE),
+        //     "Skipping low-energy Whisper window"
+        // );
     }
 
     fn record_decoded_window(&mut self, start_sample: usize, end_sample: usize) {
