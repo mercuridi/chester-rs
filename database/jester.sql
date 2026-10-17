@@ -64,8 +64,7 @@ CREATE TABLE IF NOT EXISTS track_labels (
     FOREIGN KEY (track_id) REFERENCES tracks (id) ON DELETE CASCADE
 );
 
--- The unified tag vocabulary is database-backed so tags can be added without
--- changing the application schema or a compiled enum.
+-- Extensible multi-value tags used by the current music taxonomy.
 CREATE TABLE IF NOT EXISTS tags (
     tag TEXT PRIMARY KEY COLLATE NOCASE
 );
