@@ -122,7 +122,7 @@ fn format_flat(rows: Vec<LibraryTrack>) -> Vec<String> {
         .map(|(i, row)| {
             let num = format!("{:>width$}.", i + 1, width = num_width);
             let title = trunc(&row.title, TITLE_MAX_CHARS);
-            let meta = meta_line([row.artist, row.origin, row.taxonomy]);
+            let meta = meta_line([row.artist, row.origin, row.tags]);
             let indent = " ".repeat(num_width + 2 + 2); // lines up under the title plus two more spaces for visual separation
             if meta.is_empty() {
                 format!("{num} {title}\n")
@@ -239,13 +239,13 @@ mod tests {
                 title: "First".into(),
                 artist: Some("Artist".into()),
                 origin: Some("Origin".into()),
-                taxonomy: None,
+                tags: None,
             },
             LibraryTrack {
                 title: "Second".into(),
                 artist: None,
                 origin: None,
-                taxonomy: None,
+                tags: None,
             },
         ];
         let lines = format_flat(rows);
@@ -260,7 +260,7 @@ mod tests {
                 title: String::new(),
                 artist: None,
                 origin: None,
-                taxonomy: None
+                tags: None
             }]),
             vec!["1. \n"]
         );
@@ -272,7 +272,7 @@ mod tests {
             title: "x".repeat(TITLE_MAX_CHARS + 1),
             artist: None,
             origin: None,
-            taxonomy: None,
+            tags: None,
         }]);
         assert!(output[0].contains('…'));
     }

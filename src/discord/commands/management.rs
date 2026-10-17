@@ -1,14 +1,8 @@
 use crate::discord::autocomplete::{
-    autocomplete_artist, autocomplete_environment, autocomplete_function,
-    autocomplete_incomplete_track, autocomplete_intensity, autocomplete_mood, autocomplete_origin,
-    autocomplete_texture, autocomplete_track,
+    autocomplete_artist, autocomplete_incomplete_track, autocomplete_origin, autocomplete_track,
 };
 use crate::discord::context::{Error, PoiseContext};
-use crate::jester::db::{
-    ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES, clear_track_taxonomy,
-    insert_track_environment, insert_track_label, insert_track_texture, require_track,
-    require_value, set_track_taxonomy, update_track_metadata,
-};
+use crate::jester::db::{MetadataKind, require_track, update_track_metadata};
 use crate::jester::track::{TrackInfo, VideoId, download_track};
 
 pub async fn download_direct(
@@ -53,125 +47,6 @@ pub async fn download(
     #[description = "The actual title of the track"] track_title: Option<String>,
 ) -> Result<(), Error> {
     download_direct(ctx, yt_link, track_artist, track_origin, track_title).await?;
-    Ok(())
-}
-
-/// Clear a track's taxonomy, textures, and custom labels
-#[poise::command(slash_command)]
-pub async fn reset_taxonomy(
-    ctx: PoiseContext<'_>,
-    #[description = "The track to reset the tags of"]
-    #[autocomplete = "autocomplete_track"]
-    track: String,
-) -> Result<(), Error> {
-    let db_pool = &ctx.data().db_pool;
-    let info = require_track(db_pool, &VideoId::from(track)).await?;
-
-    clear_track_taxonomy(db_pool, &info.id).await?;
-
-    ctx.say(format!("Reset taxonomy for track `{}`", info.title))
-        .await?;
-    Ok(())
-}
-
-/// Set a track's controlled playlist taxonomy
-#[poise::command(slash_command)]
-pub async fn set_taxonomy(
-    ctx: PoiseContext<'_>,
-    #[description = "The track to add a tag to"]
-    #[autocomplete = "autocomplete_track"]
-    track: String,
-    #[description = "The primary mood"]
-    #[autocomplete = "autocomplete_mood"]
-    mood: String,
-    #[description = "The intensity"]
-    #[autocomplete = "autocomplete_intensity"]
-    intensity: String,
-    #[description = "Optional scene function"]
-    #[autocomplete = "autocomplete_function"]
-    function_tag: Option<String>,
-) -> Result<(), Error> {
-    let db_pool = &ctx.data().db_pool;
-    let info = require_track(db_pool, &VideoId::from(track)).await?;
-    require_value(MOODS, &mood, "mood")?;
-    require_value(INTENSITIES, &intensity, "intensity")?;
-    if let Some(value) = &function_tag {
-        require_value(FUNCTIONS, value, "function")?;
-    }
-    set_track_taxonomy(
-        db_pool,
-        &info.id,
-        &mood,
-        &intensity,
-        function_tag.as_deref(),
-    )
-    .await?;
-
-    ctx.say(format!("Set taxonomy for track `{}`", info.title))
-        .await?;
-    Ok(())
-}
-
-/// Add a controlled texture to a track
-#[poise::command(slash_command)]
-pub async fn add_texture(
-    ctx: PoiseContext<'_>,
-    #[description = "The track to update"]
-    #[autocomplete = "autocomplete_track"]
-    track: String,
-    #[description = "The texture to add"]
-    #[autocomplete = "autocomplete_texture"]
-    texture: String,
-) -> Result<(), Error> {
-    require_value(TEXTURES, &texture, "texture")?;
-    let db_pool = &ctx.data().db_pool;
-    let info = require_track(db_pool, &VideoId::from(track)).await?;
-    insert_track_texture(db_pool, &info.id, &texture).await?;
-    ctx.say(format!(
-        "Added texture `{texture}` to track `{}`",
-        info.title
-    ))
-    .await?;
-    Ok(())
-}
-
-/// Add a controlled environment to a track
-#[poise::command(slash_command)]
-pub async fn add_environment(
-    ctx: PoiseContext<'_>,
-    #[description = "The track to update"]
-    #[autocomplete = "autocomplete_track"]
-    track: String,
-    #[description = "The environment to add"]
-    #[autocomplete = "autocomplete_environment"]
-    environment: String,
-) -> Result<(), Error> {
-    require_value(ENVIRONMENTS, &environment, "environment")?;
-    let db_pool = &ctx.data().db_pool;
-    let info = require_track(db_pool, &VideoId::from(track)).await?;
-    insert_track_environment(db_pool, &info.id, &environment).await?;
-    ctx.say(format!(
-        "Added environment `{environment}` to track `{}`",
-        info.title
-    ))
-    .await?;
-    Ok(())
-}
-
-/// Add a free-form label which is excluded from automatic playlist selection
-#[poise::command(slash_command)]
-pub async fn add_label(
-    ctx: PoiseContext<'_>,
-    #[description = "The track to update"]
-    #[autocomplete = "autocomplete_track"]
-    track: String,
-    #[description = "The custom label to add"] label: String,
-) -> Result<(), Error> {
-    let db_pool = &ctx.data().db_pool;
-    let info = require_track(db_pool, &VideoId::from(track)).await?;
-    insert_track_label(db_pool, &info.id, &label).await?;
-    ctx.say(format!("Added label `{label}` to track `{}`", info.title))
-        .await?;
     Ok(())
 }
 

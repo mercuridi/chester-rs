@@ -15,7 +15,7 @@ pub struct LibraryTrack {
     pub title: String,
     pub artist: Option<String>,
     pub origin: Option<String>,
-    pub taxonomy: Option<String>,
+    pub tags: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, FromRow)]
@@ -30,7 +30,7 @@ pub struct TrackSearchResult {
     pub title: String,
     pub artist: Option<String>,
     pub origin: Option<String>,
-    pub taxonomy: Option<String>,
+    pub tags: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -179,7 +179,7 @@ pub async fn insert_new_track_with_metadata(
 pub async fn fetch_library_all(db_pool: &SqlitePool) -> Result<Vec<LibraryTrack>> {
     sqlx::query_as(&format!(
         "SELECT tracks.track_title AS title, artists.artist, origins.origin,
-                NULLIF({TAG_SUMMARY}, '') AS taxonomy
+                NULLIF({TAG_SUMMARY}, '') AS tags
          FROM tracks
          LEFT JOIN artists ON tracks.artist_id = artists.id
          LEFT JOIN origins ON tracks.origin_id = origins.id
@@ -232,7 +232,7 @@ pub async fn fetch_library_by_tag(db_pool: &SqlitePool) -> Result<Vec<LibraryGro
 
 pub async fn fetch_library_by_incomplete(db_pool: &SqlitePool) -> Result<Vec<LibraryTrack>> {
     sqlx::query_as(
-        "SELECT tracks.track_title AS title, artists.artist, origins.origin, NULL AS taxonomy
+        "SELECT tracks.track_title AS title, artists.artist, origins.origin, NULL AS tags
             FROM tracks
             LEFT JOIN artists ON tracks.artist_id = artists.id
             LEFT JOIN origins ON tracks.origin_id = origins.id
@@ -303,7 +303,7 @@ pub async fn search_tracks(
 ) -> Result<Vec<TrackSearchResult>> {
     sqlx::query_as(&format!(
         "SELECT DISTINCT tracks.id, tracks.track_title AS title, artists.artist, origins.origin,
-                NULLIF({TAG_SUMMARY}, '') AS taxonomy
+                NULLIF({TAG_SUMMARY}, '') AS tags
          FROM tracks
          LEFT JOIN artists ON tracks.artist_id = artists.id
          LEFT JOIN origins ON tracks.origin_id = origins.id
@@ -327,7 +327,7 @@ pub async fn search_incomplete_tracks(
 ) -> Result<Vec<TrackSearchResult>> {
     sqlx::query_as(
         "SELECT DISTINCT tracks.id, tracks.track_title AS title, artists.artist, origins.origin,
-                NULL AS taxonomy
+                NULL AS tags
          FROM tracks
          LEFT JOIN artists ON tracks.artist_id = artists.id
          LEFT JOIN origins ON tracks.origin_id = origins.id
@@ -345,110 +345,12 @@ pub async fn search_incomplete_tracks(
     .context("Incomplete track search query failed")
 }
 
-pub async fn clear_track_taxonomy(db_pool: &SqlitePool, track_id: &VideoId) -> Result<()> {
-    let mut transaction = db_pool
-        .begin()
-        .await
-        .context("Failed to begin taxonomy reset transaction")?;
-
-    sqlx::query(
-        "UPDATE tracks SET mood = NULL, intensity = NULL, function_tag = NULL WHERE id = ?1",
-    )
-    .bind(track_id.as_str())
-    .execute(&mut *transaction)
-    .await
-    .with_context(|| format!("Failed to clear taxonomy for track {}", track_id.as_str()))?;
-    sqlx::query("DELETE FROM track_textures WHERE track_id = ?1")
-        .bind(track_id.as_str())
-        .execute(&mut *transaction)
-        .await
-        .with_context(|| format!("Failed to clear textures for track {}", track_id.as_str()))?;
-    sqlx::query("DELETE FROM track_environments WHERE track_id = ?1")
-        .bind(track_id.as_str())
-        .execute(&mut *transaction)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to clear environments for track {}",
-                track_id.as_str()
-            )
-        })?;
-    sqlx::query("DELETE FROM track_labels WHERE track_id = ?1")
-        .bind(track_id.as_str())
-        .execute(&mut *transaction)
-        .await
-        .with_context(|| format!("Failed to clear labels for track {}", track_id.as_str()))?;
+pub async fn clear_track_tags(db_pool: &SqlitePool, track_id: &VideoId) -> Result<()> {
     sqlx::query("DELETE FROM track_tags WHERE track_id = ?1")
         .bind(track_id.as_str())
-        .execute(&mut *transaction)
+        .execute(db_pool)
         .await
         .with_context(|| format!("Failed to clear tags for track {}", track_id.as_str()))?;
-
-    transaction
-        .commit()
-        .await
-        .context("Failed to commit taxonomy reset transaction")?;
-
-    Ok(())
-}
-
-pub async fn set_track_taxonomy(
-    db_pool: &SqlitePool,
-    track_id: &VideoId,
-    mood: &str,
-    intensity: &str,
-    function_tag: Option<&str>,
-) -> Result<()> {
-    sqlx::query("UPDATE tracks SET mood = ?1, intensity = ?2, function_tag = ?3 WHERE id = ?4")
-        .bind(mood)
-        .bind(intensity)
-        .bind(function_tag)
-        .bind(track_id.as_str())
-        .execute(db_pool)
-        .await
-        .with_context(|| format!("Failed to set taxonomy for track {}", track_id.as_str()))?;
-    Ok(())
-}
-
-pub async fn insert_track_texture(
-    db_pool: &SqlitePool,
-    track_id: &VideoId,
-    texture: &str,
-) -> Result<()> {
-    sqlx::query("INSERT OR IGNORE INTO track_textures (track_id, texture) VALUES (?1, ?2)")
-        .bind(track_id.as_str())
-        .bind(texture)
-        .execute(db_pool)
-        .await
-        .with_context(|| format!("Failed to add texture to track {}", track_id.as_str()))?;
-    Ok(())
-}
-
-pub async fn insert_track_environment(
-    db_pool: &SqlitePool,
-    track_id: &VideoId,
-    environment: &str,
-) -> Result<()> {
-    sqlx::query("INSERT OR IGNORE INTO track_environments (track_id, environment) VALUES (?1, ?2)")
-        .bind(track_id.as_str())
-        .bind(environment)
-        .execute(db_pool)
-        .await
-        .with_context(|| format!("Failed to add environment to track {}", track_id.as_str()))?;
-    Ok(())
-}
-
-pub async fn insert_track_label(
-    db_pool: &SqlitePool,
-    track_id: &VideoId,
-    label: &str,
-) -> Result<()> {
-    sqlx::query("INSERT OR IGNORE INTO track_labels (track_id, label) VALUES (?1, ?2)")
-        .bind(track_id.as_str())
-        .bind(label)
-        .execute(db_pool)
-        .await
-        .with_context(|| format!("Failed to add label to track {}", track_id.as_str()))?;
     Ok(())
 }
 
@@ -662,7 +564,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn library_views_and_taxonomy_updates_return_expected_rows() -> TestResult {
+    async fn library_views_and_tags_return_expected_rows() -> TestResult {
         let (_directory, pool) = test_pool().await?;
         add_track(&pool, "video-1", "Alpha", "Artist A", "Origin A").await?;
         insert_new_track_with_metadata(
@@ -675,17 +577,6 @@ mod tests {
         )
         .await?;
         let track_id = VideoId::from("video-1");
-        set_track_taxonomy(
-            &pool,
-            &track_id,
-            "whimsical",
-            "subtle",
-            Some("investigative"),
-        )
-        .await?;
-        insert_track_texture(&pool, &track_id, "synthetic").await?;
-        insert_track_environment(&pool, &track_id, "forest").await?;
-        insert_track_label(&pool, &track_id, "live").await?;
         for tag in ["forest", "investigation"] {
             sqlx::query("INSERT INTO tags (tag) VALUES (?1)")
                 .bind(tag)
@@ -705,13 +596,13 @@ mod tests {
                     title: "Alpha".into(),
                     artist: Some("Artist A".into()),
                     origin: Some("Origin A".into()),
-                    taxonomy: Some("forest, investigation".into())
+                    tags: Some("forest, investigation".into())
                 },
                 LibraryTrack {
                     title: "Beta".into(),
                     artist: None,
                     origin: Some("Origin B".into()),
-                    taxonomy: None
+                    tags: None
                 },
             ]
         );
@@ -752,101 +643,15 @@ mod tests {
                 title: "Beta".into(),
                 artist: None,
                 origin: Some("Origin B".into()),
-                taxonomy: None
+                tags: None
             }]
         );
 
-        assert_clearing_taxonomy_updates_tags(&pool, &track_id).await?;
-        Ok(())
-    }
-
-    async fn assert_clearing_taxonomy_updates_tags(
-        pool: &SqlitePool,
-        track_id: &VideoId,
-    ) -> TestResult {
-        clear_track_taxonomy(pool, track_id).await?;
-        assert_eq!(
-            fetch_library_by_tag(pool).await?[0],
-            LibraryGroupEntry {
-                group_name: Some("Untagged".into()),
-                title: "Alpha".into()
-            }
-        );
         Ok(())
     }
 
     #[tokio::test]
-    async fn taxonomy_reset_rolls_back_when_a_later_delete_fails() -> TestResult {
-        let (_directory, pool) = test_pool().await?;
-        add_track(&pool, "rollback-track", "Rollback", "Artist", "Origin").await?;
-        let track_id = VideoId::from("rollback-track");
-        set_track_taxonomy(
-            &pool,
-            &track_id,
-            "whimsical",
-            "subtle",
-            Some("investigative"),
-        )
-        .await?;
-        insert_track_texture(&pool, &track_id, "synthetic").await?;
-        insert_track_environment(&pool, &track_id, "forest").await?;
-        insert_track_label(&pool, &track_id, "keep-me").await?;
-
-        sqlx::query(
-            "CREATE TRIGGER fail_environment_delete
-             BEFORE DELETE ON track_environments
-             BEGIN
-                 SELECT RAISE(ABORT, 'forced taxonomy reset failure');
-             END",
-        )
-        .execute(&pool)
-        .await?;
-
-        assert!(clear_track_taxonomy(&pool, &track_id).await.is_err());
-
-        let taxonomy: (Option<String>, Option<String>, Option<String>) =
-            sqlx::query_as("SELECT mood, intensity, function_tag FROM tracks WHERE id = ?1")
-                .bind(track_id.as_str())
-                .fetch_one(&pool)
-                .await?;
-        assert_eq!(
-            taxonomy,
-            (
-                Some("whimsical".into()),
-                Some("subtle".into()),
-                Some("investigative".into())
-            )
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM track_textures WHERE track_id = ?1",
-            )
-            .bind(track_id.as_str())
-            .fetch_one(&pool)
-            .await?,
-            1
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM track_environments WHERE track_id = ?1",
-            )
-            .bind(track_id.as_str())
-            .fetch_one(&pool)
-            .await?,
-            1
-        );
-        assert_eq!(
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM track_labels WHERE track_id = ?1")
-                .bind(track_id.as_str())
-                .fetch_one(&pool)
-                .await?,
-            1
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn searches_are_case_insensitive_limited_and_include_taxonomy() -> TestResult {
+    async fn searches_are_case_insensitive_limited_and_include_tags() -> TestResult {
         let (_directory, pool) = test_pool().await?;
         add_track(&pool, "video-1", "Northern Lights", "Aurora", "Winter").await?;
         insert_new_track_with_metadata(
@@ -859,9 +664,6 @@ mod tests {
         )
         .await?;
         let track_id = VideoId::from("video-1");
-        set_track_taxonomy(&pool, &track_id, "mysterious", "subtle", None).await?;
-        insert_track_texture(&pool, &track_id, "ambient").await?;
-        insert_track_environment(&pool, &track_id, "tundra").await?;
         for tag in ["ambient", "tundra"] {
             sqlx::query("INSERT INTO tags (tag) VALUES (?1)")
                 .bind(tag)
@@ -881,7 +683,7 @@ mod tests {
         let tagged = search_tracks(&pool, "AMBI", 10).await?;
         assert_eq!(tagged.len(), 1);
         assert_eq!(tagged[0].id, "video-1");
-        assert_eq!(tagged[0].taxonomy.as_deref(), Some("ambient, tundra"));
+        assert_eq!(tagged[0].tags.as_deref(), Some("ambient, tundra"));
         let environmental = search_tracks(&pool, "TUND", 10).await?;
         assert_eq!(environmental[0].id, "video-1");
         let incomplete = search_incomplete_tracks(&pool, "summer", 1).await?;

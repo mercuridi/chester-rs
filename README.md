@@ -301,8 +301,7 @@ The main application commands are:
 | `/library all`, `artist`, `origin`, `tags`, `incomplete` | Browse the library |
 | `/set_metadata title`, `artist`, `origin` | Edit track metadata |
 | `/fix` | Fill missing metadata |
-| `/tags create`, `/tags add`, `/tags remove` | Manage the shared tag vocabulary and tag tracks |
-| `/set_taxonomy`, `/add_texture`, `/add_environment`, `/add_label`, `/reset_taxonomy` | Legacy classification commands during the transition |
+| `/tags create`, `/tags add`, `/tags remove`, `/tags clear` | Manage the shared tag vocabulary and tag tracks |
 | `/recording start`, `/recording stop` | Record a voice session; start accepts an optional initial scene |
 | `/recording scene` | Add a scene marker to an active recording |
 | `/transcript generate`, `/transcript show` | Create or display a transcript; generation can ignore scene markers |
@@ -342,8 +341,8 @@ tags; a track enters the shuffled queue when it has **any** selected tag. With
 no tags selected, the queue is drawn from the full library.
 
 The vocabulary begins empty and is intended to be seeded through the one-time
-track review workflow. Old classifications remain available as migration
-reference; they are not silently copied into the new vocabulary.
+track review workflow. Tracks are tagged from scratch; the previous
+classification system and free-form labels have been removed.
 
 `/library tags` groups tracks by their new tags and shows untagged tracks in a
 separate group.
@@ -365,24 +364,6 @@ Jester database as you review; resumable review state and the missing-audio
 follow-up list are stored in `data/jester-tag-review-progress.json`. Use **Save
 & next** to save the selected tags, **Skip for now** to leave existing new tags
 unchanged, and quit at any point to resume at the current track.
-
-## Legacy music taxonomy
-
-The following commands and fields are retained temporarily for reference. The current `/mix` and `/library tags` commands use only the new shared tag assignments; old classifications are not included in their matching or display.
-
-`/set_taxonomy` assigns exactly one primary mood and intensity, plus an optional scene function. The old taxonomy vocabulary remains documented below until those commands and fields are retired.
-
-Textures and environments are controlled multi-value annotations. Use them when a track can suit more than one sound or location: a cue may be both `orchestral` and `choral`, or both `desert` and `ruined`. Custom labels are free-form and are useful for campaign-specific references such as places, NPCs, or factions; they are not part of the controlled playlist taxonomy.
-
-Use `/set_taxonomy` to set mood, intensity, and function; `/add_texture` and `/add_environment` to append controlled values; `/add_label` to append a custom label; and `/reset_taxonomy` to clear legacy classifications and new tags. New tag browsing is handled by `/library tags`.
-
-### Allowed values
-
-- Moods: `serene`, `warm`, `playful`, `whimsical`, `hopeful`, `wistful`, `somber`, `mysterious`, `eerie`, `ominous`, `menacing`, `tense`, `anxious`, `majestic`, `chaotic`, `triumphant`
-- Intensities: `subtle`, `measured`, `driving`, `fierce`
-- Functions: `exploratory`, `investigative`, `traveling`, `social`, `romantic`, `combative`, `climactic`, `stealthy`, `ceremonial`, `celebratory`, `contemplative`, `conversational`
-- Textures: `ambient`, `acoustic`, `orchestral`, `electronic`, `synthetic`, `folk`, `piano`, `percussive`, `choral`, `vocal`, `minimalist`, `ethereal`, `dissonant`
-- Environments: `desert`, `forest`, `tundra`, `mountainous`, `coastal`, `oceanic`, `swampy`, `urban`, `rural`, `underground`, `ruined`, `sacred`, `otherworldly`, `celestial`, `infernal`
 
 ## License
 

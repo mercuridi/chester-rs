@@ -11,8 +11,5 @@ pub(crate) use controls::{
     history, join, leave, loop_track, mix, now_playing, pause, play, queue, skip,
 };
 pub(crate) use library::library;
-pub(crate) use management::{
-    add_environment, add_label, add_texture, download, fix, reset_taxonomy, set_metadata,
-    set_taxonomy,
-};
+pub(crate) use management::{download, fix, set_metadata};
 pub(crate) use tags::tags;

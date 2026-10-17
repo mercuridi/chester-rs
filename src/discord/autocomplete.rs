@@ -7,8 +7,8 @@ use crate::discord::context::PoiseContext;
 use crate::discord::format::{build_autocomplete_display, lightweight_trim};
 use crate::discord::voice::require_guild;
 use crate::jester::db::{
-    ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, MetadataKind, TEXTURES, TrackSearchResult,
-    list_tags, search_incomplete_tracks, search_metadata, search_tracks,
+    MetadataKind, TrackSearchResult, list_tags, search_incomplete_tracks, search_metadata,
+    search_tracks,
 };
 
 fn autocomplete_limit() -> i64 {
@@ -27,54 +27,6 @@ pub async fn autocomplete_origin(
     partial: &str,
 ) -> impl Iterator<Item = String> {
     autocomplete_metadata(ctx, partial, MetadataKind::Origin).await
-}
-
-fn autocomplete_taxonomy(
-    partial: &str,
-    values: &'static [&'static str],
-) -> impl Iterator<Item = String> {
-    let needle = partial.to_lowercase();
-    values
-        .iter()
-        .filter(|value| value.contains(&needle))
-        .map(|value| (*value).to_string())
-        .collect::<Vec<_>>()
-        .into_iter()
-}
-
-pub async fn autocomplete_mood(
-    _ctx: PoiseContext<'_>,
-    partial: &str,
-) -> impl Iterator<Item = String> {
-    autocomplete_taxonomy(partial, MOODS)
-}
-
-pub async fn autocomplete_intensity(
-    _ctx: PoiseContext<'_>,
-    partial: &str,
-) -> impl Iterator<Item = String> {
-    autocomplete_taxonomy(partial, INTENSITIES)
-}
-
-pub async fn autocomplete_function(
-    _ctx: PoiseContext<'_>,
-    partial: &str,
-) -> impl Iterator<Item = String> {
-    autocomplete_taxonomy(partial, FUNCTIONS)
-}
-
-pub async fn autocomplete_texture(
-    _ctx: PoiseContext<'_>,
-    partial: &str,
-) -> impl Iterator<Item = String> {
-    autocomplete_taxonomy(partial, TEXTURES)
-}
-
-pub async fn autocomplete_environment(
-    _ctx: PoiseContext<'_>,
-    partial: &str,
-) -> impl Iterator<Item = String> {
-    autocomplete_taxonomy(partial, ENVIRONMENTS)
 }
 
 pub async fn autocomplete_tag(
@@ -242,12 +194,7 @@ pub async fn autocomplete_incomplete_track(
 }
 
 fn format_track_choice(track: TrackSearchResult) -> (String, String) {
-    let fields = [
-        Some(track.title),
-        track.artist,
-        track.origin,
-        track.taxonomy,
-    ];
+    let fields = [Some(track.title), track.artist, track.origin, track.tags];
     let display = build_autocomplete_display(fields.into_iter().flatten().collect());
     (display, track.id)
 }

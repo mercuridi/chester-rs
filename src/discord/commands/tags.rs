@@ -1,12 +1,14 @@
 use crate::discord::autocomplete::{autocomplete_tag, autocomplete_track};
 use crate::discord::context::{Error, PoiseContext};
-use crate::jester::db::{add_track_tag, create_tag, remove_track_tag, require_track};
+use crate::jester::db::{
+    add_track_tag, clear_track_tags, create_tag, remove_track_tag, require_track,
+};
 use crate::jester::track::VideoId;
 
 /// Manage the shared tag vocabulary and apply tags to tracks.
 #[poise::command(
     slash_command,
-    subcommands("create", "add", "remove"),
+    subcommands("create", "add", "remove", "clear"),
     subcommand_required
 )]
 #[allow(clippy::unused_async)]
@@ -61,6 +63,21 @@ async fn remove(
     let info = require_track(&ctx.data().db_pool, &VideoId::from(track)).await?;
     let tag = remove_track_tag(&ctx.data().db_pool, &info.id, &tag).await?;
     ctx.say(format!("Removed `{tag}` from `{}`.", info.title))
+        .await?;
+    Ok(())
+}
+
+/// Remove every tag from a track.
+#[poise::command(slash_command)]
+async fn clear(
+    ctx: PoiseContext<'_>,
+    #[description = "Track to clear"]
+    #[autocomplete = "autocomplete_track"]
+    track: String,
+) -> Result<(), Error> {
+    let info = require_track(&ctx.data().db_pool, &VideoId::from(track)).await?;
+    clear_track_tags(&ctx.data().db_pool, &info.id).await?;
+    ctx.say(format!("Cleared tags from `{}`.", info.title))
         .await?;
     Ok(())
 }

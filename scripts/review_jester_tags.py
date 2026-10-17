@@ -86,13 +86,8 @@ def load_tracks(connection: sqlite3.Connection, audio_dir: Path) -> list[dict[st
     rows = connection.execute(
         """
         SELECT tracks.id, tracks.track_title AS title, artists.artist, origins.origin,
-               tracks.mood, tracks.intensity, tracks.function_tag,
-               (SELECT group_concat(texture, ', ') FROM track_textures
-                    WHERE track_id = tracks.id) AS textures,
-               (SELECT group_concat(environment, ', ') FROM track_environments
-                    WHERE track_id = tracks.id) AS environments,
-               (SELECT group_concat(label, ', ') FROM track_labels
-                    WHERE track_id = tracks.id) AS labels
+               (SELECT group_concat(tag, ', ') FROM track_tags
+                    WHERE track_id = tracks.id) AS tags
         FROM tracks
         LEFT JOIN artists ON artists.id = tracks.artist_id
         LEFT JOIN origins ON origins.id = tracks.origin_id
@@ -155,7 +150,7 @@ class TagReviewApp(App[None]):
     #progress { height: 2; color: $text-muted; }
     #track-title { height: auto; text-style: bold; }
     #metadata { height: auto; padding-bottom: 1; }
-    #legacy { height: 1fr; border: round $primary; padding: 1; }
+    #review-info { height: 1fr; border: round $primary; padding: 1; }
     #tag-panel { width: 42%; border: round $accent; padding: 1; }
     #tag-list { height: 1fr; }
     #new-tag-row { height: 3; }
@@ -206,7 +201,7 @@ class TagReviewApp(App[None]):
             yield Static(id="track-title")
             yield Static(id="metadata")
             with Horizontal():
-                yield Static(id="legacy", markup=False)
+                yield Static("Review tags from scratch. Existing assignments, if any, are shown selected.", id="review-info", markup=False)
                 with Vertical(id="tag-panel"):
                     yield Static("New tags (space toggles selection)")
                     yield SelectionList[str](id="tag-list")
@@ -224,7 +219,7 @@ class TagReviewApp(App[None]):
     def on_mount(self) -> None:
         if not self.tracks:
             self.query_one("#track-title", Static).update("No tracks found in the Jester database.")
-            self.query_one("#legacy", Static).update(f"Database: {self.database_path}")
+            self.query_one("#review-info", Static).update(f"Database: {self.database_path}")
             self.query_one("#tag-list", SelectionList).disabled = True
             self.query_one("#save-next", Button).disabled = True
             self.query_one("#skip", Button).disabled = True
@@ -255,19 +250,9 @@ class TagReviewApp(App[None]):
             f"Artist: {track['artist'] or 'Unknown'}    Origin: {track['origin'] or 'Unknown'}\n"
             f"Track ID: {track['id']}    Review state: {status}"
         )
-        old = [
-            ("Mood", track["mood"]),
-            ("Intensity", track["intensity"]),
-            ("Function", track["function_tag"]),
-            ("Textures", track["textures"]),
-            ("Environments", track["environments"]),
-            ("Old labels", track["labels"]),
-        ]
-        old_text = "OLD CLASSIFICATIONS (reference only)\n\n" + "\n".join(
-            f"{name}: {value or '—'}" for name, value in old
+        self.query_one("#review-info", Static).update(
+            "Choose any tags that describe this track. The previous classification system has been removed."
         )
-        old_text += "\n\nA label here will not become a new tag unless you add it."
-        self.query_one("#legacy", Static).update(old_text)
         self.query_one("#tag-list", SelectionList).clear_options()
         current_tags = {
             row[0]
