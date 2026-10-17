@@ -64,9 +64,24 @@ CREATE TABLE IF NOT EXISTS track_labels (
     FOREIGN KEY (track_id) REFERENCES tracks (id) ON DELETE CASCADE
 );
 
+-- The unified tag vocabulary is database-backed so tags can be added without
+-- changing the application schema or a compiled enum.
+CREATE TABLE IF NOT EXISTS tags (
+    tag TEXT PRIMARY KEY COLLATE NOCASE
+);
+
+CREATE TABLE IF NOT EXISTS track_tags (
+    track_id TEXT NOT NULL,
+    tag TEXT NOT NULL COLLATE NOCASE,
+    PRIMARY KEY (track_id, tag),
+    FOREIGN KEY (track_id) REFERENCES tracks (id) ON DELETE CASCADE,
+    FOREIGN KEY (tag) REFERENCES tags (tag) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_artists_lower ON artists(LOWER(artist));
 CREATE INDEX IF NOT EXISTS idx_origins_lower ON origins(LOWER(origin));
 CREATE INDEX IF NOT EXISTS idx_tracks_lower_title ON tracks(LOWER(track_title));
 CREATE INDEX IF NOT EXISTS idx_tracks_mood_intensity ON tracks(mood, intensity);
 CREATE INDEX IF NOT EXISTS idx_track_environments_environment ON track_environments(environment);
 CREATE INDEX IF NOT EXISTS idx_track_labels_lower ON track_labels(LOWER(label));
+CREATE INDEX IF NOT EXISTS idx_track_tags_tag ON track_tags(tag);

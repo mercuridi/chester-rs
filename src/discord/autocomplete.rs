@@ -8,7 +8,7 @@ use crate::discord::format::{build_autocomplete_display, lightweight_trim};
 use crate::discord::voice::require_guild;
 use crate::jester::db::{
     ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, MetadataKind, TEXTURES, TrackSearchResult,
-    search_incomplete_tracks, search_labels, search_metadata, search_tracks,
+    list_tags, search_incomplete_tracks, search_labels, search_metadata, search_tracks,
 };
 
 fn autocomplete_limit() -> i64 {
@@ -75,6 +75,19 @@ pub async fn autocomplete_environment(
     partial: &str,
 ) -> impl Iterator<Item = String> {
     autocomplete_taxonomy(partial, ENVIRONMENTS)
+}
+
+pub async fn autocomplete_tag(
+    ctx: PoiseContext<'_>,
+    partial: &str,
+) -> impl Iterator<Item = String> {
+    match list_tags(&ctx.data().db_pool, partial, autocomplete_limit()).await {
+        Ok(tags) => tags.into_iter(),
+        Err(error) => {
+            tracing::error!("Tag autocomplete query failed: {}", error);
+            Vec::new().into_iter()
+        }
+    }
 }
 
 pub async fn autocomplete_mix_filter(

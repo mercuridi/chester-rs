@@ -9,10 +9,12 @@ pub(crate) use repository::{
     update_track_metadata,
 };
 pub(crate) use schema::initialise;
+pub(crate) use tags::{add_track_tag, create_tag, list_tags, normalize_tag, remove_track_tag};
 pub(crate) use taxonomy::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES, require_value};
 
 mod metadata;
 mod mix;
 mod repository;
 mod schema;
+mod tags;
 mod taxonomy;

@@ -174,6 +174,7 @@ fn build_commands() -> Vec<poise::Command<Data, Error>> {
         crate::discord::commands::set_metadata(),
         crate::discord::commands::fix(),
         crate::discord::commands::library(),
+        crate::discord::commands::tags(),
         crate::discord::commands::recording(),
         crate::discord::commands::transcript(),
         crate::discord::commands::chronicle(),

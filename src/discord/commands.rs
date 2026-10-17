@@ -3,6 +3,7 @@ mod chronicle;
 mod controls;
 mod library;
 mod management;
+mod tags;
 
 pub(crate) use admin::{help, register};
 pub(crate) use chronicle::{chronicle, recording, transcript};
@@ -14,3 +15,4 @@ pub(crate) use management::{
     add_environment, add_label, add_texture, download, fix, reset_taxonomy, set_metadata,
     set_taxonomy,
 };
+pub(crate) use tags::tags;

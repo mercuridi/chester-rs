@@ -300,7 +300,8 @@ The main application commands are:
 | `/library all`, `artist`, `origin`, `taxonomy`, `incomplete` | Browse the library |
 | `/set_metadata title`, `artist`, `origin` | Edit track metadata |
 | `/fix` | Fill missing metadata |
-| `/set_taxonomy`, `/add_texture`, `/add_environment`, `/add_label`, `/reset_taxonomy` | Manage controlled taxonomy and custom labels |
+| `/tags create`, `/tags add`, `/tags remove` | Manage the shared tag vocabulary and tag tracks |
+| `/set_taxonomy`, `/add_texture`, `/add_environment`, `/add_label`, `/reset_taxonomy` | Legacy classification commands during the transition |
 | `/recording start`, `/recording stop` | Record a voice session; start accepts an optional initial scene |
 | `/recording scene` | Add a scene marker to an active recording |
 | `/transcript generate`, `/transcript show` | Create or display a transcript; generation can ignore scene markers |
@@ -325,7 +326,21 @@ failure; entries marked `stage skipped` are consequences of unavailable
 prerequisites rather than additional independent causes. Chester will not log
 in until the complete startup report is clear.
 
-## Music taxonomy
+## Music tags
+
+The new shared tag vocabulary is stored in the Jester database. Server members can
+apply existing tags with `/tags add` and remove a tag from a track with
+`/tags remove`. Creating vocabulary entries with `/tags create` is restricted to
+users in the configured `[chronicle.access].gm_user_ids` list. Tag names are
+lowercased, trimmed, and repeated whitespace is collapsed; names are limited to
+100 characters. Tags that differ only by casing or repeated whitespace resolve
+to the same vocabulary entry.
+
+The vocabulary begins empty and is intended to be seeded through the one-time
+track review workflow. Old classifications remain available as migration
+reference; they are not silently copied into the new vocabulary.
+
+## Legacy music taxonomy
 
 Jester classifies tracks with a small controlled taxonomy intended for quick, consistent TTRPG music selection. A track may remain unclassified after download, but `/set_taxonomy` assigns exactly one primary mood and intensity, plus an optional scene function. These are the primary axes intended for predictable playlist filtering; for example, an `eerie`, `subtle`, `exploratory` selection can return only tracks matching those values.
 
