@@ -5,7 +5,7 @@ pub(crate) use repository::{
     fetch_library_by_artist, fetch_library_by_incomplete, fetch_library_by_origin,
     fetch_library_by_tag, insert_new_track_with_metadata, insert_track_environment,
     insert_track_label, insert_track_texture, lookup_track, require_track,
-    search_incomplete_tracks, search_labels, search_metadata, search_tracks, set_track_taxonomy,
+    search_incomplete_tracks, search_metadata, search_tracks, set_track_taxonomy,
     update_track_metadata,
 };
 pub(crate) use schema::initialise;

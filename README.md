@@ -296,8 +296,9 @@ The main application commands are:
 | --- | --- |
 | `/join`, `/leave` | Join or leave the caller's voice channel |
 | `/play`, `/pause`, `/loop_track`, `/now_playing` | Control playback |
+| `/mix tags` | Replace the upcoming queue with a shuffled mix matching any selected tag |
 | `/download` | Add a YouTube track to the library |
-| `/library all`, `artist`, `origin`, `taxonomy`, `incomplete` | Browse the library |
+| `/library all`, `artist`, `origin`, `tags`, `incomplete` | Browse the library |
 | `/set_metadata title`, `artist`, `origin` | Edit track metadata |
 | `/fix` | Fill missing metadata |
 | `/tags create`, `/tags add`, `/tags remove` | Manage the shared tag vocabulary and tag tracks |
@@ -333,12 +334,19 @@ apply existing tags with `/tags add` and remove a tag from a track with
 `/tags remove`. Creating vocabulary entries with `/tags create` is restricted to
 users in the configured `[chronicle.access].gm_user_ids` list. Tag names are
 lowercased, trimmed, and repeated whitespace is collapsed; names are limited to
-100 characters. Tags that differ only by casing or repeated whitespace resolve
-to the same vocabulary entry.
+100 characters and cannot contain commas. Tags that differ only by casing or
+repeated whitespace resolve to the same vocabulary entry.
+
+`/mix` autocompletes the shared vocabulary. Select one or more comma-separated
+tags; a track enters the shuffled queue when it has **any** selected tag. With
+no tags selected, the queue is drawn from the full library.
 
 The vocabulary begins empty and is intended to be seeded through the one-time
 track review workflow. Old classifications remain available as migration
 reference; they are not silently copied into the new vocabulary.
+
+`/library tags` groups tracks by their new tags and shows untagged tracks in a
+separate group.
 
 To review tracks locally, install the Textual dependency and launch the tool
 from the Chester runtime root:
@@ -360,11 +368,13 @@ unchanged, and quit at any point to resume at the current track.
 
 ## Legacy music taxonomy
 
-Jester classifies tracks with a small controlled taxonomy intended for quick, consistent TTRPG music selection. A track may remain unclassified after download, but `/set_taxonomy` assigns exactly one primary mood and intensity, plus an optional scene function. These are the primary axes intended for predictable playlist filtering; for example, an `eerie`, `subtle`, `exploratory` selection can return only tracks matching those values.
+The following commands and fields are retained temporarily for reference. The current `/mix` and `/library tags` commands use only the new shared tag assignments; old classifications are not included in their matching or display.
+
+`/set_taxonomy` assigns exactly one primary mood and intensity, plus an optional scene function. The old taxonomy vocabulary remains documented below until those commands and fields are retired.
 
 Textures and environments are controlled multi-value annotations. Use them when a track can suit more than one sound or location: a cue may be both `orchestral` and `choral`, or both `desert` and `ruined`. Custom labels are free-form and are useful for campaign-specific references such as places, NPCs, or factions; they are not part of the controlled playlist taxonomy.
 
-Use `/set_taxonomy` to set mood, intensity, and function; `/add_texture` and `/add_environment` to append controlled values; `/add_label` to append a custom label; and `/reset_taxonomy` to clear all of a track's taxonomy, textures, environments, and labels. `/library taxonomy` groups the collection by every controlled value and custom label.
+Use `/set_taxonomy` to set mood, intensity, and function; `/add_texture` and `/add_environment` to append controlled values; `/add_label` to append a custom label; and `/reset_taxonomy` to clear legacy classifications and new tags. New tag browsing is handled by `/library tags`.
 
 ### Allowed values
 

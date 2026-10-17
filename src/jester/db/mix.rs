@@ -1,80 +1,33 @@
-use std::fmt::Write as _;
+use std::collections::HashSet;
 
 use anyhow::{Context, Result, anyhow};
 use sqlx::SqlitePool;
 
 use crate::jester::{
-    db::{ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, TEXTURES},
+    db::normalize_tag,
     track::{TrackInfo, VideoId},
 };
 
 pub const MIX_LIMIT: usize = 25;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MixTag {
-    Mood(String),
-    Intensity(String),
-    Function(String),
-    Texture(String),
-    Environment(String),
-    Label(String),
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MixFilter {
-    pub include: Vec<MixTag>,
-    pub exclude: Vec<MixTag>,
+    /// A track is included when it has any one of these tags.
+    pub tags: Vec<String>,
 }
 
-pub fn parse_filter(input: Option<&str>) -> Result<Vec<MixTag>> {
-    input
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(parse_tag)
-        .collect()
-}
-
-pub fn parse_tag(raw: &str) -> Result<MixTag> {
-    let (namespace, value) = raw
-        .split_once('=')
-        .map_or((None, raw), |(namespace, value)| (Some(namespace), value));
-    let value = value.trim().to_lowercase();
-    if value.is_empty() {
-        return Err(anyhow!("Empty mix tag in `{raw}`."));
+pub fn parse_filter(input: Option<&str>) -> Result<Vec<String>> {
+    let mut tags = Vec::new();
+    for raw in input.unwrap_or_default().split(',') {
+        if raw.trim().is_empty() {
+            continue;
+        }
+        let tag = normalize_tag(raw)?;
+        if !tags.contains(&tag) {
+            tags.push(tag);
+        }
     }
-
-    let namespace = match namespace.map(str::trim) {
-        Some(namespace) => Some(namespace),
-        None if MOODS.contains(&value.as_str()) => Some("mood"),
-        None if INTENSITIES.contains(&value.as_str()) => Some("intensity"),
-        None if FUNCTIONS.contains(&value.as_str()) => Some("function"),
-        None if TEXTURES.contains(&value.as_str()) => Some("texture"),
-        None if ENVIRONMENTS.contains(&value.as_str()) => Some("environment"),
-        None => None,
-    };
-
-    let tag = match namespace {
-        Some("mood") if MOODS.contains(&value.as_str()) => MixTag::Mood(value),
-        Some("intensity") if INTENSITIES.contains(&value.as_str()) => MixTag::Intensity(value),
-        Some("function") if FUNCTIONS.contains(&value.as_str()) => MixTag::Function(value),
-        Some("texture") if TEXTURES.contains(&value.as_str()) => MixTag::Texture(value),
-        Some("environment") if ENVIRONMENTS.contains(&value.as_str()) => MixTag::Environment(value),
-        Some("label") => MixTag::Label(value),
-        Some(_namespace) => {
-            return Err(anyhow!(
-                "Unknown or invalid mix tag `{raw}`. Use mood, intensity, function, texture, environment, or label."
-            ));
-        }
-        None => {
-            return Err(anyhow!(
-                "Unknown mix tag `{raw}`. Custom labels must use the `label=` prefix."
-            ));
-        }
-    };
-
-    Ok(tag)
+    Ok(tags)
 }
 
 pub async fn fetch_mix_tracks(
@@ -82,6 +35,20 @@ pub async fn fetch_mix_tracks(
     filter: &MixFilter,
     limit: usize,
 ) -> Result<Vec<TrackInfo>> {
+    if !filter.tags.is_empty() {
+        let known_tags: HashSet<String> = sqlx::query_scalar("SELECT tag FROM tags")
+            .fetch_all(db_pool)
+            .await
+            .context("Failed to validate mix tags")?
+            .into_iter()
+            .collect();
+        if let Some(unknown) = filter.tags.iter().find(|tag| !known_tags.contains(*tag)) {
+            return Err(anyhow!(
+                "Unknown tag `{unknown}`. Choose a tag from autocomplete."
+            ));
+        }
+    }
+
     let mut sql = String::from(
         "SELECT tracks.id, tracks.track_title, artists.artist, origins.origin
          FROM tracks
@@ -90,14 +57,19 @@ pub async fn fetch_mix_tracks(
          WHERE 1 = 1",
     );
     let mut values = Vec::new();
-
-    for tag in &filter.include {
-        sql.push_str(" AND ");
-        append_condition(&mut sql, &mut values, tag, false);
-    }
-    for tag in &filter.exclude {
-        sql.push_str(" AND ");
-        append_condition(&mut sql, &mut values, tag, true);
+    if !filter.tags.is_empty() {
+        sql.push_str(" AND (");
+        for (index, tag) in filter.tags.iter().enumerate() {
+            if index > 0 {
+                sql.push_str(" OR ");
+            }
+            sql.push_str(
+                "EXISTS (SELECT 1 FROM track_tags
+                 WHERE track_id = tracks.id AND tag = ?)",
+            );
+            values.push(tag.clone());
+        }
+        sql.push(')');
     }
     sql.push_str(" ORDER BY RANDOM() LIMIT ?");
 
@@ -121,86 +93,23 @@ pub async fn fetch_mix_tracks(
         .collect())
 }
 
-fn append_condition(sql: &mut String, values: &mut Vec<String>, tag: &MixTag, exclude: bool) {
-    match tag {
-        MixTag::Mood(value) => append_scalar(sql, values, "tracks.mood", value, exclude),
-        MixTag::Intensity(value) => append_scalar(sql, values, "tracks.intensity", value, exclude),
-        MixTag::Function(value) => {
-            append_scalar(sql, values, "tracks.function_tag", value, exclude);
-        }
-        MixTag::Texture(value) => {
-            append_exists(sql, values, "track_textures", "texture", value, exclude);
-        }
-        MixTag::Environment(value) => {
-            append_exists(
-                sql,
-                values,
-                "track_environments",
-                "environment",
-                value,
-                exclude,
-            );
-        }
-        MixTag::Label(value) => append_exists(sql, values, "track_labels", "label", value, exclude),
-    }
-}
-
-fn append_scalar(
-    sql: &mut String,
-    values: &mut Vec<String>,
-    column: &str,
-    value: &str,
-    exclude: bool,
-) {
-    if exclude {
-        let _ = write!(sql, "COALESCE({column}, '') <> ?");
-    } else {
-        let _ = write!(sql, "{column} = ?");
-    }
-    values.push(value.to_string());
-}
-
-fn append_exists(
-    sql: &mut String,
-    values: &mut Vec<String>,
-    table: &str,
-    column: &str,
-    value: &str,
-    exclude: bool,
-) {
-    if exclude {
-        sql.push_str("NOT ");
-    }
-    let _ = write!(
-        sql,
-        "EXISTS (SELECT 1 FROM {table} WHERE track_id = tracks.id AND LOWER({column}) = LOWER(?))"
-    );
-    values.push(value.to_string());
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{MixTag, parse_filter, parse_tag};
+    use super::parse_filter;
 
     #[test]
-    fn parses_bare_controlled_values_and_explicit_labels() {
-        assert!(matches!(
-            parse_tag(" eerie "),
-            Ok(MixTag::Mood(value)) if value == "eerie"
-        ));
-        assert!(matches!(
-            parse_tag("label=Baron"),
-            Ok(MixTag::Label(value)) if value == "baron"
-        ));
-        assert!(
-            parse_filter(Some("eerie, texture=choral, label=night"))
-                .is_ok_and(|tags| tags.len() == 3)
+    fn parses_normalized_tag_lists_and_removes_duplicates() {
+        assert_eq!(
+            parse_filter(Some("  Dark   Forest, eerie, dark forest ")).expect("valid tags"),
+            vec!["dark forest".to_owned(), "eerie".to_owned()]
         );
     }
 
     #[test]
-    fn rejects_invalid_namespaced_values() {
-        assert!(parse_tag("mood=not-a-mood").is_err());
-        assert!(parse_tag("bogus=eerie").is_err());
+    fn ignores_empty_filter_parts() {
+        assert_eq!(
+            parse_filter(Some(", ,")).expect("empty filters"),
+            Vec::<String>::new()
+        );
     }
 }

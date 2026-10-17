@@ -35,6 +35,8 @@ def normalize_tag(raw: str) -> str:
         raise ValueError("Tag cannot be empty.")
     if len(tag) > 100:
         raise ValueError("Tags must be 100 characters or fewer.")
+    if "," in tag:
+        raise ValueError("Tags cannot contain commas because commas separate mix selections.")
     return tag
 
 

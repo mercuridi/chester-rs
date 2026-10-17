@@ -9,7 +9,7 @@ use crate::jester::db::{
 /// Top-level library command
 #[poise::command(
     slash_command,
-    subcommands("all", "artist", "origin", "taxonomy", "incomplete")
+    subcommands("all", "artist", "origin", "tags", "incomplete")
 )]
 #[allow(clippy::unused_async)]
 pub async fn library(_ctx: PoiseContext<'_>) -> Result<(), Error> {
@@ -34,10 +34,10 @@ async fn origin(ctx: PoiseContext<'_>) -> Result<(), Error> {
     library_dynamic(ctx, "origin").await
 }
 
-/// Shows the library grouped by taxonomy values and custom labels
+/// Shows the library grouped by the new shared tags.
 #[poise::command(slash_command)]
-async fn taxonomy(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    library_dynamic(ctx, "taxonomy").await
+async fn tags(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    library_dynamic(ctx, "tags").await
 }
 
 /// Shows tracks with incomplete metadata
@@ -60,7 +60,7 @@ async fn library_dynamic(ctx: PoiseContext<'_>, mode: &str) -> Result<(), Error>
             format_grouped(fetch_library_by_origin(db_pool).await?),
             "grouped",
         ),
-        "taxonomy" => (
+        "tags" => (
             format_grouped(fetch_library_by_tag(db_pool).await?),
             "grouped",
         ),
@@ -133,7 +133,7 @@ fn format_flat(rows: Vec<LibraryTrack>) -> Vec<String> {
         .collect()
 }
 
-/// Grouped format used by /library artist, /library origin, /library taxonomy.
+/// Grouped format used by /library artist, /library origin, and /library tags.
 ///
 /// ```
 /// ── Group Name

@@ -72,20 +72,16 @@ pub async fn play(
     Ok(())
 }
 
-/// Creates a shuffled mix from taxonomy values and labels.
+/// Creates a shuffled mix matching any selected tag.
 #[poise::command(slash_command)]
 pub async fn mix(
     ctx: PoiseContext<'_>,
-    #[description = "Comma-separated tags to require, e.g. eerie,texture=orchestral"]
+    #[description = "Optional comma-separated tags; tracks matching any tag are included"]
     #[autocomplete = "autocomplete_mix_filter"]
-    include: Option<String>,
-    #[description = "Comma-separated tags to exclude, e.g. choral,label=boss"]
-    #[autocomplete = "autocomplete_mix_filter"]
-    exclude: Option<String>,
+    tags: Option<String>,
 ) -> Result<(), Error> {
     let filter = MixFilter {
-        include: parse_filter(include.as_deref())?,
-        exclude: parse_filter(exclude.as_deref())?,
+        tags: parse_filter(tags.as_deref())?,
     };
     let tracks = fetch_mix_tracks(&ctx.data().db_pool, &filter, MIX_LIMIT).await?;
     if tracks.is_empty() {

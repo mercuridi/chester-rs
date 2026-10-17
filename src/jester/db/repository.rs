@@ -7,7 +7,8 @@ use crate::jester::{
     track::{TrackInfo, VideoId},
 };
 
-const TAXONOMY_SUMMARY: &str = "TRIM(COALESCE(tracks.mood, '') || CASE WHEN tracks.intensity IS NULL THEN '' ELSE ', ' || tracks.intensity END || CASE WHEN tracks.function_tag IS NULL THEN '' ELSE ', ' || tracks.function_tag END || CASE WHEN EXISTS (SELECT 1 FROM track_environments WHERE track_id = tracks.id) THEN ', ' || (SELECT GROUP_CONCAT(environment, ', ') FROM track_environments WHERE track_id = tracks.id) ELSE '' END, ', ')";
+const TAG_SUMMARY: &str =
+    "COALESCE((SELECT GROUP_CONCAT(tag, ', ') FROM track_tags WHERE track_id = tracks.id), '')";
 
 #[derive(Clone, Debug, PartialEq, Eq, FromRow)]
 pub struct LibraryTrack {
@@ -178,7 +179,7 @@ pub async fn insert_new_track_with_metadata(
 pub async fn fetch_library_all(db_pool: &SqlitePool) -> Result<Vec<LibraryTrack>> {
     sqlx::query_as(&format!(
         "SELECT tracks.track_title AS title, artists.artist, origins.origin,
-                NULLIF({TAXONOMY_SUMMARY}, '') AS taxonomy
+                NULLIF({TAG_SUMMARY}, '') AS taxonomy
          FROM tracks
          LEFT JOIN artists ON tracks.artist_id = artists.id
          LEFT JOIN origins ON tracks.origin_id = origins.id
@@ -215,20 +216,18 @@ pub async fn fetch_library_by_origin(db_pool: &SqlitePool) -> Result<Vec<Library
 
 pub async fn fetch_library_by_tag(db_pool: &SqlitePool) -> Result<Vec<LibraryGroupEntry>> {
     sqlx::query_as(
-        "SELECT tag AS group_name, track_title AS title FROM (
-             SELECT mood AS tag, track_title FROM tracks WHERE mood IS NOT NULL
-             UNION ALL SELECT intensity, track_title FROM tracks WHERE intensity IS NOT NULL
-             UNION ALL SELECT function_tag, track_title FROM tracks WHERE function_tag IS NOT NULL
-             UNION ALL SELECT texture, tracks.track_title FROM track_textures JOIN tracks ON tracks.id = track_textures.track_id
-             UNION ALL SELECT environment, tracks.track_title FROM track_environments JOIN tracks ON tracks.id = track_environments.track_id
-             UNION ALL SELECT label, tracks.track_title FROM track_labels JOIN tracks ON tracks.id = track_labels.track_id
-             UNION ALL SELECT 'Unclassified', track_title FROM tracks
-                WHERE mood IS NULL AND intensity IS NULL AND function_tag IS NULL
-                   AND NOT EXISTS (SELECT 1 FROM track_textures WHERE track_id = tracks.id)
-                   AND NOT EXISTS (SELECT 1 FROM track_environments WHERE track_id = tracks.id)
-                   AND NOT EXISTS (SELECT 1 FROM track_labels WHERE track_id = tracks.id)
-         ) ORDER BY CASE WHEN tag = 'Unclassified' THEN 1 ELSE 0 END, tag, track_title",
-    ).fetch_all(db_pool).await.context("Taxonomy library query failed")
+        "SELECT group_name, title FROM (
+             SELECT track_tags.tag AS group_name, tracks.track_title AS title
+             FROM track_tags JOIN tracks ON tracks.id = track_tags.track_id
+             UNION ALL
+             SELECT 'Untagged', tracks.track_title FROM tracks
+             WHERE NOT EXISTS (SELECT 1 FROM track_tags WHERE track_id = tracks.id)
+         ) ORDER BY CASE WHEN group_name = 'Untagged' THEN 1 ELSE 0 END,
+                  group_name COLLATE NOCASE, title COLLATE NOCASE",
+    )
+    .fetch_all(db_pool)
+    .await
+    .context("Tag library query failed")
 }
 
 pub async fn fetch_library_by_incomplete(db_pool: &SqlitePool) -> Result<Vec<LibraryTrack>> {
@@ -297,21 +296,6 @@ pub async fn search_metadata(
         .context("Autocomplete metadata query failed")
 }
 
-pub async fn search_labels(db_pool: &SqlitePool, needle: &str, limit: i64) -> Result<Vec<String>> {
-    sqlx::query_scalar(
-        "SELECT DISTINCT label
-         FROM track_labels
-         WHERE LOWER(label) LIKE LOWER(?1)
-         ORDER BY label
-         LIMIT ?2",
-    )
-    .bind(format!("%{needle}%"))
-    .bind(limit)
-    .fetch_all(db_pool)
-    .await
-    .context("Autocomplete label query failed")
-}
-
 pub async fn search_tracks(
     db_pool: &SqlitePool,
     needle: &str,
@@ -319,19 +303,14 @@ pub async fn search_tracks(
 ) -> Result<Vec<TrackSearchResult>> {
     sqlx::query_as(&format!(
         "SELECT DISTINCT tracks.id, tracks.track_title AS title, artists.artist, origins.origin,
-                NULLIF({TAXONOMY_SUMMARY}, '') AS taxonomy
+                NULLIF({TAG_SUMMARY}, '') AS taxonomy
          FROM tracks
          LEFT JOIN artists ON tracks.artist_id = artists.id
          LEFT JOIN origins ON tracks.origin_id = origins.id
          WHERE LOWER(tracks.track_title) LIKE ?1
             OR LOWER(COALESCE(artists.artist, '')) LIKE ?1
             OR LOWER(COALESCE(origins.origin, '')) LIKE ?1
-            OR LOWER(COALESCE(tracks.mood, '')) LIKE ?1
-            OR LOWER(COALESCE(tracks.intensity, '')) LIKE ?1
-            OR LOWER(COALESCE(tracks.function_tag, '')) LIKE ?1
-            OR EXISTS (SELECT 1 FROM track_textures WHERE track_id = tracks.id AND LOWER(texture) LIKE ?1)
-            OR EXISTS (SELECT 1 FROM track_environments WHERE track_id = tracks.id AND LOWER(environment) LIKE ?1)
-            OR EXISTS (SELECT 1 FROM track_labels WHERE track_id = tracks.id AND LOWER(label) LIKE ?1)
+            OR EXISTS (SELECT 1 FROM track_tags WHERE track_id = tracks.id AND LOWER(tag) LIKE ?1)
          LIMIT ?2"
     ))
     .bind(format!("%{needle}%"))
@@ -399,6 +378,11 @@ pub async fn clear_track_taxonomy(db_pool: &SqlitePool, track_id: &VideoId) -> R
         .execute(&mut *transaction)
         .await
         .with_context(|| format!("Failed to clear labels for track {}", track_id.as_str()))?;
+    sqlx::query("DELETE FROM track_tags WHERE track_id = ?1")
+        .bind(track_id.as_str())
+        .execute(&mut *transaction)
+        .await
+        .with_context(|| format!("Failed to clear tags for track {}", track_id.as_str()))?;
 
     transaction
         .commit()
@@ -702,6 +686,17 @@ mod tests {
         insert_track_texture(&pool, &track_id, "synthetic").await?;
         insert_track_environment(&pool, &track_id, "forest").await?;
         insert_track_label(&pool, &track_id, "live").await?;
+        for tag in ["forest", "investigation"] {
+            sqlx::query("INSERT INTO tags (tag) VALUES (?1)")
+                .bind(tag)
+                .execute(&pool)
+                .await?;
+            sqlx::query("INSERT INTO track_tags (track_id, tag) VALUES (?1, ?2)")
+                .bind(track_id.as_str())
+                .bind(tag)
+                .execute(&pool)
+                .await?;
+        }
 
         assert_eq!(
             fetch_library_all(&pool).await?,
@@ -710,7 +705,7 @@ mod tests {
                     title: "Alpha".into(),
                     artist: Some("Artist A".into()),
                     origin: Some("Origin A".into()),
-                    taxonomy: Some("whimsical, subtle, investigative, forest".into())
+                    taxonomy: Some("forest, investigation".into())
                 },
                 LibraryTrack {
                     title: "Beta".into(),
@@ -742,27 +737,11 @@ mod tests {
                     title: "Alpha".into()
                 },
                 LibraryGroupEntry {
-                    group_name: Some("investigative".into()),
+                    group_name: Some("investigation".into()),
                     title: "Alpha".into()
                 },
                 LibraryGroupEntry {
-                    group_name: Some("live".into()),
-                    title: "Alpha".into()
-                },
-                LibraryGroupEntry {
-                    group_name: Some("subtle".into()),
-                    title: "Alpha".into()
-                },
-                LibraryGroupEntry {
-                    group_name: Some("synthetic".into()),
-                    title: "Alpha".into()
-                },
-                LibraryGroupEntry {
-                    group_name: Some("whimsical".into()),
-                    title: "Alpha".into()
-                },
-                LibraryGroupEntry {
-                    group_name: Some("Unclassified".into()),
+                    group_name: Some("Untagged".into()),
                     title: "Beta".into()
                 }
             ]
@@ -789,7 +768,7 @@ mod tests {
         assert_eq!(
             fetch_library_by_tag(pool).await?[0],
             LibraryGroupEntry {
-                group_name: Some("Unclassified".into()),
+                group_name: Some("Untagged".into()),
                 title: "Alpha".into()
             }
         );
@@ -883,6 +862,17 @@ mod tests {
         set_track_taxonomy(&pool, &track_id, "mysterious", "subtle", None).await?;
         insert_track_texture(&pool, &track_id, "ambient").await?;
         insert_track_environment(&pool, &track_id, "tundra").await?;
+        for tag in ["ambient", "tundra"] {
+            sqlx::query("INSERT INTO tags (tag) VALUES (?1)")
+                .bind(tag)
+                .execute(&pool)
+                .await?;
+            sqlx::query("INSERT INTO track_tags (track_id, tag) VALUES (?1, ?2)")
+                .bind(track_id.as_str())
+                .bind(tag)
+                .execute(&pool)
+                .await?;
+        }
 
         assert_eq!(
             search_metadata(&pool, MetadataKind::Artist, "aur", 1).await?,
@@ -891,10 +881,7 @@ mod tests {
         let tagged = search_tracks(&pool, "AMBI", 10).await?;
         assert_eq!(tagged.len(), 1);
         assert_eq!(tagged[0].id, "video-1");
-        assert_eq!(
-            tagged[0].taxonomy.as_deref(),
-            Some("mysterious, subtle, tundra")
-        );
+        assert_eq!(tagged[0].taxonomy.as_deref(), Some("ambient, tundra"));
         let environmental = search_tracks(&pool, "TUND", 10).await?;
         assert_eq!(environmental[0].id, "video-1");
         let incomplete = search_incomplete_tracks(&pool, "summer", 1).await?;

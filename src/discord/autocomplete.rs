@@ -8,7 +8,7 @@ use crate::discord::format::{build_autocomplete_display, lightweight_trim};
 use crate::discord::voice::require_guild;
 use crate::jester::db::{
     ENVIRONMENTS, FUNCTIONS, INTENSITIES, MOODS, MetadataKind, TEXTURES, TrackSearchResult,
-    list_tags, search_incomplete_tracks, search_labels, search_metadata, search_tracks,
+    list_tags, search_incomplete_tracks, search_metadata, search_tracks,
 };
 
 fn autocomplete_limit() -> i64 {
@@ -99,7 +99,13 @@ pub async fn autocomplete_mix_filter(
         |(prefix, current)| (format!("{}, ", prefix.trim()), current),
     );
     let current = current.trim().to_lowercase();
-    let candidates = mix_filter_candidates(ctx, &current).await;
+    let candidates = match list_tags(&ctx.data().db_pool, &current, autocomplete_limit()).await {
+        Ok(tags) => tags,
+        Err(error) => {
+            tracing::error!("Mix tag autocomplete query failed: {}", error);
+            Vec::new()
+        }
+    };
 
     candidates
         .into_iter()
@@ -110,48 +116,6 @@ pub async fn autocomplete_mix_filter(
         .take(AUTOCOMPLETE_MAX_CHOICES)
         .collect::<Vec<_>>()
         .into_iter()
-}
-
-async fn mix_filter_candidates(ctx: PoiseContext<'_>, partial: &str) -> Vec<String> {
-    let (namespace, needle) = partial
-        .split_once('=')
-        .map_or((None, partial), |(kind, needle)| (Some(kind), needle));
-    let needle = needle.trim();
-
-    if namespace == Some("label") {
-        return search_labels(&ctx.data().db_pool, needle, autocomplete_limit())
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|label| format!("label={label}"))
-            .collect();
-    }
-
-    let values: &[&str] = match namespace {
-        Some("mood") => MOODS,
-        Some("intensity") => INTENSITIES,
-        Some("function") => FUNCTIONS,
-        Some("texture") => TEXTURES,
-        Some("environment") => ENVIRONMENTS,
-        Some(_) => &[],
-        None => {
-            return [MOODS, INTENSITIES, FUNCTIONS, TEXTURES, ENVIRONMENTS]
-                .into_iter()
-                .flatten()
-                .filter(|value| value.contains(needle))
-                .map(ToString::to_string)
-                .collect();
-        }
-    };
-
-    values
-        .iter()
-        .filter(|value| value.contains(needle))
-        .map(|value| match namespace {
-            Some(namespace) => format!("{namespace}={value}"),
-            None => (*value).to_string(),
-        })
-        .collect()
 }
 
 async fn autocomplete_metadata(

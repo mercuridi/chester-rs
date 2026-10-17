@@ -16,6 +16,11 @@ pub fn normalize_tag(raw: &str) -> Result<String> {
     if tag.chars().count() > 100 {
         return Err(anyhow!("Tags must be 100 characters or fewer."));
     }
+    if tag.contains(',') {
+        return Err(anyhow!(
+            "Tags cannot contain commas because commas separate mix selections."
+        ));
+    }
     Ok(tag)
 }
 
