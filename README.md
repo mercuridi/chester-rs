@@ -340,6 +340,24 @@ The vocabulary begins empty and is intended to be seeded through the one-time
 track review workflow. Old classifications remain available as migration
 reference; they are not silently copied into the new vocabulary.
 
+To review tracks locally, install the Textual dependency and launch the tool
+from the Chester runtime root:
+
+```sh
+python3 -m venv .venv-tag-review
+. .venv-tag-review/bin/activate
+python3 -m pip install -r scripts/requirements-jester-tag-review.txt
+python3 scripts/review_jester_tags.py
+```
+
+The tool reads the configured Jester database and `<runtime-root>/audio/<track-id>.mp3`.
+Install `ffplay` (from FFmpeg) to listen to tracks. Use `--database`,
+`--audio-dir`, or `--progress` to override paths. Saved tags are written to the
+Jester database as you review; resumable review state and the missing-audio
+follow-up list are stored in `data/jester-tag-review-progress.json`. Use **Save
+& next** to save the selected tags, **Skip for now** to leave existing new tags
+unchanged, and quit at any point to resume at the current track.
+
 ## Legacy music taxonomy
 
 Jester classifies tracks with a small controlled taxonomy intended for quick, consistent TTRPG music selection. A track may remain unclassified after download, but `/set_taxonomy` assigns exactly one primary mood and intensity, plus an optional scene function. These are the primary axes intended for predictable playlist filtering; for example, an `eerie`, `subtle`, `exploratory` selection can return only tracks matching those values.

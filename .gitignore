@@ -13,6 +13,7 @@ tmp/
 /.chronicle/
 /data/*.sqlite3
 /data/*.sqlite3-*
+/data/jester-tag-review-progress.json
 /audio/
 corpus/*
 interim-symlink
