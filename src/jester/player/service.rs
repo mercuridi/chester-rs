@@ -5,6 +5,7 @@ use std::{
         Arc, Weak,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use anyhow::{Result, anyhow};
@@ -28,11 +29,20 @@ struct ActivePlayback {
     handle: TrackHandle,
 }
 
+struct SuspendedPlayback {
+    item: PlaybackItem,
+    position: Duration,
+    was_playing: bool,
+}
+
 #[derive(Default)]
 struct GuildPlayerState {
     queue: GuildQueue,
     active: Option<ActivePlayback>,
     call: Option<Arc<Mutex<Call>>>,
+    break_mode: bool,
+    suspended: Option<SuspendedPlayback>,
+    break_track: Option<TrackInfo>,
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +64,8 @@ trait PlaybackAdapter: Send + Sync {
     ) -> Result<TrackHandle>;
     fn stop(&self, guild_id: GuildId, handle: TrackHandle);
     async fn toggle_pause(&self, handle: TrackHandle) -> Result<bool>;
+    async fn state(&self, handle: TrackHandle) -> Result<(Duration, bool)>;
+    async fn seek(&self, handle: TrackHandle, position: Duration) -> Result<()>;
 }
 
 struct SongbirdAdapter {
@@ -109,6 +121,19 @@ impl PlaybackAdapter for SongbirdAdapter {
             Ok(true)
         }
     }
+
+    async fn state(&self, handle: TrackHandle) -> Result<(Duration, bool)> {
+        let state = handle.get_info().await?;
+        Ok((
+            state.position,
+            state.playing == songbird::tracks::PlayMode::Play,
+        ))
+    }
+
+    async fn seek(&self, handle: TrackHandle, position: Duration) -> Result<()> {
+        handle.seek_async(position).await?;
+        Ok(())
+    }
 }
 
 pub struct PlayerService {
@@ -147,6 +172,8 @@ impl PlayerService {
         let state = self.player_state(guild_id).await;
         let mut state = state.lock().await;
         state.call = Some(call);
+        state.break_mode = false;
+        state.suspended = None;
         self.stop_active(guild_id, &mut state);
         let transition = state.queue.play_now(track);
         self.start_transition(guild_id, &mut state, transition)
@@ -255,11 +282,94 @@ impl PlayerService {
         self.adapter.toggle_pause(active.handle.clone()).await
     }
 
+    pub async fn toggle_break(
+        self: &Arc<Self>,
+        guild_id: GuildId,
+        call: Option<Arc<Mutex<Call>>>,
+        break_track: TrackInfo,
+    ) -> Result<bool> {
+        let state = self.player_state(guild_id).await;
+        let mut state = state.lock().await;
+        if let Some(call) = call {
+            state.call = Some(call);
+        }
+        if state.break_mode {
+            self.stop_active(guild_id, &mut state);
+            state.break_mode = false;
+            let suspended = state
+                .suspended
+                .take()
+                .ok_or_else(|| anyhow!("No track was saved to resume."))?;
+            let call = state
+                .call
+                .clone()
+                .ok_or_else(|| anyhow!("No voice call is available."))?;
+            let id = self.next_playback_id.fetch_add(1, Ordering::Relaxed);
+            let handle = self
+                .adapter
+                .start(guild_id, call, &suspended.item, Arc::downgrade(self), id)
+                .await?;
+            self.adapter
+                .seek(handle.clone(), suspended.position)
+                .await?;
+            if !suspended.was_playing {
+                handle.pause()?;
+            }
+            state.active = Some(ActivePlayback { id, handle });
+            Ok(false)
+        } else {
+            if state.call.is_none() {
+                return Err(anyhow!("No voice call is available."));
+            }
+            let item = state
+                .queue
+                .current()
+                .cloned()
+                .ok_or_else(|| anyhow!("No track is currently playing."))?;
+            let active = state
+                .active
+                .as_ref()
+                .ok_or_else(|| anyhow!("No track is currently playing."))?;
+            let (position, was_playing) = self.adapter.state(active.handle.clone()).await?;
+            state.suspended = Some(SuspendedPlayback {
+                item,
+                position,
+                was_playing,
+            });
+            self.stop_active(guild_id, &mut state);
+            state.break_mode = true;
+            state.break_track = Some(break_track.clone());
+            let item = PlaybackItem {
+                track: break_track,
+                source: super::queue::PlaybackSource::Direct,
+            };
+            let id = self.next_playback_id.fetch_add(1, Ordering::Relaxed);
+            let call = state
+                .call
+                .clone()
+                .ok_or_else(|| anyhow!("No voice call is available."))?;
+            let handle = self
+                .adapter
+                .start(guild_id, call, &item, Arc::downgrade(self), id)
+                .await?;
+            state.active = Some(ActivePlayback { id, handle });
+            Ok(true)
+        }
+    }
+
+    pub async fn break_active(&self, guild_id: GuildId) -> bool {
+        let state = self.player_state(guild_id).await;
+        state.lock().await.break_mode
+    }
+
     pub async fn get_now_playing(&self, guild_id: GuildId) -> Option<TrackInfo> {
-        self.queue_snapshot(guild_id)
-            .await
-            .current
-            .map(|item| item.track)
+        let state = self.player_state(guild_id).await;
+        let state = state.lock().await;
+        if state.break_mode {
+            state.break_track.clone()
+        } else {
+            state.queue.current().map(|item| item.track.clone())
+        }
     }
 
     pub async fn clear_now_playing(&self, guild_id: GuildId) {
@@ -268,6 +378,9 @@ impl PlayerService {
         self.stop_active(guild_id, &mut state);
         state.call = None;
         state.queue = GuildQueue::default();
+        state.break_mode = false;
+        state.suspended = None;
+        state.break_track = None;
     }
 
     pub async fn shutdown(&self) {
@@ -283,6 +396,9 @@ impl PlayerService {
             self.stop_active(guild_id, &mut state);
             state.call = None;
             state.queue = GuildQueue::default();
+            state.break_mode = false;
+            state.suspended = None;
+            state.break_track = None;
         }
     }
 
@@ -340,6 +456,27 @@ impl PlayerService {
             return Ok(());
         }
         state.active = None;
+        if state.break_mode {
+            let track = state
+                .break_track
+                .clone()
+                .ok_or_else(|| anyhow!("Break track is missing."))?;
+            let item = PlaybackItem {
+                track,
+                source: super::queue::PlaybackSource::Direct,
+            };
+            let id = self.next_playback_id.fetch_add(1, Ordering::Relaxed);
+            let call = state
+                .call
+                .clone()
+                .ok_or_else(|| anyhow!("No voice call is available."))?;
+            let handle = self
+                .adapter
+                .start(guild_id, call, &item, Arc::downgrade(self), id)
+                .await?;
+            state.active = Some(ActivePlayback { id, handle });
+            return Ok(());
+        }
         let transition = state.queue.complete_current();
         if state.call.is_some() {
             self.start_transition(guild_id, &mut state, transition)
@@ -426,6 +563,14 @@ mod tests {
         fn stop(&self, _: GuildId, _: TrackHandle) {}
 
         async fn toggle_pause(&self, _: TrackHandle) -> anyhow::Result<bool> {
+            Err(anyhow!("no test playback"))
+        }
+
+        async fn state(&self, _: TrackHandle) -> anyhow::Result<(Duration, bool)> {
+            Err(anyhow!("no test playback"))
+        }
+
+        async fn seek(&self, _: TrackHandle, _: Duration) -> anyhow::Result<()> {
             Err(anyhow!("no test playback"))
         }
     }

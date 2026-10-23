@@ -311,6 +311,10 @@ pub async fn show(
 
 /// Generate a transcript from a recorded session.
 #[poise::command(slash_command)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the slash command owns the complete validation and interaction flow"
+)]
 pub async fn generate(
     ctx: PoiseContext<'_>,
 
@@ -835,6 +839,10 @@ fn transcript_path(recording_dir: &Path) -> PathBuf {
     recording_dir.join("transcript.md")
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "these values form the existing transcript generation context assembled by the command"
+)]
 async fn generate_transcript(
     manifest: &RecordingManifest,
     recordings: Vec<PathBuf>,
@@ -845,7 +853,10 @@ async fn generate_transcript(
     transcription: TranscriptionService,
     progress: tokio::sync::mpsc::UnboundedSender<String>,
 ) -> Result<TranscriptDocument, Error> {
-    info!(recording_count = recordings.len(), "Starting transcript generation");
+    info!(
+        recording_count = recordings.len(),
+        "Starting transcript generation"
+    );
     let result = transcription
         .transcribe_recordings_with_progress(recordings.clone(), Some(progress))
         .await?;
@@ -862,7 +873,10 @@ async fn generate_transcript(
         return Err("No speech detected.".into());
     }
 
-    info!(segment_count = result.len(), "Transcription finished; building transcript");
+    info!(
+        segment_count = result.len(),
+        "Transcription finished; building transcript"
+    );
     let entries = build_transcript_entries(result, alias_group)?;
 
     if entries.is_empty() {

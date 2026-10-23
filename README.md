@@ -296,6 +296,7 @@ The main application commands are:
 | --- | --- |
 | `/join`, `/leave` | Join or leave the caller's voice channel |
 | `/play`, `/pause`, `/loop_track`, `/now_playing` | Control playback |
+| `/break toggle`, `/break set` | Registered GMs can start or end a server-wide break and choose their personal break track |
 | `/mix tags` | Replace the upcoming queue with a shuffled mix matching any selected tag |
 | `/download` | Add a YouTube track to the library |
 | `/library all`, `artist`, `origin`, `tags`, `incomplete` | Browse the library |

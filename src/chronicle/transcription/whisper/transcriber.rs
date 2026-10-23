@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use candle_core::{Device, Tensor};
 use candle_transformers::models::whisper::{self as m, audio};
 use tokenizers::Tokenizer;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::chronicle::transcription::{AudioSource, MODEL_SAMPLE_RATE, Transcriber};
 
@@ -53,7 +53,7 @@ impl SilenceSkipStats {
     fn summary(&self) -> (usize, usize) {
         let skipped = subtract_ranges(
             merge_ranges(self.silent_windows.clone()),
-            merge_ranges(self.decoded_windows.clone()),
+            &merge_ranges(self.decoded_windows.clone()),
         );
         (
             skipped.len(),
@@ -77,10 +77,7 @@ fn merge_ranges(mut ranges: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
     merged
 }
 
-fn subtract_ranges(
-    ranges: Vec<(usize, usize)>,
-    covered: Vec<(usize, usize)>,
-) -> Vec<(usize, usize)> {
+fn subtract_ranges(ranges: Vec<(usize, usize)>, covered: &[(usize, usize)]) -> Vec<(usize, usize)> {
     let mut result = Vec::new();
     let mut cover_index = 0usize;
     for (start, end) in ranges {
@@ -107,6 +104,11 @@ fn subtract_ranges(
     result
 }
 
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "audio frames are bounded to 320 samples and RMS is represented as f32"
+)]
 fn frame_rms(samples: &[f32]) -> f32 {
     if samples.is_empty() {
         return 0.0;
@@ -161,6 +163,10 @@ impl WhisperTranscriber {
     }
 
     /// Transcribe a bounded stream of mono 16 kHz audio.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "sample counts and frame sizes are bounded by the recording and Whisper window limits"
+    )]
     pub fn transcribe_stream(
         &mut self,
         source: &mut dyn AudioSource,
@@ -391,6 +397,10 @@ enum TextArtifactFilter {
 }
 
 /// Remove obvious decoder formatting noise while preserving ordinary speech punctuation.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "the ratio compares string character counts, whose practical bounds are far below f64 precision limits"
+)]
 fn filter_text_artifacts(text: &str) -> TextArtifactFilter {
     const MAX_CONSECUTIVE_REPEATED_WORDS: usize = 16;
     const MIN_SYMBOL_HEAVY_COUNT: usize = 16;

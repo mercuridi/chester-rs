@@ -100,16 +100,13 @@ mod tests {
     #[test]
     fn parses_normalized_tag_lists_and_removes_duplicates() {
         assert_eq!(
-            parse_filter(Some("  Dark   Forest, eerie, dark forest ")).expect("valid tags"),
-            vec!["dark forest".to_owned(), "eerie".to_owned()]
+            parse_filter(Some("  Dark   Forest, eerie, dark forest ")).ok(),
+            Some(vec!["dark forest".to_owned(), "eerie".to_owned()])
         );
     }
 
     #[test]
     fn ignores_empty_filter_parts() {
-        assert_eq!(
-            parse_filter(Some(", ,")).expect("empty filters"),
-            Vec::<String>::new()
-        );
+        assert_eq!(parse_filter(Some(", ,")).ok(), Some(Vec::<String>::new()));
     }
 }

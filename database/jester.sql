@@ -32,6 +32,13 @@ CREATE TABLE IF NOT EXISTS track_tags (
     FOREIGN KEY (tag) REFERENCES tags (tag) ON DELETE CASCADE
 );
 
+-- Each registered GM can choose their personal break track.
+CREATE TABLE IF NOT EXISTS gm_break_tracks (
+    user_id TEXT PRIMARY KEY,
+    track_id TEXT NOT NULL,
+    FOREIGN KEY (track_id) REFERENCES tracks (id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_artists_lower ON artists(LOWER(artist));
 CREATE INDEX IF NOT EXISTS idx_origins_lower ON origins(LOWER(origin));
 CREATE INDEX IF NOT EXISTS idx_tracks_lower_title ON tracks(LOWER(track_title));

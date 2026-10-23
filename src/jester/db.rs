@@ -1,3 +1,4 @@
+pub(crate) use break_track::{get_break_track, set_break_track};
 pub(crate) use metadata::MetadataKind;
 pub(crate) use mix::{MIX_LIMIT, MixFilter, fetch_mix_tracks, parse_filter};
 pub(crate) use repository::{
@@ -9,6 +10,7 @@ pub(crate) use repository::{
 pub(crate) use schema::initialise;
 pub(crate) use tags::{add_track_tag, create_tag, list_tags, normalize_tag, remove_track_tag};
 
+mod break_track;
 mod metadata;
 mod mix;
 mod repository;

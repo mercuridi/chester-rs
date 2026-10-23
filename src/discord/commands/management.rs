@@ -2,7 +2,7 @@ use crate::discord::autocomplete::{
     autocomplete_artist, autocomplete_incomplete_track, autocomplete_origin, autocomplete_track,
 };
 use crate::discord::context::{Error, PoiseContext};
-use crate::jester::db::{MetadataKind, require_track, update_track_metadata};
+use crate::jester::db::{require_track, update_track_metadata};
 use crate::jester::track::{TrackInfo, VideoId, download_track};
 
 pub async fn download_direct(

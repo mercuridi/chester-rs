@@ -9,6 +9,7 @@ use crate::{
     },
     jester::{
         db::{MIX_LIMIT, MixFilter, fetch_mix_tracks, parse_filter},
+        db::{get_break_track, set_break_track},
         player::{HistoryOutcome, RepeatMode},
         track::{TrackInfo, resolve_track},
     },
@@ -325,8 +326,86 @@ pub async fn loop_track(
 
 #[poise::command(slash_command)]
 pub async fn now_playing(ctx: PoiseContext<'_>) -> Result<(), Error> {
-    let track = ctx.data().player.get_now_playing(require_guild(ctx)?).await;
-    ctx.say(now_playing_message(track.as_ref())).await?;
+    let guild_id = require_guild(ctx)?;
+    let track = ctx.data().player.get_now_playing(guild_id).await;
+    let mut message = now_playing_message(track.as_ref());
+    if ctx.data().player.break_active(guild_id).await {
+        message.push_str("\n**Break:** active");
+    }
+    ctx.say(message).await?;
+    Ok(())
+}
+
+/// Configure personal break music or toggle the server's shared break state.
+#[poise::command(
+    slash_command,
+    rename = "break",
+    subcommands("break_toggle", "break_set"),
+    subcommand_required
+)]
+#[allow(clippy::unused_async)]
+pub async fn break_cmd(_ctx: PoiseContext<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "toggle")]
+async fn break_toggle(ctx: PoiseContext<'_>) -> Result<(), Error> {
+    if !ctx.data().config.is_chronicle_gm(ctx.author().id) {
+        return Err("Only a registered GM can toggle a break.".into());
+    }
+    let guild_id = require_guild(ctx)?;
+    let is_active = ctx.data().player.break_active(guild_id).await;
+    let (call, track) = if is_active {
+        // The toggle-off path ignores the selected GM's track.
+        (
+            None,
+            ctx.data()
+                .player
+                .get_now_playing(guild_id)
+                .await
+                .ok_or("No track is currently playing.")?,
+        )
+    } else {
+        let (_, _, call) = ensure_vc(ctx).await?;
+        (
+            Some(call),
+            get_break_track(&ctx.data().db_pool, ctx.author().id)
+                .await?
+                .ok_or("Set your break music first with `/break set`.")?,
+        )
+    };
+    let started = ctx
+        .data()
+        .player
+        .toggle_break(guild_id, call, track.clone())
+        .await?;
+    ctx.say(if started {
+        format!("Break started with `{}`.", track.title)
+    } else {
+        "Break ended; resuming the previous track.".to_owned()
+    })
+    .await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, rename = "set")]
+async fn break_set(
+    ctx: PoiseContext<'_>,
+    #[description = "Track to use for your breaks"]
+    #[autocomplete = "autocomplete_track"]
+    track: String,
+) -> Result<(), Error> {
+    if !ctx.data().config.is_chronicle_gm(ctx.author().id) {
+        return Err("Only a registered GM can set break music.".into());
+    }
+    require_guild(ctx)?;
+    let track = resolve_track(&ctx.data().db_pool, track, ctx.data().downloader.clone()).await?;
+    set_break_track(&ctx.data().db_pool, ctx.author().id, &track).await?;
+    ctx.say(format!(
+        "Your break music is set to `{}`. It will take effect the next time a break starts.",
+        track.title
+    ))
+    .await?;
     Ok(())
 }
 

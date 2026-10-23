@@ -3,8 +3,10 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
 use serenity::model::id::UserId;
-use tracing::{info, instrument};
 use tokio::sync::mpsc::UnboundedSender;
+use tracing::info;
+#[cfg(test)]
+use tracing::instrument;
 
 use super::audio::open_opus;
 use super::{AudioSource, TranscriptSegment, WhisperTranscriber};
@@ -140,11 +142,13 @@ impl TranscriptionService {
 
     /// Transcribe a set of per-user Opus recordings with exclusive GPU access.
     #[instrument(skip(self, recordings), fields(recording_count = recordings.len()))]
+    #[cfg(test)]
     pub async fn transcribe_recordings(
         &self,
         recordings: Vec<PathBuf>,
     ) -> Result<Vec<TranscribedSegment>> {
-        self.transcribe_recordings_with_progress(recordings, None).await
+        self.transcribe_recordings_with_progress(recordings, None)
+            .await
     }
 
     pub async fn transcribe_recordings_with_progress(

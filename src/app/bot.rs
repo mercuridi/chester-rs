@@ -164,6 +164,7 @@ fn build_commands() -> Vec<poise::Command<Data, Error>> {
         crate::discord::commands::leave(),
         crate::discord::commands::loop_track(),
         crate::discord::commands::pause(),
+        crate::discord::commands::break_cmd(),
         crate::discord::commands::now_playing(),
         crate::discord::commands::download(),
         crate::discord::commands::set_metadata(),
