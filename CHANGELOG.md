@@ -1,6 +1,30 @@
 # Changelog
 
-## [4.1.1] — 2026-10-16
+## [4.2.0] — 2026-10-23
+
+### Features
+
+- New tunable text artifact filter to clean up transcripts with certain hallucinated text patterns
+- Skip silent sections in transcription
+- Rework track tagging to be simpler
+- New break command
+
+
+### Bug Fixes
+
+- Rightsize candle frames passed to whisper
+- Default loop state is repeat current track
+- Exclude fixed tokens from whisper logprob calculations for better transcription threshold accuracy
+- Adjust logging behaviour for silence processing in transcripts
+- Rework silence preprocessing filter to preserve original 30s windows
+- Add more user-visible logging for transcription
+- Slight increase in silence filter aggression
+- New jester schema for simplified tagging
+- Move taxonomy commands to simplified tag system
+- Rip out all references to old multi-dimensional taxonomy system
+- Transcripts now do not display once generation is complete
+
+## [v4.1.1] — 2026-10-16
 
 ### Bug Fixes
 
