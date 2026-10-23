@@ -393,7 +393,6 @@ pub async fn generate(
         }
     };
 
-    let started = Instant::now();
     ctx.defer().await?;
 
     let duration_seconds = manifest
@@ -404,7 +403,7 @@ pub async fn generate(
         .max(0);
     if duration_seconds >= 10 * 60 {
         ctx.say(format!(
-            "This session is approx. {} minutes long. Transcription will take a long time; the transcript will post when ready.",
+            "This session is approx. {} minutes long. Transcription will take a long time; progress updates will be posted here.",
             duration_seconds / 60
         ))
         .await?;
@@ -429,7 +428,7 @@ pub async fn generate(
         progress_tx,
     );
     tokio::pin!(generation);
-    let transcript = loop {
+    let _transcript = loop {
         tokio::select! {
             result = &mut generation => break result?,
             Some(update) = progress_rx.recv() => {
@@ -442,11 +441,10 @@ pub async fn generate(
         }
     };
 
-    if started.elapsed() >= std::time::Duration::from_secs(12 * 60) {
-        send_transcript_to_channel(ctx, &transcript).await?;
-    } else {
-        display_transcript(ctx, &transcript).await?;
-    }
+    ctx.say(format!(
+        "Transcript saved for `{session}`. Use `/transcript show` to display it."
+    ))
+    .await?;
 
     Ok(())
 }
@@ -552,27 +550,6 @@ async fn display_transcript(
 
     poise::samples::paginate(ctx, &page_refs).await?;
 
-    Ok(())
-}
-
-async fn send_transcript_to_channel(
-    ctx: PoiseContext<'_>,
-    transcript: &TranscriptDocument,
-) -> Result<(), Error> {
-    let pages = paginate_transcript(transcript.body.lines().map(str::to_owned).collect());
-    for (index, page) in pages.iter().enumerate() {
-        let prefix = if index == 0 {
-            format!("<@{}>: Transcript ready.\n", ctx.author().id)
-        } else {
-            String::new()
-        };
-        ctx.channel_id()
-            .send_message(
-                &ctx.serenity_context().http,
-                serenity::all::CreateMessage::new().content(format!("{prefix}{page}")),
-            )
-            .await?;
-    }
     Ok(())
 }
 

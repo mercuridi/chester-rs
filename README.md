@@ -304,7 +304,7 @@ The main application commands are:
 | `/tags create`, `/tags add`, `/tags remove`, `/tags clear` | Manage the shared tag vocabulary and tag tracks |
 | `/recording start`, `/recording stop` | Record a voice session; start accepts an optional initial scene |
 | `/recording scene` | Add a scene marker to an active recording |
-| `/transcript generate`, `/transcript show` | Create or display a transcript; generation can ignore scene markers |
+| `/transcript generate`, `/transcript show` | Generate and save a transcript, or display a saved transcript; generation can ignore scene markers and posts progress updates |
 | `/chronicle start`, `/chronicle stop`, `/chronicle ask` | Load, unload, or query the local assistant |
 | `/help` | Show command help |
 
